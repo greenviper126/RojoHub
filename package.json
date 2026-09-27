@@ -1,13 +1,90 @@
 {
   "name": "rojo-hub",
-  "version": "0.0.0",
+  "displayName": "Rojo-Hub",
+  "version": "0.1.0",
   "private": true,
-  "type": "module",
+  "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
+  "repository": "https://github.com/greenviper126/RojoHub",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rojoHub",
+          "title": "Rojo-Hub",
+          "icon": "media/hub.svg"
+        }
+      ]
+    },
+    "views": {
+      "rojoHub": [
+        {
+          "id": "rojoHub.slots",
+          "name": "Projects"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "rojoHub.slots",
+        "contents": "No projects yet. Each project gets its own Rojo port.\n[Add Project](command:rojoHub.addProject)"
+      }
+    ],
+    "commands": [
+      { "command": "rojoHub.addProject", "title": "Add Project", "category": "Rojo-Hub", "icon": "$(add)" },
+      { "command": "rojoHub.removeProject", "title": "Remove Project", "category": "Rojo-Hub", "icon": "$(trash)" },
+      { "command": "rojoHub.start", "title": "Start Serving", "category": "Rojo-Hub", "icon": "$(play)" },
+      { "command": "rojoHub.stop", "title": "Stop Serving", "category": "Rojo-Hub", "icon": "$(debug-stop)" },
+      { "command": "rojoHub.switch", "title": "Switch Branch", "category": "Rojo-Hub", "icon": "$(git-branch)" },
+      { "command": "rojoHub.showLog", "title": "Show Rojo Log", "category": "Rojo-Hub", "icon": "$(output)" },
+      { "command": "rojoHub.copyAddress", "title": "Copy Address", "category": "Rojo-Hub" },
+      { "command": "rojoHub.refresh", "title": "Refresh", "category": "Rojo-Hub", "icon": "$(refresh)" },
+      { "command": "rojoHub.stopService", "title": "Stop Background Service", "category": "Rojo-Hub" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "rojoHub.addProject", "when": "view == rojoHub.slots", "group": "navigation@1" },
+        { "command": "rojoHub.refresh", "when": "view == rojoHub.slots", "group": "navigation@2" },
+        { "command": "rojoHub.stopService", "when": "view == rojoHub.slots", "group": "zz" }
+      ],
+      "view/item/context": [
+        { "command": "rojoHub.switch", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "inline@1" },
+        { "command": "rojoHub.start", "when": "view == rojoHub.slots && viewItem == slot.stopped", "group": "inline@2" },
+        { "command": "rojoHub.stop", "when": "view == rojoHub.slots && viewItem == slot.running", "group": "inline@2" },
+        { "command": "rojoHub.switch", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "1@1" },
+        { "command": "rojoHub.start", "when": "view == rojoHub.slots && viewItem == slot.stopped", "group": "1@2" },
+        { "command": "rojoHub.stop", "when": "view == rojoHub.slots && viewItem == slot.running", "group": "1@2" },
+        { "command": "rojoHub.showLog", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "2@1" },
+        { "command": "rojoHub.copyAddress", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "2@2" },
+        { "command": "rojoHub.removeProject", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "3@1" }
+      ],
+      "commandPalette": [
+        { "command": "rojoHub.copyAddress", "when": "false" }
+      ]
+    }
+  },
   "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
+    "package": "npm run typecheck && npm run build && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim"
   },
   "devDependencies": {
-    "@msgpack/msgpack": "^3.1.2"
+    "@msgpack/msgpack": "^3.1.2",
+    "@types/node": "^20.19.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }
