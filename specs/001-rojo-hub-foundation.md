@@ -1,7 +1,8 @@
 # 001 â€” Rojo-Hub foundation
 
-Status: **draft**. Live-switch measured headless (passes with one Windows-specific condition); Studio
-side not yet confirmed. Design questions open (see end).
+Status: **implemented, awaiting Studio confirmation**. Live switching measured headless and end to
+end against real `rojo`; the plugin's handling is confirmed from its source but not yet watched in
+Studio. Design defaults accepted by Viper on 2026-09-27.
 
 ## Problem
 
@@ -74,10 +75,13 @@ With a plain `C:\...` path, Rojo on Windows silently ignores every rewrite of th
 ### Consequences for the generated project file
 
 - Serve it as `rojo serve \\?\<absolute path to slot.project.json> --port N`.
-- Every `$path` in it must be **absolute** (a verbatim base path gets no `..` processing, so the
-  relative paths `ServeWorktree.mjs` writes would not resolve).
 - The project name, `servePlaceIds` and anything else read only at startup must not change between
   switches (the server's `projectName` and place-ID lists are fixed when the session starts).
+- Nested is better than copied (measured, `tools/live-switch-nested.mjs`): when the slot file's root
+  is a single `$path` to the tree's **own** project file, also by its `\\?\` path, Rojo reads that
+  project natively. Switches still apply live, `globIgnorePaths` and `syncRules` keep working
+  (they are relative to the project file's folder, so a copy stored elsewhere silently loses
+  them), and edits to the branch's own project file sync live, in every switch order.
 
 ### Results
 
@@ -103,17 +107,88 @@ Packages kept on the primary): four alternating switches, each one patch (+14/âˆ
 session, socket open, no Rojo warnings. First switch 2.4 s (cold read of the new folders), then about
 230 ms each.
 
+### The Studio plugin's side (from its source, v7.7.0 `plugin/src`)
+
+- Patches arriving on the websocket go straight to `ServeSession:__applyPatch`; the confirmation
+  dialog (`setConfirmCallback`) runs only during the initial sync.
+- The only check on a websocket packet is that its `sessionId` equals the one the plugin connected
+  with (`ApiContext.lua`). A live switch keeps the session, so the plugin applies it silently.
+
+### Rojo 7.7 crashes when a watched folder loses a subfolder
+
+Found while building, reproduced with plain `rojo serve` (no Hub involved): deleting a folder that
+contains files under any served path panics at `change_processor.rs:179`
+(`self.vfs.canonicalize(parent).unwrap()` on a `Remove` event whose parent is already gone). Upstream:
+rojo-rbx/rojo#1305 (closed), #1309 and #1321 (open), fix PR #1319 unmerged as of 2026-09-27. Rojo
+also never stops watching a folder it has read, so this includes folders a slot served earlier in
+the same process.
+
+Consequences:
+
+- The Hub never deletes or checks out into a folder while that slot's rojo runs. Each branch commit
+  gets its own view folder; unused views are removed only when the slot's rojo is stopped or
+  restarted.
+- When rojo dies anyway (someone deletes a folder, removes an Orca worktree the slot served earlier,
+  or checks out a branch that removes a folder), the Hub restarts it on the same port and says so.
+  That is a new session, so Studio must be reconnected by hand.
+
 ### Not yet confirmed
 
-- **Studio side.** That the real plugin applies a switch patch without disconnecting or asking for
-  confirmation. Procedure: `node tools/live-switch-probe.mjs serve tiny` (port 34880), connect a
-  throwaway Baseplate, then `switch b`, `edit b`, `switch a`, `edit a`, `switch b`; repeat with
-  `serve tls` for a patch the size of a real branch switch.
-- Old worktree folders stay watched after a switch (Rojo never unwatches). Whether that blocks
-  deleting a Hub-owned view worktree on Windows has not been checked.
-- Behaviour when the new `$path` does not exist at the moment of the switch (e.g. a worktree being
-  removed).
+- **Studio side, watched live.** Procedure: add a project in the Rojo-Hub sidebar, start it,
+  connect a throwaway Baseplate to its port, switch between two branches that differ, and check
+  Studio shows each switch without disconnecting or prompting.
+- Behaviour when the tree's project file is invalid at the moment of a switch: Rojo logs the error
+  and keeps the old tree; the Hub shows the logged error on the slot.
 
 ## Design
 
-To be written after the Studio confirmation and the design questions below.
+### Pieces
+
+- **Service** (`src/service`, bundled to `dist/service.js`): owns the registry, the generated files
+  and one `rojo serve` per slot. HTTP JSON API on `127.0.0.1:34870` (`src/service/server.ts`). Started
+  by the extension with VS Code's runtime (`ELECTRON_RUN_AS_NODE`), detached; keeps running when
+  windows close. Rojo processes are detached too, so a service restart (or extension update) does
+  not drop Studio: the next service adopts a rojo that still answers with the slot's project name.
+- **Extension** (`src/extension`): Projects view (port, what is served, Studio connection count,
+  warnings), a branch picker, a status bar item for the window's own project, start/stop/remove,
+  and the Rojo log. Polls the service every 2 s.
+- **State** in `%LOCALAPPDATA%\RojoHub\`: `registry.json`, `service.log`,
+  `slots\<id>\{slot.project.json, borrowed.project.json, rojo.log, rojo.previous.log}`, and
+  `views\<id>\<commit>\` for branches without a worktree.
+
+### Slots
+
+- Registered from any folder in a repo; the primary checkout is what is stored. Port: the lowest
+  free port in 34873-34899 that no slot owns (34872 is never used). Name: the primary's project
+  `name`, which must be unique across slots.
+- `rojo serve` runs with the primary checkout as its working directory, so that project's
+  `rokit.toml` picks the rojo version.
+- The slot file (`slot.project.json`) holds the name, the session fields copied from the primary
+  (`servePlaceIds`, `blockedPlaceIds`, `placeId`, `gameId`, `emitLegacyScripts`) and one root `$path`.
+
+### Serving a tree
+
+- **Native**: the tree has every folder its project file maps. The root `$path` points at the
+  tree's own project file.
+- **Borrowed**: the tree lacks a folder its project file maps that the primary has (typically
+  `Packages`/`ServerPackages` in a worktree that has not run Wally). The root `$path` points at
+  `borrowed.project.json`, a copy of the tree's project file with every `$path` absolute and the
+  missing folders taken from the primary. The slot warns, as `/JumpTo` did, when the branch's
+  `wally.toml` differs, and says that `globIgnorePaths`/`syncRules` do not apply in this mode. The
+  service watches the tree's project file and regenerates the copy when it changes.
+- Worktrees are served in place, so edits made there (by agents or by hand) reach Studio.
+- A branch with no worktree is served from a Hub view: `git worktree add --detach` of its commit
+  into a new folder. Branches already checked out in a worktree are offered only as that worktree.
+
+### Connection state
+
+Rojo's debug log (`-v`) records each plugin websocket: `WebSocket subscription established` when
+one opens, and one of `closed by client`, `stream ended`, `WebSocket error`, or `Message queue
+disconnected` when it ends (`src/web/api.rs`). The service counts them from the slot's log.
+
+### Tests
+
+`npm test`: unit tests, and `src/test/e2e.test.ts`, which runs the real service against a real
+rojo and a throwaway git repo with a websocket client standing in for Studio. It checks one session
+across native, borrowed and view switches, edits after switches, a live project-file edit, the
+connection count, and the crash restart.
