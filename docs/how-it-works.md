@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.5.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.6.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -92,24 +92,30 @@ uninstall the extension. Delete `%LOCALAPPDATA%\RojoHub\` to remove its state an
 ## 4. Where to find it in VS Code
 
 - **The Rojo-Hub sidebar**: an icon in the activity bar (a hub: one dot joined to four). It opens
-  by itself the first time Rojo-Hub runs in a VS Code profile. It has two sections:
-  - **Projects**: every project. Each row shows its port and what it serves; warnings and errors
-    appear as rows under it. Title buttons: Open Menu, Add Project, Refresh; the `…` menu has Stop
-    Background Service. Row buttons: switch branch, and ▶/■ to start or stop.
-  - **Groups**, below it: each group with its projects inside. Title button: `+` New Group. Group
-    row buttons: `+` add a project (a dropdown of the projects not in it yet), ▶/■ start or stop
-    the group. Project rows inside a group also have ✕, which takes the project out of that group.
+  by itself the first time Rojo-Hub runs in a VS Code profile. It holds one list with two
+  dropdowns that are always there, like the lists in the Extensions view. Each folds open and
+  closed, and when empty shows a clickable row instead of disappearing:
+  - **▾ Projects** (with how many are serving): every project. `+` on the header adds one; when
+    there are none it shows *Add a project…*. Each row shows the project's port and what it
+    serves; warnings and errors appear as rows under it. Row buttons: switch branch, ▶/■ start or
+    stop.
+  - **▾ Groups** (with how many there are), below Projects: each group, itself a dropdown of its
+    projects. `+` on the header makes a group; when there are none it shows *Make a group…*.
+    Group row buttons: `+` add a project (a dropdown of the projects not in it yet), ▶/■ start or
+    stop the group. An empty group shows *Add a project…*. Project rows inside a group also have
+    ✕, which takes the project out of that group.
 
-  Hovering a row shows the full details; right-clicking a project or group lists all its actions.
-  Clicking a project opens its menu.
+  The sidebar's title bar has Open Menu and Refresh; its `…` menu has Add Project, New Group and
+  Stop Background Service. Hovering a row shows the full details; right-clicking a project or
+  group lists all its actions. Clicking a project opens its menu.
 - **Rojo-Hub: Open Menu** (command palette): the one command that reaches everything, like Rojo's
   own *Rojo: Open Menu*. Lists projects, then groups, then Add Project, New Group, Port Settings,
   Reconnect to Service, Stop Background Service. Picking a project or group opens its own menu.
 - **The status bar**: in a window whose folder belongs to a registered project, the bottom bar
   shows `Rojo :<port> · <what it serves>` with its state icon. Clicking it opens that project's
   menu.
-- **Get Started walkthrough**: on VS Code's Welcome page, or the *Get Started* link in the empty
-  sidebar. Five steps: add, start, connect Studio, switch, group.
+- **Get Started walkthrough**: on VS Code's Welcome page (Help → Welcome, then *Get Started with
+  Rojo-Hub*). Five steps: add, start, connect Studio, switch, group.
 
 **State icons**
 
@@ -238,9 +244,9 @@ the Worktrees list.
 ## 9. Groups
 
 A group is a named set of projects; a project can be in several groups. Groups live in the
-**Groups** section of the sidebar.
+**Groups** dropdown of the sidebar, below Projects.
 
-- **Make one** with the section's `+` (or *New Group* in Open Menu): type a name, and a dropdown of
+- **Make one** with the `+` on the Groups header (or *New Group* in Open Menu): type a name, and a dropdown of
   your projects opens for the first one. Escape leaves the group empty.
 - **Add projects** one at a time with the group's `+`: each click opens a dropdown of the projects
   not in the group yet.
@@ -340,10 +346,11 @@ menu, the sidebar, and the status bar.
 | Command | Where |
 |---|---|
 | Open Menu | Palette, sidebar title |
-| Add Project, Refresh | Projects section title, menu |
+| Add Project | `+` on the Projects header, sidebar `…`, menu |
+| Refresh | Sidebar title, menu |
 | Stop Background Service | Sidebar `…`, menu |
 | Switch Branch, Start/Stop Serving, Copy Address, Show Rojo Log, Remove Project | Project menu, right-click a project, ▶/■ on its row, clicking its row |
-| New Group | Groups section title `+`, menu |
+| New Group | `+` on the Groups header, sidebar `…`, menu |
 | Add Project to Group, Start Group, Serve Only This Group, Stop Group, Rename Group, Delete Group | Group menu, right-click a group, `+` and ▶/■ on its row |
 | Remove from Group | ✕ on a project inside a group, right-click it there |
 

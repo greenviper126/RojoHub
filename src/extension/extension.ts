@@ -14,8 +14,7 @@ import { GroupItem, SlotItem, SlotTree } from "./tree";
 
 const POLL_MS = 2000;
 
-let projectTree: SlotTree;
-let groupTree: SlotTree;
+let tree: SlotTree;
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
@@ -40,8 +39,7 @@ async function refresh(): Promise<void> {
 		lastSlots = [];
 		lastGroups = [];
 	}
-	projectTree.update(lastSlots, lastGroups);
-	groupTree.update(lastSlots, lastGroups);
+	tree.update(lastSlots, lastGroups);
 	updateStatus();
 }
 
@@ -400,11 +398,9 @@ function orcaRepos():Promise<{ path: string; displayName: string }[]> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	projectTree = new SlotTree("projects");
-	groupTree = new SlotTree("groups");
+	tree = new SlotTree();
 	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-	context.subscriptions.push(vscode.window.registerTreeDataProvider("rojoHub.slots", projectTree),
-		vscode.window.registerTreeDataProvider("rojoHub.groups", groupTree), statusItem);
+	context.subscriptions.push(vscode.window.registerTreeDataProvider("rojoHub.slots", tree), statusItem);
 
 	const serviceScript = context.asAbsolutePath("dist/service.js");
 	const commands: Record<string, (argument?: unknown) => unknown> = {

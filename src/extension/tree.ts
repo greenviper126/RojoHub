@@ -17,7 +17,8 @@ export class SlotItem extends vscode.TreeItem {
 		super(slot.projectName, details.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
 		this.id = `${groupId ?? "projects"}/${slot.id}`;
 		this.description = `:${slot.port} · ${slot.targetLabel || "—"}`;
-		this.contextValue = slot.state === "running" || slot.state === "starting" ? "slot.running" : "slot.stopped";
+		// "slot.*" in Projects, "member.*" inside a group (which adds Remove from Group)
+		this.contextValue = `${groupId ? "member" : "slot"}.${slot.state === "running" || slot.state === "starting" ? "running" : "stopped"}`;
 		this.iconPath = slotIcon(slot);
 		this.tooltip = tooltip(slot);
 		this.command = { command: "rojoHub.projectMenu", title: "Project Menu", arguments: [slot.id] };
@@ -82,10 +83,35 @@ function tooltip(slot: SlotView): vscode.MarkdownString {
 }
 
 /*
-	Backs both sidebar sections. "projects" lists every project; "groups" lists
-	the groups, each holding its projects. A project in several groups appears
-	under each.
+	The two always-present dropdowns at the top of the sidebar, like the lists
+	in the Extensions view. Each has its own + (Add Project, New Group).
 */
+export class SectionItem extends vscode.TreeItem {
+	constructor(
+		readonly section: "projects" | "groups",
+		count: number,
+		detail: string,
+	) {
+		super(section === "projects" ? "Projects" : "Groups", vscode.TreeItemCollapsibleState.Expanded);
+		this.id = `section/${section}`;
+		this.contextValue = `section.${section}`;
+		this.description = count === 0 ? "" : detail;
+		this.iconPath = new vscode.ThemeIcon(section === "projects" ? "server-environment" : "layers");
+	}
+}
+
+/* The row an empty section shows instead of disappearing; clicking it does the obvious thing. */
+export class PlaceholderItem extends vscode.TreeItem {
+	constructor(label: string, description: string, command: string, id: string, args: unknown[] = []) {
+		super(label, vscode.TreeItemCollapsibleState.None);
+		this.id = id;
+		this.description = description;
+		this.iconPath = new vscode.ThemeIcon("add");
+		this.command = { command, title: label, arguments: args };
+		this.contextValue = "placeholder";
+	}
+}
+
 export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	private readonly changed = new vscode.EventEmitter<void>();
 	readonly onDidChangeTreeData = this.changed.event;
@@ -93,10 +119,8 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	private groups: GroupView[] = [];
 	private signature = "";
 
-	constructor(private readonly section: "projects" | "groups") {}
-
 	update(slots: SlotView[], groups: GroupView[]): void {
-		const signature = JSON.stringify(this.section === "projects" ? slots : [slots, groups]);
+		const signature = JSON.stringify([slots, groups]);
 		if (signature === this.signature) return;
 		this.signature = signature;
 		this.slots = slots;
@@ -110,12 +134,32 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 
 	getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
 		if (!element) {
-			if (this.section === "projects") return this.slots.map((slot) => new SlotItem(slot, null));
+			const serving = this.slots.filter((slot) => slot.state === "running").length;
+			return [
+				new SectionItem("projects", this.slots.length, `${serving}/${this.slots.length} serving`),
+				new SectionItem("groups", this.groups.length, `${this.groups.length}`),
+			];
+		}
+		if (element instanceof SectionItem && element.section === "projects") {
+			if (this.slots.length === 0) {
+				return [new PlaceholderItem("Add a project…", "each gets its own Rojo port", "rojoHub.addProject", "placeholder/projects")];
+			}
+			return this.slots.map((slot) => new SlotItem(slot, null));
+		}
+		if (element instanceof SectionItem && element.section === "groups") {
+			if (this.groups.length === 0) {
+				return [new PlaceholderItem("Make a group…", "start sets of projects together", "rojoHub.newGroup", "placeholder/groups")];
+			}
 			return this.groups.map(
 				(group) => new GroupItem(group, group.slotIds.map((id) => this.slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot)),
 			);
 		}
-		if (element instanceof GroupItem) return element.members.map((slot) => new SlotItem(slot, element.group.id));
+		if (element instanceof GroupItem) {
+			if (element.members.length === 0) {
+				return [new PlaceholderItem("Add a project…", "to this group", "rojoHub.addToGroup", `placeholder/group/${element.group.id}`, [element.group.id])];
+			}
+			return element.members.map((slot) => new SlotItem(slot, element.group.id));
+		}
 		if (element instanceof SlotItem) {
 			const slot = element.slot;
 			return [
