@@ -14,7 +14,8 @@ import { GroupItem, SlotItem, SlotTree } from "./tree";
 
 const POLL_MS = 2000;
 
-let tree: SlotTree;
+let projectTree: SlotTree;
+let groupTree: SlotTree;
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
@@ -39,7 +40,8 @@ async function refresh(): Promise<void> {
 		lastSlots = [];
 		lastGroups = [];
 	}
-	tree.update(lastSlots, lastGroups);
+	projectTree.update(lastSlots, lastGroups);
+	groupTree.update(lastSlots, lastGroups);
 	updateStatus();
 }
 
@@ -183,44 +185,63 @@ async function pickGroup(argument: unknown, placeholder: string): Promise<GroupV
 	return (await vscode.window.showQuickPick(items, { placeHolder: placeholder }))?.group;
 }
 
-/** Multi-select of projects, with `selected` pre-ticked. */
-async function pickMembers(title: string, selected: string[]): Promise<string[] | undefined> {
+/*
+	Makes an empty group from just a name, then offers the add dropdown for its
+	first project. More are added one at a time with the group's + button.
+*/
+async function newGroup(): Promise<void> {
+	const taken = new Set(lastGroups.map((group) => group.name.toLowerCase()));
+	let suggestion = "New Group";
+	for (let n = 2; taken.has(suggestion.toLowerCase()); n++) suggestion = `New Group ${n}`;
+	const name = await vscode.window.showInputBox({
+		title: "New Group",
+		prompt: "Name the group. Add its projects afterwards with its + button.",
+		value: suggestion,
+		valueSelection: [0, suggestion.length],
+	});
+	if (!name?.trim()) return;
+	const group = await run(`Creating ${name.trim()}`, () => client.createGroup(name, []));
+	if (group) await addToGroup(group.id);
+}
+
+/* The dropdown behind a group's + button: the projects not in it yet. */
+async function addToGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Add a project to which group?");
+	if (!group) return;
 	await refresh();
+	const current = lastGroups.find((entry) => entry.id === group.id) ?? group;
+	const candidates = lastSlots.filter((slot) => !current.slotIds.includes(slot.id));
 	if (lastSlots.length === 0) {
 		void vscode.window.showInformationMessage("Add a project first; groups are made of projects.");
-		return undefined;
+		return;
 	}
-	const items = lastSlots.map((slot) => ({ label: slot.projectName, description: `:${slot.port}`, picked: selected.includes(slot.id), id: slot.id }));
-	const picked = await vscode.window.showQuickPick(items, { title, canPickMany: true, placeHolder: "Tick the projects in this group" });
-	return picked?.map((item) => item.id);
-}
-
-async function newGroup(): Promise<void> {
-	const name = await vscode.window.showInputBox({ title: "New Group", prompt: "Name the group (for example Laundry Shift, or Framework work)" });
-	if (!name?.trim()) return;
-	const members = await pickMembers(`Projects in ${name.trim()}`, []);
-	if (!members) return;
-	const group = await run(`Creating ${name.trim()}`, () => client.createGroup(name, members));
-	if (group) await groupMenu(group.id);
-}
-
-async function editGroup(argument: unknown): Promise<void> {
-	const group = await pickGroup(argument, "Edit which group?");
-	if (!group) return;
-	const choice = await vscode.window.showQuickPick(
-		[
-			{ label: "$(checklist) Change Projects", action: "members" as const },
-			{ label: "$(edit) Rename", action: "rename" as const },
-		],
-		{ title: `Edit ${group.name}` },
+	if (candidates.length === 0) {
+		void vscode.window.showInformationMessage(`Every project is already in ${current.name}.`);
+		return;
+	}
+	const picked = await vscode.window.showQuickPick(
+		candidates.map((slot) => ({ label: `${slotIcon(slot)} ${slot.projectName}`, description: `:${slot.port} · ${slot.targetLabel}`, id: slot.id })),
+		{ title: `Add to ${current.name}`, placeHolder: "Pick a project to add" },
 	);
-	if (choice?.action === "members") {
-		const members = await pickMembers(`Projects in ${group.name}`, group.slotIds);
-		if (members) await run(`Updating ${group.name}`, () => client.updateGroup(group.id, { slotIds: members }));
-	} else if (choice?.action === "rename") {
-		const name = await vscode.window.showInputBox({ title: `Rename ${group.name}`, value: group.name });
-		if (name?.trim()) await run(`Renaming ${group.name}`, () => client.updateGroup(group.id, { name }));
-	}
+	if (picked) await run(`Adding to ${current.name}`, () => client.updateGroup(current.id, { slotIds: [...current.slotIds, picked.id] }));
+}
+
+/* The ✕ on a project inside a group: takes it out of that group only. */
+async function removeFromGroup(argument: unknown): Promise<void> {
+	if (!(argument instanceof SlotItem) || !argument.groupId) return;
+	const group = lastGroups.find((entry) => entry.id === argument.groupId);
+	if (!group) return;
+	const slotId = argument.slot.id;
+	await run(`Removing ${argument.slot.projectName} from ${group.name}`, () =>
+		client.updateGroup(group.id, { slotIds: group.slotIds.filter((id) => id !== slotId) }),
+	);
+}
+
+async function renameGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Rename which group?");
+	if (!group) return;
+	const name = await vscode.window.showInputBox({ title: `Rename ${group.name}`, value: group.name });
+	if (name?.trim() && name.trim() !== group.name) await run(`Renaming ${group.name}`, () => client.updateGroup(group.id, { name }));
 }
 
 async function deleteGroup(argument: unknown): Promise<void> {
@@ -262,7 +283,8 @@ async function groupMenu(id: string): Promise<void> {
 		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id, false) },
 		{ label: "$(target) Serve Only This Group", description: "start these, stop every other project", run: () => startGroup(group.id, true) },
 		{ label: "$(debug-stop) Stop Group", run: () => stopGroup(group.id) },
-		{ label: "$(edit) Edit Group", run: () => editGroup(group.id) },
+		{ label: "$(add) Add Project to Group", run: () => addToGroup(group.id) },
+		{ label: "$(edit) Rename Group", run: () => renameGroup(group.id) },
 		{ label: "$(trash) Delete Group", run: () => deleteGroup(group.id) },
 	];
 	if (members.length > 0) items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
@@ -378,9 +400,11 @@ function orcaRepos():Promise<{ path: string; displayName: string }[]> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	tree = new SlotTree();
+	projectTree = new SlotTree("projects");
+	groupTree = new SlotTree("groups");
 	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-	context.subscriptions.push(vscode.window.registerTreeDataProvider("rojoHub.slots", tree), statusItem);
+	context.subscriptions.push(vscode.window.registerTreeDataProvider("rojoHub.slots", projectTree),
+		vscode.window.registerTreeDataProvider("rojoHub.groups", groupTree), statusItem);
 
 	const serviceScript = context.asAbsolutePath("dist/service.js");
 	const commands: Record<string, (argument?: unknown) => unknown> = {
@@ -388,7 +412,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.projectMenu": (argument) => (typeof argument === "string" ? projectMenu(argument) : openMenu()),
 		"rojoHub.addProject": () => addProject(),
 		"rojoHub.newGroup": () => newGroup(),
-		"rojoHub.editGroup": (argument) => editGroup(argument),
+		"rojoHub.editGroup": (argument) => renameGroup(argument),
+		"rojoHub.addToGroup": (argument) => addToGroup(argument),
+		"rojoHub.removeFromGroup": (argument) => removeFromGroup(argument),
 		"rojoHub.deleteGroup": (argument) => deleteGroup(argument),
 		"rojoHub.startGroup": (argument) => startGroup(argument, false),
 		"rojoHub.soloGroup": (argument) => startGroup(argument, true),

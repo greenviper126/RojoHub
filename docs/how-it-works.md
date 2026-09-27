@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.4.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.5.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -92,12 +92,16 @@ uninstall the extension. Delete `%LOCALAPPDATA%\RojoHub\` to remove its state an
 ## 4. Where to find it in VS Code
 
 - **The Rojo-Hub sidebar**: an icon in the activity bar (a hub: one dot joined to four). It opens
-  by itself the first time Rojo-Hub runs in a VS Code profile. It lists groups as folders with
-  their projects inside, then the projects in no group. Each project row shows its port and what
-  it serves; warnings and errors appear as rows under it. Buttons at the top: Open Menu, Add
-  Project, New Group, Refresh; the `…` menu has Stop Background Service. Hovering a row shows the
-  full details. Right-clicking a project or group lists its actions; the ▶/■ buttons on a row start
-  and stop it.
+  by itself the first time Rojo-Hub runs in a VS Code profile. It has two sections:
+  - **Projects**: every project. Each row shows its port and what it serves; warnings and errors
+    appear as rows under it. Title buttons: Open Menu, Add Project, Refresh; the `…` menu has Stop
+    Background Service. Row buttons: switch branch, and ▶/■ to start or stop.
+  - **Groups**, below it: each group with its projects inside. Title button: `+` New Group. Group
+    row buttons: `+` add a project (a dropdown of the projects not in it yet), ▶/■ start or stop
+    the group. Project rows inside a group also have ✕, which takes the project out of that group.
+
+  Hovering a row shows the full details; right-clicking a project or group lists all its actions.
+  Clicking a project opens its menu.
 - **Rojo-Hub: Open Menu** (command palette): the one command that reaches everything, like Rojo's
   own *Rojo: Open Menu*. Lists projects, then groups, then Add Project, New Group, Port Settings,
   Reconnect to Service, Stop Background Service. Picking a project or group opens its own menu.
@@ -233,16 +237,24 @@ the Worktrees list.
 
 ## 9. Groups
 
-A group is a named set of projects; a project can be in several groups. Make one with **New
-Group** (name, then tick projects). A group's menu (click it in Open Menu, or right-click it in the
-sidebar):
+A group is a named set of projects; a project can be in several groups. Groups live in the
+**Groups** section of the sidebar.
+
+- **Make one** with the section's `+` (or *New Group* in Open Menu): type a name, and a dropdown of
+  your projects opens for the first one. Escape leaves the group empty.
+- **Add projects** one at a time with the group's `+`: each click opens a dropdown of the projects
+  not in the group yet.
+- **Take a project out** with the ✕ on its row inside the group. The project stays registered.
+
+A group's actions (its row buttons, right-click, or its entry in Open Menu):
 
 | Action | Effect |
 |---|---|
+| **Add Project to Group** | The dropdown described above. |
 | **Start Group** | Starts every project in the group that is not already serving. |
 | **Serve Only This Group** | Starts the group, and stops every serving project outside it. The profile switch. |
 | **Stop Group** | Stops every project in the group. |
-| **Edit Group** | Change its projects, or rename it. |
+| **Rename Group** | Changes its name. |
 | **Delete Group** | Deletes the group only; its projects stay registered and keep their state. |
 
 Projects that are already serving are left alone, so their Studio sessions continue. If some
@@ -328,10 +340,12 @@ menu, the sidebar, and the status bar.
 | Command | Where |
 |---|---|
 | Open Menu | Palette, sidebar title |
-| Add Project, New Group, Refresh | Sidebar title, menu |
+| Add Project, Refresh | Projects section title, menu |
 | Stop Background Service | Sidebar `…`, menu |
 | Switch Branch, Start/Stop Serving, Copy Address, Show Rojo Log, Remove Project | Project menu, right-click a project, ▶/■ on its row, clicking its row |
-| Start Group, Serve Only This Group, Stop Group, Edit Group, Delete Group | Group menu, right-click a group, ▶/■ on its row |
+| New Group | Groups section title `+`, menu |
+| Add Project to Group, Start Group, Serve Only This Group, Stop Group, Rename Group, Delete Group | Group menu, right-click a group, `+` and ▶/■ on its row |
+| Remove from Group | ✕ on a project inside a group, right-click it there |
 
 ## 14. Known limits and troubleshooting
 

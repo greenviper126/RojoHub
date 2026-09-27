@@ -3,19 +3,19 @@ import * as vscode from "vscode";
 import type { GroupView, SlotView } from "../common/api";
 
 /*
-	The Projects view: groups as folders holding their projects, then the
-	projects in no group. A project in several groups appears under each.
-	Warnings and errors are child rows, so they read without hovering.
+	The sidebar's two sections, Projects and Groups. Warnings and errors are
+	child rows under a project, so they read without hovering.
 */
 
 export class SlotItem extends vscode.TreeItem {
 	constructor(
 		readonly slot: SlotView,
-		parent: string,
+		/** The group this row sits under in the Groups section, or null in Projects. */
+		readonly groupId: string | null,
 	) {
 		const details = [...(slot.error ? [slot.error.split("\n")[0]] : []), ...slot.warnings];
 		super(slot.projectName, details.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
-		this.id = `${parent}/${slot.id}`;
+		this.id = `${groupId ?? "projects"}/${slot.id}`;
 		this.description = `:${slot.port} · ${slot.targetLabel || "—"}`;
 		this.contextValue = slot.state === "running" || slot.state === "starting" ? "slot.running" : "slot.stopped";
 		this.iconPath = slotIcon(slot);
@@ -81,6 +81,11 @@ function tooltip(slot: SlotView): vscode.MarkdownString {
 	return new vscode.MarkdownString(lines.join("\n"));
 }
 
+/*
+	Backs both sidebar sections. "projects" lists every project; "groups" lists
+	the groups, each holding its projects. A project in several groups appears
+	under each.
+*/
 export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	private readonly changed = new vscode.EventEmitter<void>();
 	readonly onDidChangeTreeData = this.changed.event;
@@ -88,8 +93,10 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	private groups: GroupView[] = [];
 	private signature = "";
 
+	constructor(private readonly section: "projects" | "groups") {}
+
 	update(slots: SlotView[], groups: GroupView[]): void {
-		const signature = JSON.stringify([slots, groups]);
+		const signature = JSON.stringify(this.section === "projects" ? slots : [slots, groups]);
 		if (signature === this.signature) return;
 		this.signature = signature;
 		this.slots = slots;
@@ -103,11 +110,10 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 
 	getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
 		if (!element) {
-			const grouped = new Set(this.groups.flatMap((group) => group.slotIds));
-			return [
-				...this.groups.map((group) => new GroupItem(group, group.slotIds.map((id) => this.slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot))),
-				...this.slots.filter((slot) => !grouped.has(slot.id)).map((slot) => new SlotItem(slot, "root")),
-			];
+			if (this.section === "projects") return this.slots.map((slot) => new SlotItem(slot, null));
+			return this.groups.map(
+				(group) => new GroupItem(group, group.slotIds.map((id) => this.slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot)),
+			);
 		}
 		if (element instanceof GroupItem) return element.members.map((slot) => new SlotItem(slot, element.group.id));
 		if (element instanceof SlotItem) {

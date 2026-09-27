@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -28,6 +28,10 @@
         {
           "id": "rojoHub.slots",
           "name": "Projects"
+        },
+        {
+          "id": "rojoHub.groups",
+          "name": "Groups"
         }
       ]
     },
@@ -35,6 +39,10 @@
       {
         "view": "rojoHub.slots",
         "contents": "Rojo-Hub serves each of your Rojo projects on its own port, and switches any of them to another branch without Studio disconnecting.\n[Add Project](command:rojoHub.addProject)\n[Get Started](command:workbench.action.openWalkthrough?%22greenviper126.rojo-hub%23rojoHub.start%22)"
+      },
+      {
+        "view": "rojoHub.groups",
+        "contents": "Groups start, stop, or take over as a set of projects, like profiles.\n[New Group](command:rojoHub.newGroup)"
       }
     ],
     "commands": [
@@ -109,7 +117,7 @@
       },
       {
         "command": "rojoHub.editGroup",
-        "title": "Edit Group",
+        "title": "Rename Group",
         "category": "Rojo-Hub",
         "icon": "$(edit)"
       },
@@ -141,6 +149,18 @@
         "command": "rojoHub.groupMenu",
         "title": "Group Menu",
         "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.addToGroup",
+        "title": "Add Project to Group",
+        "category": "Rojo-Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rojoHub.removeFromGroup",
+        "title": "Remove from Group",
+        "category": "Rojo-Hub",
+        "icon": "$(close)"
       }
     ],
     "menus": {
@@ -156,61 +176,71 @@
           "group": "navigation@1"
         },
         {
-          "command": "rojoHub.newGroup",
-          "when": "view == rojoHub.slots",
-          "group": "navigation@2"
-        },
-        {
           "command": "rojoHub.refresh",
           "when": "view == rojoHub.slots",
-          "group": "navigation@3"
+          "group": "navigation@2"
         },
         {
           "command": "rojoHub.stopService",
           "when": "view == rojoHub.slots",
           "group": "zz"
+        },
+        {
+          "command": "rojoHub.newGroup",
+          "when": "view == rojoHub.groups",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
         {
           "command": "rojoHub.switch",
-          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem =~ /^slot/",
           "group": "inline@1"
         },
         {
           "command": "rojoHub.start",
-          "when": "view == rojoHub.slots && viewItem == slot.stopped",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem == slot.stopped",
           "group": "inline@2"
         },
         {
           "command": "rojoHub.stop",
-          "when": "view == rojoHub.slots && viewItem == slot.running",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem == slot.running",
           "group": "inline@2"
         },
         {
+          "command": "rojoHub.removeFromGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^slot/",
+          "group": "inline@3"
+        },
+        {
           "command": "rojoHub.switch",
-          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem =~ /^slot/",
           "group": "1@1"
         },
         {
           "command": "rojoHub.start",
-          "when": "view == rojoHub.slots && viewItem == slot.stopped",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem == slot.stopped",
           "group": "1@2"
         },
         {
           "command": "rojoHub.stop",
-          "when": "view == rojoHub.slots && viewItem == slot.running",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem == slot.running",
           "group": "1@2"
         },
         {
           "command": "rojoHub.showLog",
-          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem =~ /^slot/",
           "group": "2@1"
         },
         {
           "command": "rojoHub.copyAddress",
-          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "when": "view =~ /^rojoHub\\.(slots|groups)$/ && viewItem =~ /^slot/",
           "group": "2@2"
+        },
+        {
+          "command": "rojoHub.removeFromGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^slot/",
+          "group": "3@1"
         },
         {
           "command": "rojoHub.removeProject",
@@ -218,38 +248,48 @@
           "group": "3@1"
         },
         {
-          "command": "rojoHub.startGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group\\.(stopped|partial)$/",
+          "command": "rojoHub.addToGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "inline@1"
         },
         {
-          "command": "rojoHub.stopGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group\\.(running|partial)$/",
+          "command": "rojoHub.startGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^group\\.(stopped|partial)$/",
           "group": "inline@2"
         },
         {
+          "command": "rojoHub.stopGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^group\\.(running|partial)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "rojoHub.addToGroup",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
+          "group": "1@0"
+        },
+        {
           "command": "rojoHub.startGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group/",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "1@1"
         },
         {
           "command": "rojoHub.soloGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group/",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "1@2"
         },
         {
           "command": "rojoHub.stopGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group/",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "1@3"
         },
         {
           "command": "rojoHub.editGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group/",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "2@1"
         },
         {
           "command": "rojoHub.deleteGroup",
-          "when": "view == rojoHub.slots && viewItem =~ /^group/",
+          "when": "view == rojoHub.groups && viewItem =~ /^group/",
           "group": "3@1"
         }
       ],
@@ -320,6 +360,14 @@
         },
         {
           "command": "rojoHub.groupMenu",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.addToGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.removeFromGroup",
           "when": "false"
         }
       ]
@@ -402,7 +450,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "Make a group to start a set of projects together, or to serve only that set, like a profile.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups have their own section below Projects. Click + to make one, then + on the group to add projects from a dropdown.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },
