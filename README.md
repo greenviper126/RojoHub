@@ -21,7 +21,7 @@ How it works, what was measured, and the known Rojo 7.7 crash on folder deletion
 ```sh
 npm install
 npm run package
-code --install-extension rojo-hub-0.3.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.3.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 ```
 
 ## Develop

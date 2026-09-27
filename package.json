@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -226,7 +226,9 @@
             "type": [
               "integer",
               "string"
-            ]
+            ],
+            "pattern": "^\\s*\\d+\\s*(-\\s*\\d+\\s*)?$",
+            "patternErrorMessage": "Write a port (35000) or a range (\"35000-35010\")."
           },
           "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
         },
@@ -234,7 +236,8 @@
           "type": "string",
           "scope": "application",
           "default": "34873-35872",
-          "pattern": "^s*d+s*-s*d+s*$",
+          "pattern": "^\\s*\\d+\\s*-\\s*\\d+\\s*$",
+          "patternErrorMessage": "Write the range as first-last, for example 34873-35872.",
           "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose `default.project.json` sets `servePort` uses that instead."
         }
       }
