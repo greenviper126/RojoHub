@@ -5,7 +5,7 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.7.0";
+export const SERVICE_VERSION = "0.8.0";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -69,17 +69,29 @@ export interface PortSettings {
 	excludedPorts?: (number | string)[];
 }
 
-/** A named set of projects started and stopped together. slotIds keep the order they were added in. */
+/*
+	A named set of projects and other groups, started and stopped together.
+	Members keep the order they were added in.
+*/
 export interface GroupView {
 	id: string;
 	name: string;
+	/** Projects directly in the group. */
 	slotIds: string[];
+	/** Groups directly in the group. */
+	groupIds: string[];
+	/** Started (Start or Only this) and not stopped since. */
+	active: boolean;
+	/** Every project the group holds, through nested groups, each once. */
+	projectIds: string[];
 }
 
-/** What a group action did to each member; a failure on one project does not stop the others. */
+/** What a group action did to each project; a failure on one does not stop the others. */
 export interface GroupResult {
 	group: GroupView;
 	started: string[];
 	stopped: string[];
+	/** Left serving by Stop because another running group also holds it. */
+	kept: { id: string; because: string }[];
 	failed: { id: string; error: string }[];
 }

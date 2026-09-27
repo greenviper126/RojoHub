@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -334,7 +334,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "The Rojo-Hub panel has a Groups section under Projects. Click + to make a group, then pick projects from its dropdown.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups hold projects and other groups. Start runs them all; Only this runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },

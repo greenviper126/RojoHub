@@ -242,7 +242,7 @@ async function makeRepo(name: string): Promise<string> {
 	return dir;
 }
 
-test("groups start, serve only, stop, and forget removed projects", async () => {
+test("groups nest without loops, serve only, and stop without taking shared projects down", async () => {
 	const [one, two] = await Promise.all([makeRepo("GroupOne"), makeRepo("GroupTwo")]);
 	const a = await call<SlotView>("POST", "/slots", { path: one });
 	const b = await call<SlotView>("POST", "/slots", { path: two });
@@ -266,15 +266,35 @@ test("groups start, serve only, stop, and forget removed projects", async () => 
 	assert.equal(await state(b.id), "stopped");
 	assert.equal((await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId, sessionA, "same session kept");
 
+	// Just One is running (Only this), so stopping Both must keep A: another running group uses it
 	result = await call<GroupResult>("POST", `/groups/${both.id}/stop`);
+	assert.deepEqual(result.kept, [{ id: a.id, because: "Just One" }]);
+	assert.equal(await state(a.id), "running");
+	result = await call<GroupResult>("POST", `/groups/${onlyA.id}/stop`);
+	assert.deepEqual(result.stopped, [a.id]);
 	assert.equal(await state(a.id), "stopped");
 
-	await call("PUT", `/groups/${both.id}`, { name: "Renamed" });
+	// nesting: Outer holds Both; Both can't then hold Outer, nor itself
+	const outer = await call<GroupView>("POST", "/groups", { name: "Outer", groupIds: [both.id] });
+	assert.deepEqual(outer.projectIds.sort(), [a.id, b.id].sort(), "nested projects count");
+	await assert.rejects(call("PUT", `/groups/${both.id}`, { groupIds: [outer.id] }), /would loop.*Outer → Both|Outer → Both.*would loop/);
+	await assert.rejects(call("PUT", `/groups/${both.id}`, { groupIds: [both.id] }), /can't contain itself/);
+	result = await call<GroupResult>("POST", `/groups/${outer.id}/start`, {});
+	assert.deepEqual(result.started.sort(), [a.id, b.id].sort(), "starting Outer starts the nested group's projects");
+	assert.equal((await call<GroupView[]>("GET", "/groups")).find((group) => group.id === outer.id)!.active, true);
+	result = await call<GroupResult>("POST", `/groups/${outer.id}/stop`);
+	assert.deepEqual(result.stopped.sort(), [a.id, b.id].sort());
+	await call("DELETE", `/groups/${both.id}`);
+	assert.deepEqual((await call<GroupView[]>("GET", "/groups")).find((group) => group.id === outer.id)!.groupIds, [], "deleted group leaves the groups holding it");
+	await call("DELETE", `/groups/${outer.id}`);
+	const again = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
+
+	await call("PUT", `/groups/${again.id}`, { name: "Renamed" });
 	await call("DELETE", `/slots/${b.id}`);
 	const groups = await call<GroupView[]>("GET", "/groups");
-	assert.deepEqual(groups.find((group) => group.id === both.id)!.slotIds, [a.id], "removed project leaves its groups");
-	assert.equal(groups.find((group) => group.id === both.id)!.name, "Renamed");
-	await call("DELETE", `/groups/${both.id}`);
+	assert.deepEqual(groups.find((group) => group.id === again.id)!.slotIds, [a.id], "removed project leaves its groups");
+	assert.equal(groups.find((group) => group.id === again.id)!.name, "Renamed");
+	await call("DELETE", `/groups/${again.id}`);
 	await call("DELETE", `/groups/${onlyA.id}`);
 	await call("DELETE", `/slots/${a.id}`);
 	assert.deepEqual(await call("GET", "/groups"), []);

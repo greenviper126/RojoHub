@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { expandGroup, pathBetween } from "../common/groups";
 import { parseWorktrees } from "../service/git";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
@@ -157,6 +158,29 @@ test("excluded ports are skipped, two servePorts on one port are an error", () =
 	const clash = assignPorts([request("a", "s", 40000), request("b", "t", 40000)], parsePortSettings({}));
 	assert.equal(clash.get("a")!.port, 40000);
 	assert.match(clash.get("b")!.error!, /also set by a/);
+});
+
+test("expandGroup walks nested groups once each and survives a loop", () => {
+	const groups = [
+		{ id: "a", slotIds: ["p1"], groupIds: ["b", "c"] },
+		{ id: "b", slotIds: ["p2", "p1"], groupIds: ["c"] },
+		{ id: "c", slotIds: ["p3"], groupIds: ["a"] }, // a loop that got in by hand
+	];
+	assert.deepEqual(expandGroup(groups, "a"), ["p1", "p2", "p3"]);
+	assert.deepEqual(expandGroup(groups, "c"), ["p3", "p1", "p2"]);
+	assert.deepEqual(expandGroup(groups, "missing"), []);
+	assert.deepEqual(expandGroup([{ id: "old", slotIds: ["p"] }], "old"), ["p"], "groups saved before nesting have no groupIds");
+});
+
+test("pathBetween finds the chain that would loop", () => {
+	const groups = [
+		{ id: "outer", slotIds: [], groupIds: ["middle"] },
+		{ id: "middle", slotIds: [], groupIds: ["inner"] },
+		{ id: "inner", slotIds: [], groupIds: [] },
+	];
+	assert.deepEqual(pathBetween(groups, "outer", "inner"), ["outer", "middle", "inner"], "adding outer to inner would loop");
+	assert.equal(pathBetween(groups, "inner", "outer"), null, "adding inner to outer is fine");
+	assert.deepEqual(pathBetween(groups, "inner", "inner"), ["inner"]);
 });
 
 test("slugify", () => {

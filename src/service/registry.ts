@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { GroupView, Target } from "../common/api";
+import type { Target } from "../common/api";
 
 /*
 	The slots the Hub knows about, persisted as JSON in the Hub's folder. Only
@@ -26,8 +26,16 @@ export interface SlotRecord {
 	activeView: string | null;
 }
 
-/** A named set of projects started and stopped together (spec 001, "Groups"). */
-export type GroupRecord = GroupView;
+/** A named set of projects and groups started and stopped together (spec 001, "Groups"). */
+export interface GroupRecord {
+	id: string;
+	name: string;
+	slotIds: string[];
+	/** Nested groups; missing in registries written before nesting existed. */
+	groupIds?: string[];
+	/** Started and not stopped since; missing means false. */
+	active?: boolean;
+}
 
 interface RegistryFile {
 	version: 1;

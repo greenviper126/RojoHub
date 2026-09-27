@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.7.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.8.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -132,10 +132,13 @@ project's card is highlighted once it is added.
 Enter or *Create* makes it. Each group is a card that folds open and closed, showing how many of its
 projects are serving (green when all are). Inside:
 
-- its projects, each with a status light, port and branch, and ✕ to take it out of the group
-  (clicking a project's name jumps to its card);
-- an **Add a project…** dropdown listing the projects not in the group yet: picking one adds it;
-- **Start**, **Only this** (start this group, stop every other project) and **Stop**;
+- the groups inside it, then its projects, each with ✕ to take it out (clicking a name jumps to
+  its card);
+- an **Add a project or group…** dropdown: projects not in it yet, then groups, with groups that
+  would make a loop greyed out;
+- **Start**, **Only this** (start this group, stop every other project; asks first, naming what it
+  will stop) and **Stop** (keeps projects another running group uses);
+- a green *running* badge while the group is running;
 - ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete?* in
   place; the projects stay).
 
@@ -286,28 +289,50 @@ the Worktrees list.
 
 ## 9. Groups
 
-A group is a named set of projects; a project can be in several groups. Groups live in the
-**Groups** section of the panel, below Projects.
+A group is a named set of **projects and other groups**, like a profile. A project or group can be
+in several groups. Groups live in the **Groups** section of the panel, below Projects.
 
-- **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name in the box that
-  appears and press Enter or *Create*.
-- **Add projects** with the group card's **Add a project…** dropdown, which lists the projects not
-  in the group yet. Pick one to add it; do it again for the next.
-- **Take a project out** with the ✕ next to it in the group. The project stays registered.
+### Making and filling groups
 
-A group card's actions:
+- **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name and press Enter
+  or *Create*.
+- **Add to it** with the group card's **Add a project or group…** dropdown. It lists the projects
+  not in the group yet, then the groups. Pick one to add it; do it again for the next.
+- **Take something out** with the ✕ next to it in the group. Nothing is deleted: a project stays
+  registered, a group stays a group.
+- **Groups inside groups** are listed first in the card, with a layers icon and how many of their
+  projects are serving. Clicking one scrolls to its own card.
+
+### Loops
+
+A group can't contain itself, directly or through other groups. Adding group B to group A is
+refused when B already contains A anywhere inside it. In the dropdown such groups are greyed out
+and marked *(would loop: it contains A)*, and the service refuses them too with the chain that would
+loop, for example *Outer → Middle → Inner*. If a loop gets into `registry.json` some other way,
+Rojo-Hub still expands each group only once, so nothing hangs. Deleting a group removes it from
+every group that held it.
+
+### Running groups
+
+A group holds every project inside it, through nested groups; its count (for example `2/3`) is
+over all of them.
 
 | Action | Effect |
 |---|---|
-| **Start** | Starts every project in the group that is not already serving. |
-| **Only this** | Starts the group, and stops every serving project outside it. The profile switch. |
-| **Stop** | Stops every project in the group. |
+| **Start** | Serves every project the group holds, each on its own port. Projects already serving are left alone, so their Studio sessions continue. |
+| **Only this** | Serves the group and stops every other project (the profile switch). **Asks first**, naming exactly which projects it will stop; Open Menu asks with a dialog. |
+| **Stop** | Stops the group's projects, **except any that another running group also holds**: that project is in use elsewhere, so its port keeps serving. Rojo-Hub says which projects it kept and why. |
 | ✎ **Rename** | Edit the name in place; Enter saves, Escape cancels. |
-| 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only; its projects stay registered and keep their state. |
+| 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only. |
 
-Projects that are already serving are left alone, so their Studio sessions continue. If some
-projects fail to start, the others still start and one message lists the failures. A group
-remembers which projects it holds, not their branches: each project serves whatever it was last
+A group is **running** from Start or Only this until Stop, or until another group's Only this. The
+card then shows a green *running* badge and a green edge. Running is about what you started, not
+about whether all its projects happen to be serving, so a group you never started never keeps a
+project alive. Stopping a single project from its own card does not change which groups are
+running.
+
+If some projects fail to start or stop, the rest still go ahead, and one message lists the
+failures. Groups remember what they hold, not branches: each project serves whatever it was last
 switched to. Removing a project removes it from every group. Group names are unique, ignoring case.
 
 ## 10. The background service
@@ -344,11 +369,11 @@ debugging.
 | `GET /slots/:id/targets` | | Worktrees and branches it can serve |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{kind:"worktree",path}` or `{kind:"branch",ref}` |
 | `GET /groups` | | Every group |
-| `POST /groups` | `{ name, slotIds }` | Create a group |
-| `PUT /groups/:id` | `{ name?, slotIds? }` | Rename or change members |
+| `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
+| `PUT /groups/:id` | `{ name?, slotIds?, groupIds? }` | Rename or change members; `groupIds` that would loop are refused (409) with the chain |
 | `DELETE /groups/:id` | | Delete a group |
-| `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it |
-| `POST /groups/:id/stop` | | Stop the group |
+| `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped |
+| `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
 | `PUT /settings` | `{ portRange?, excludedPorts? }` | Port settings (sent by the extension) |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
 
@@ -358,7 +383,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving) and groups |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving) and groups (members, nested groups, whether running) |
 | `settings.json` | The port settings last sent by VS Code |
 | `service.log` | Service start, stop and fatal errors |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |

@@ -6,6 +6,12 @@
 
 import type { GroupView, SlotView, Target, TargetOption } from "./api";
 
+/** A group member: a project or a nested group. */
+export interface GroupMember {
+	kind: "project" | "group";
+	id: string;
+}
+
 export interface Candidate {
 	label: string;
 	path: string;
@@ -44,8 +50,8 @@ export type FromPanel =
 	| { type: "newGroup"; name: string }
 	| { type: "renameGroup"; id: string; name: string }
 	| { type: "deleteGroup"; id: string }
-	| { type: "addToGroup"; id: string; slotId: string }
-	| { type: "removeFromGroup"; id: string; slotId: string }
+	| { type: "addToGroup"; id: string; member: GroupMember }
+	| { type: "removeFromGroup"; id: string; member: GroupMember }
 	| { type: "startGroup"; id: string; only: boolean }
 	| { type: "stopGroup"; id: string }
 	| { type: "saveSettings"; portRange: string; excludedPorts: (number | string)[] }

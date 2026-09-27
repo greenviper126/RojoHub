@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import * as vscode from "vscode";
 
 import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel } from "../common/panel";
 import { client, ensureService } from "./client";
 import { HubPanel } from "./panel";
@@ -180,8 +181,28 @@ async function projectMenu(id: string): Promise<void> {
 	await picked?.run?.();
 }
 
+/** Every project a group holds, through nested groups. */
 function groupMembers(group: GroupView): SlotView[] {
-	return group.slotIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
+	return group.projectIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
+}
+
+/** Serving projects that "Only this" would stop for this group. */
+function wouldStop(group: GroupView): SlotView[] {
+	return lastSlots.filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
+}
+
+/*
+	"Only this" stops everything outside the group, so it always asks first and
+	says exactly what it will stop.
+*/
+async function confirmOnly(group: GroupView): Promise<boolean> {
+	const stopping = wouldStop(group);
+	const detail =
+		stopping.length === 0
+			? "Nothing outside this group is serving, so this only starts the group."
+			: `This stops: ${stopping.map((slot) => slot.projectName).join(", ")}. Studio places connected to them disconnect.`;
+	const answer = await vscode.window.showWarningMessage(`Serve only ${group.name}?`, { modal: true, detail }, "Serve Only This Group");
+	return answer === "Serve Only This Group";
 }
 
 async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
@@ -220,20 +241,23 @@ async function addToGroup(argument: unknown): Promise<void> {
 	if (!group) return;
 	await refresh();
 	const current = lastGroups.find((entry) => entry.id === group.id) ?? group;
-	const candidates = lastSlots.filter((slot) => !current.slotIds.includes(slot.id));
-	if (lastSlots.length === 0) {
-		void vscode.window.showInformationMessage("Add a project first; groups are made of projects.");
+	type Pick = vscode.QuickPickItem & { member?: { kind: "project" | "group"; id: string } };
+	const items: Pick[] = [
+		{ label: "Projects", kind: vscode.QuickPickItemKind.Separator },
+		...lastSlots
+			.filter((slot) => !current.slotIds.includes(slot.id))
+			.map((slot) => ({ label: `${slotIcon(slot)} ${slot.projectName}`, description: `:${slot.port} · ${slot.targetLabel}`, member: { kind: "project" as const, id: slot.id } })),
+		{ label: "Groups", kind: vscode.QuickPickItemKind.Separator },
+		...lastGroups
+			.filter((other) => other.id !== current.id && !current.groupIds.includes(other.id) && !pathBetween(lastGroups, other.id, current.id))
+			.map((other) => ({ label: `$(layers) ${other.name}`, description: `${other.projectIds.length} projects`, member: { kind: "group" as const, id: other.id } })),
+	];
+	if (!items.some((item) => item.member)) {
+		void vscode.window.showInformationMessage(`There is nothing left to add to ${current.name}.`);
 		return;
 	}
-	if (candidates.length === 0) {
-		void vscode.window.showInformationMessage(`Every project is already in ${current.name}.`);
-		return;
-	}
-	const picked = await vscode.window.showQuickPick(
-		candidates.map((slot) => ({ label: `${slotIcon(slot)} ${slot.projectName}`, description: `:${slot.port} · ${slot.targetLabel}`, id: slot.id })),
-		{ title: `Add to ${current.name}`, placeHolder: "Pick a project to add" },
-	);
-	if (picked) await run(`Adding to ${current.name}`, () => client.updateGroup(current.id, { slotIds: [...current.slotIds, picked.id] }));
+	const picked = await vscode.window.showQuickPick(items, { title: `Add to ${current.name}`, placeHolder: "Pick a project or group to add" });
+	if (picked?.member) await addMember(current, picked.member);
 }
 
 async function renameGroup(argument: unknown): Promise<void> {
@@ -256,14 +280,34 @@ async function deleteGroup(argument: unknown): Promise<void> {
 
 /** Tells the user about projects a group action could not start or stop. */
 function reportGroup(result: GroupResult | undefined): void {
-	if (!result || result.failed.length === 0) return;
+	if (!result) return;
 	const name = (id: string) => lastSlots.find((slot) => slot.id === id)?.projectName ?? id;
-	void vscode.window.showErrorMessage(`Rojo-Hub (${result.group.name}): ${result.failed.map((entry) => `${name(entry.id)}: ${entry.error.split("\n")[0]}`).join("; ")}`);
+	if (result.failed.length > 0) {
+		void vscode.window.showErrorMessage(`Rojo-Hub (${result.group.name}): ${result.failed.map((entry) => `${name(entry.id)}: ${entry.error.split("\n")[0]}`).join("; ")}`);
+	}
+	if (result.kept.length > 0) {
+		void vscode.window.showInformationMessage(
+			`Rojo-Hub: stopped ${result.group.name}, but kept ${result.kept.map((entry) => `${name(entry.id)} (in ${entry.because})`).join(", ")} running because another running group uses it.`,
+		);
+	}
+}
+
+/** Adds a project or a group to a group; the service refuses loops with the chain that would loop. */
+async function addMember(group: GroupView, member: { kind: "project" | "group"; id: string }): Promise<void> {
+	const changes = member.kind === "project" ? { slotIds: [...group.slotIds, member.id] } : { groupIds: [...group.groupIds, member.id] };
+	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));
+}
+
+async function removeMember(group: GroupView, member: { kind: "project" | "group"; id: string }): Promise<void> {
+	const changes =
+		member.kind === "project" ? { slotIds: group.slotIds.filter((id) => id !== member.id) } : { groupIds: group.groupIds.filter((id) => id !== member.id) };
+	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));
 }
 
 async function startGroup(argument: unknown, only: boolean): Promise<void> {
 	const group = await pickGroup(argument, only ? "Serve only which group?" : "Start which group?");
 	if (!group) return;
+	if (only && !(await confirmOnly(group))) return;
 	reportGroup(await run(only ? `Serving only ${group.name}` : `Starting ${group.name}`, () => client.startGroup(group.id, only)));
 }
 
@@ -496,8 +540,8 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "removeFromGroup": {
 			const group = lastGroups.find((entry) => entry.id === message.id);
 			if (!group) return;
-			const slotIds = message.type === "addToGroup" ? [...group.slotIds, message.slotId] : group.slotIds.filter((id) => id !== message.slotId);
-			await act(`group:${group.id}`, () => client.updateGroup(group.id, { slotIds }));
+			if (message.type === "addToGroup") await addMember(group, message.member);
+			else await removeMember(group, message.member);
 			return;
 		}
 		case "startGroup":

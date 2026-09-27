@@ -569,3 +569,16 @@ button:focus-visible {
 .status {
 	font-size: 0.92em;
 }
+
+.badge.running {
+	border-color: var(--ok);
+	color: var(--ok);
+}
+
+.card.group.active {
+	border-left: 3px solid var(--ok);
+}
+
+.confirm-only strong {
+	font-weight: 600;
+}

@@ -24,8 +24,10 @@ to keep several projects served side by side without hand-managing ports.
       its repo's first commit into the range, so it is the same on every machine, after every
       reinstall, and across restarts and branch switches. 34872 (Rojo's default) is never used.
 - [ ] Ports can be excluded globally, for all projects, from VS Code's user settings.
-- [ ] Projects can be grouped; a group starts, stops, or serves exclusively (stopping everything
-      else) in one action, leaving already-serving members' sessions alone.
+- [ ] Projects can be grouped, and groups can hold other groups; loops are refused with the chain
+      that would loop. A group starts, stops, or serves exclusively (stopping everything else, after
+      a confirmation naming what stops) in one action, leaving already-serving members alone.
+- [ ] Stopping a group keeps serving any project another running group also holds.
 - [ ] Everything can be done visually in a custom sidebar panel (project cards with an in-card
       branch picker, group cards with an add dropdown, port settings), without command-palette
       menus; *Rojo-Hub: Open Menu* offers the same actions for keyboard use. The panel opens itself
@@ -215,12 +217,22 @@ outside the Hub is reported at start, suggesting an exclusion.
 
 ### Groups
 
-Asked for by Viper on 2026-09-27 ("kinda like a profile"). Implemented in `src/service/groups.ts`,
-stored in `registry.json`. A group is a name and an ordered list of project ids; a project can be
-in several. Start Group starts members not already serving; Serve Only This Group also stops every
-serving project outside it; Stop Group stops members. Already-serving members are never restarted,
-so their sessions survive. Failures are collected per project, not fatal to the rest. Groups hold
-membership only, not branches (possible follow-up). Removing a project removes it from its groups.
+Asked for by Viper on 2026-09-27 ("kinda like a profile"), extended the same day with nesting,
+loop handling, a confirmed singleton start, and stops that respect shared projects. Implemented in
+`src/service/groups.ts` with the nesting rules in `src/common/groups.ts` (shared with the panel);
+stored in `registry.json`.
+
+- A group holds projects (`slotIds`) and groups (`groupIds`); expansion walks nested groups once
+  each, so a loop that got in by hand cannot hang it.
+- Adding group B to A is refused when A is reachable from B (`pathBetween`), with the chain in the
+  message; the panel greys such choices out using the same function. Deleting a group removes it
+  from every group holding it.
+- `active` marks a running group: set by Start and Only this, cleared by Stop and by another
+  group's Only this. Only this is confirmed in the UI, naming what it stops.
+- Stop skips any project another active group expands to, and reports it as `kept`. Chosen over
+  "all its projects are serving" so a group never started cannot hold a project alive.
+- Already-serving projects are never restarted by a group action, so their sessions survive.
+  Failures are collected per project. Groups hold membership only, not branches.
 
 ### Connection state
 

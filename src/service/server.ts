@@ -17,8 +17,8 @@ import { Conflict, NotFound } from "./registry";
 	GET    /slots/:id/targets
 	POST   /slots/:id/switch      { target }
 	GET    /groups
-	POST   /groups                { name, slotIds }
-	PUT    /groups/:id            { name?, slotIds? }
+	POST   /groups                { name, slotIds?, groupIds? }
+	PUT    /groups/:id            { name?, slotIds?, groupIds? }   groupIds that would loop are refused (409)
 	DELETE /groups/:id
 	POST   /groups/:id/start      { only? }   only: also stop every project outside the group
 	POST   /groups/:id/stop
@@ -75,8 +75,11 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (method === "GET") return send(response, 200, groups.list());
 				if (method === "POST") {
 					const input = await body(request);
-					if (typeof input.name !== "string" || !isIdList(input.slotIds)) return send(response, 400, { error: "name and slotIds are required" });
-					return send(response, 200, groups.create(input.name, input.slotIds));
+					if (typeof input.name !== "string") return send(response, 400, { error: "name is required" });
+					if ((input.slotIds !== undefined && !isIdList(input.slotIds)) || (input.groupIds !== undefined && !isIdList(input.groupIds))) {
+						return send(response, 400, { error: "slotIds and groupIds must be lists of ids" });
+					}
+					return send(response, 200, groups.create(input.name, (input.slotIds as string[]) ?? [], (input.groupIds as string[]) ?? []));
 				}
 			}
 			if (parts[0] === "groups" && parts.length >= 2) {
@@ -84,8 +87,18 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				const action = parts[2];
 				if (method === "PUT" && !action) {
 					const input = await body(request);
-					if (input.slotIds !== undefined && !isIdList(input.slotIds)) return send(response, 400, { error: "slotIds must be a list of project ids" });
-					return send(response, 200, groups.update(id, { name: typeof input.name === "string" ? input.name : undefined, slotIds: input.slotIds as string[] | undefined }));
+					if ((input.slotIds !== undefined && !isIdList(input.slotIds)) || (input.groupIds !== undefined && !isIdList(input.groupIds))) {
+						return send(response, 400, { error: "slotIds and groupIds must be lists of ids" });
+					}
+					return send(
+						response,
+						200,
+						groups.update(id, {
+							name: typeof input.name === "string" ? input.name : undefined,
+							slotIds: input.slotIds as string[] | undefined,
+							groupIds: input.groupIds as string[] | undefined,
+						}),
+					);
 				}
 				if (method === "DELETE" && !action) {
 					groups.remove(id);

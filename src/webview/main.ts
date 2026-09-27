@@ -9,7 +9,8 @@
 */
 
 import type { GroupView, SlotView, TargetOption } from "../common/api";
-import type { Candidate, FromPanel, PanelState, ToPanel } from "../common/panel";
+import { pathBetween } from "../common/groups";
+import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromPanel): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -30,6 +31,8 @@ const ui = {
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
 	confirmDelete: null as string | null,
+	/** The group whose "Only this" is waiting for Yes/No. */
+	confirmOnly: null as string | null,
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
@@ -169,59 +172,109 @@ function adder(): string {
 	</div>`;
 }
 
+/** Serving projects that "Only this" would stop for a group. */
+function wouldStop(group: GroupView): SlotView[] {
+	return (state?.slots ?? []).filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
+}
+
 function groupCard(group: GroupView): string {
 	const slots = state?.slots ?? [];
+	const groups = state?.groups ?? [];
 	const members = group.slotIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
-	const serving = members.filter((slot) => slot.state === "running").length;
+	const nested = group.groupIds.map((id) => groups.find((entry) => entry.id === id)).filter((entry): entry is GroupView => !!entry);
+	const everyProject = group.projectIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
+	const serving = everyProject.filter((slot) => slot.state === "running").length;
 	const open = !ui.closedGroups.has(group.id);
 	const busy = ui.busy.has(`group:${group.id}`);
-	const others = slots.filter((slot) => !group.slotIds.includes(slot.id));
 	const renaming = ui.renaming?.id === group.id;
+	const running = group.active ? `<span class="badge running" title="Started, and not stopped since">running</span>` : "";
 	const head = renaming
 		? `<input class="rename" data-key="rename-${escape(group.id)}" data-input="rename" value="${escape(ui.renaming!.name)}" spellcheck="false">
 		   ${iconButton("rename-save", "check", "Save name", { id: group.id })}${iconButton("rename-cancel", "close", "Cancel")}`
 		: `<button class="group-toggle" data-action="toggle-group" data-id="${escape(group.id)}" title="${open ? "Collapse" : "Expand"}">${icon(open ? "chevron-down" : "chevron-right")}${icon("layers")}<span class="name">${escape(group.name)}</span></button>
-		   <span class="count${serving > 0 && serving === members.length ? " all" : ""}">${serving}/${members.length}</span>
+		   <span class="count${serving > 0 && serving === everyProject.length ? " all" : ""}" title="${serving} of ${everyProject.length} projects serving">${serving}/${everyProject.length}</span>${running}
 		   <span class="grow"></span>
 		   ${
 				ui.confirmDelete === group.id
 					? `<span class="confirm">Delete?</span>${button("delete-group", "Yes", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}`
-					: iconButton("rename", "edit", "Rename group", { id: group.id }) + iconButton("ask-delete", "trash", "Delete group (its projects stay)", { id: group.id })
+					: iconButton("rename", "edit", "Rename group", { id: group.id }) + iconButton("ask-delete", "trash", "Delete group (what's in it stays)", { id: group.id })
 			}`;
-	const body = !open
-		? ""
-		: `<div class="members">
-			${
-				members.length === 0
-					? `<div class="muted pad small">No projects in this group yet. Add one below.</div>`
-					: members
-							.map(
-								(slot) => `<div class="member">
-									${dot(slot)}
-									<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button>
-									<span class="sub ellipsis">:${slot.port} · ${escape(slot.targetLabel)}</span>
-									${iconButton("remove-member", "close", `Take ${slot.projectName} out of ${group.name}`, { id: group.id, slot: slot.id })}
-								</div>`,
-							)
-							.join("")
-			}
-			</div>
-			${
-				others.length > 0
-					? `<div class="add-member">${icon("add")}<select data-action="add-member" data-id="${escape(group.id)}" title="Add a project to ${escape(group.name)}">
-						<option value="">Add a project…</option>
-						${others.map((slot) => `<option value="${escape(slot.id)}">${escape(slot.projectName)}  :${slot.port}</option>`).join("")}
-					</select></div>`
-					: slots.length === 0
-						? `<div class="muted small pad">Add projects above first.</div>`
-						: `<div class="muted small pad">Every project is in this group.</div>`
-			}
-			<div class="row actions">
-				${button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: busy || members.length === 0, title: "Start every project in this group" })}
-				${button("solo-group", "Only this", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: busy || members.length === 0, title: "Start this group and stop every other project" })}
-				${button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", disabled: busy || serving === 0, title: "Stop every project in this group" })}
+	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}"><div class="row head">${head}</div></article>`;
+
+	const nestedRows = nested
+		.map((child) => {
+			const childSlots = child.projectIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
+			const childServing = childSlots.filter((slot) => slot.state === "running").length;
+			return `<div class="member">
+				${icon("layers")}
+				<button class="link grow ellipsis" data-action="goto-group" data-id="${escape(child.id)}" title="Show ${escape(child.name)}">${escape(child.name)}</button>
+				<span class="sub ellipsis">group · ${childServing}/${childSlots.length}</span>
+				${iconButton("remove-member", "close", `Take ${child.name} out of ${group.name}`, { id: group.id, kind: "group", member: child.id })}
 			</div>`;
-	return `<article class="card group${open ? " open" : ""}"><div class="row head">${head}</div>${body}</article>`;
+		})
+		.join("");
+	const projectRows = members
+		.map(
+			(slot) => `<div class="member">
+				${dot(slot)}
+				<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button>
+				<span class="sub ellipsis">:${slot.port} · ${escape(slot.targetLabel)}</span>
+				${iconButton("remove-member", "close", `Take ${slot.projectName} out of ${group.name}`, { id: group.id, kind: "project", member: slot.id })}
+			</div>`,
+		)
+		.join("");
+
+	const projectChoices = slots.filter((slot) => !group.slotIds.includes(slot.id));
+	const groupChoices = groups
+		.filter((other) => other.id !== group.id && !group.groupIds.includes(other.id))
+		.map((other) => ({ other, loop: pathBetween(groups, other.id, group.id) }));
+	const nameOf = (id: string) => groups.find((entry) => entry.id === id)?.name ?? id;
+	const adder =
+		projectChoices.length + groupChoices.length === 0
+			? slots.length === 0
+				? `<div class="muted small pad">Add projects above first.</div>`
+				: `<div class="muted small pad">Everything is already in this group.</div>`
+			: `<div class="add-member">${icon("add")}<select data-action="add-member" data-id="${escape(group.id)}" title="Add a project or a group to ${escape(group.name)}">
+				<option value="">Add a project or group…</option>
+				${projectChoices.length ? `<optgroup label="Projects">${projectChoices.map((slot) => `<option value="project:${escape(slot.id)}">${escape(slot.projectName)}  :${slot.port}</option>`).join("")}</optgroup>` : ""}
+				${
+					groupChoices.length
+						? `<optgroup label="Groups">${groupChoices
+								.map(({ other, loop }) =>
+									loop
+										? `<option disabled title="${escape(loop.map(nameOf).join(" → "))}">${escape(other.name)}  (would loop: it contains ${escape(group.name)})</option>`
+										: `<option value="group:${escape(other.id)}">${escape(other.name)}  (${other.projectIds.length} projects)</option>`,
+								)
+								.join("")}</optgroup>`
+						: ""
+				}
+			</select></div>`;
+
+	const stopping = wouldStop(group);
+	const onlyConfirm =
+		ui.confirmOnly === group.id
+			? `<div class="notice warning confirm-only">${icon("warning")}<span class="grow">${
+					stopping.length === 0
+						? `Serve only ${escape(group.name)}? Nothing outside it is serving, so this just starts it.`
+						: `Serve only ${escape(group.name)}? This stops <strong>${stopping.map((slot) => escape(slot.projectName)).join(", ")}</strong>, and Studio places connected to them disconnect.`
+				}</span></div>
+				<div class="row">${button("solo-group-yes", "Yes, serve only this", { icon: "target", data: { id: group.id }, kind: "primary" })}${button("solo-group-no", "Cancel", { kind: "secondary" })}</div>`
+			: "";
+
+	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}">
+		<div class="row head">${head}</div>
+		<div class="members">
+			${nestedRows}${projectRows}
+			${nested.length + members.length === 0 ? `<div class="muted pad small">Empty. Add projects or other groups below.</div>` : ""}
+		</div>
+		${adder}
+		<div class="row actions">
+			${button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: busy || everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })}
+			${button("solo-group", "Only this", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: busy || everyProject.length === 0, title: "Serve this group and stop every other project (asks first)" })}
+			${button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", disabled: busy || (serving === 0 && !group.active), title: "Stop this group's projects, except ones another running group uses" })}
+		</div>
+		${onlyConfirm}
+	</article>`;
 }
 
 function newGroupForm(): string {
@@ -374,7 +427,7 @@ function saveSettings(): void {
 document.addEventListener("click", (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLElement>("[data-action]");
 	if (!target || target.tagName === "SELECT") return;
-	const { action, id = "", index, path, slot } = target.dataset;
+	const { action, id = "", index, path } = target.dataset;
 	switch (action) {
 		case "toggle-section":
 			ui.collapsed[id] = !ui.collapsed[id];
@@ -429,12 +482,28 @@ document.addEventListener("click", (event) => {
 			return createGroup();
 		case "goto":
 			return flash(id);
+		case "goto-group":
+			ui.closedGroups.delete(id);
+			persist();
+			render();
+			document.getElementById(`group-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+			return;
 		case "remove-member":
-			return send({ type: "removeFromGroup", id, slotId: slot ?? "" });
+			return send({ type: "removeFromGroup", id, member: { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" } });
 		case "start-group":
-		case "solo-group":
 			ui.busy.add(`group:${id}`);
-			send({ type: "startGroup", id, only: action === "solo-group" });
+			send({ type: "startGroup", id, only: false });
+			return render();
+		case "solo-group":
+			ui.confirmOnly = id;
+			return render();
+		case "solo-group-no":
+			ui.confirmOnly = null;
+			return render();
+		case "solo-group-yes":
+			ui.confirmOnly = null;
+			ui.busy.add(`group:${id}`);
+			send({ type: "startGroup", id, only: true });
 			return render();
 		case "stop-group":
 			ui.busy.add(`group:${id}`);
@@ -486,7 +555,9 @@ document.addEventListener("click", (event) => {
 document.addEventListener("change", (event) => {
 	const select = event.target as HTMLSelectElement;
 	if (select.dataset.action !== "add-member" || !select.value) return;
-	send({ type: "addToGroup", id: select.dataset.id ?? "", slotId: select.value });
+	const [kind, ...rest] = select.value.split(":");
+	const member: GroupMember = { kind: kind === "group" ? "group" : "project", id: rest.join(":") };
+	send({ type: "addToGroup", id: select.dataset.id ?? "", member });
 	select.value = "";
 });
 
