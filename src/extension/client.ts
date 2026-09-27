@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { SERVICE_PORT, SERVICE_VERSION, type Health, type SlotView, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -70,5 +70,6 @@ export const client = {
 	stop: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/stop`),
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
 	switch: (id: string, target: Target) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/switch`, { target }),
+	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };

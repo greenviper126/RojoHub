@@ -5,7 +5,7 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.1.0";
+export const SERVICE_VERSION = "0.2.0";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -22,6 +22,8 @@ export interface SlotView {
 	repoPath: string;
 	projectFile: string;
 	port: number;
+	/** "servePort" when the project file sets it, otherwise "hash" (spec 001, "Ports"). */
+	portSource: "servePort" | "hash";
 	state: SlotState;
 	/** Plugin websocket subscriptions currently open, read from Rojo's own log. */
 	connections: number;
@@ -56,4 +58,13 @@ export interface Health {
 
 export interface ErrorBody {
 	error: string;
+}
+
+/*
+	The global port settings, from VS Code's user settings rojoHub.portRange and
+	rojoHub.excludedPorts. Ranges are "first-last" strings.
+*/
+export interface PortSettings {
+	portRange?: string;
+	excludedPorts?: (number | string)[];
 }

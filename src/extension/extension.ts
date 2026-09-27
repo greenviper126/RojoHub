@@ -166,7 +166,18 @@ async function addProject(): Promise<void> {
 	if (start) await run(`Starting ${added.projectName}`, () => client.start(added.id));
 }
 
-function orcaRepos(): Promise<{ path: string; displayName: string }[]> {
+/*
+	Sends the user-level port settings to the service. They are application
+	scoped, so every window sends the same values.
+*/
+async function pushSettings(): Promise<void> {
+	const config = vscode.workspace.getConfiguration("rojoHub");
+	await client
+		.putSettings({ portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) })
+		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
+}
+
+function orcaRepos():Promise<{ path: string; displayName: string }[]> {
 	return new Promise((done) => {
 		execFile("orca", ["repo", "list", "--json"], { windowsHide: true, timeout: 5000 }, (error, stdout) => {
 			if (error) return done([]);
@@ -218,7 +229,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			void vscode.window.setStatusBarMessage(`Copied localhost:${slot.port}`, 2000);
 		},
 		"rojoHub.refresh": async () => {
-			await run("Connecting to Rojo-Hub", () => ensureService(serviceScript));
+			await run("Connecting to Rojo-Hub", async () => {
+				await ensureService(serviceScript);
+				await pushSettings();
+			});
 		},
 		"rojoHub.stopService": async () => {
 			const choice = await vscode.window.showWarningMessage(
@@ -244,9 +258,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	try {
 		await ensureService(serviceScript);
+		await pushSettings();
 	} catch (error) {
 		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
 	}
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration("rojoHub")) void pushSettings().then(refresh);
+		}),
+	);
 	await refresh();
 	const timer = setInterval(() => void refresh(), POLL_MS);
 	context.subscriptions.push({ dispose: () => clearInterval(timer) });

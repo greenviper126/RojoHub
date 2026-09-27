@@ -8,6 +8,7 @@ import { after, before, test } from "node:test";
 import { decode } from "@msgpack/msgpack";
 
 import type { SlotView, TargetOption } from "../common/api";
+import { parsePortSettings, preferredPort } from "../service/ports";
 
 /*
 	Drives the real service against a real `rojo serve` and a throwaway git repo,
@@ -111,7 +112,9 @@ interface Packet {
 test("one port, live switches, one session", async () => {
 	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
 	assert.equal(slot.repoPath.toLowerCase(), repo.toLowerCase(), "registering from a worktree registers the primary");
-	assert.ok(slot.port >= 34873 && slot.port <= 34899);
+	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
+	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
+	assert.equal(slot.portSource, "hash");
 	await assert.rejects(call("POST", "/slots", { path: repo }), /already registered/);
 
 	const started = await call<SlotView>("POST", `/slots/${slot.id}/start`);
@@ -203,6 +206,20 @@ test("one port, live switches, one session", async () => {
 	}, 30000);
 	assert.match(restarted.warnings.join("\n"), /crashed .* restarted/);
 	assert.equal(readdirSync(join(home, "views", slot.id)).length, 0, "restart collected the unused view");
+
+	// a servePort in the project file wins; the running slot moves to it
+	const movedTo = slot.port === 35500 ? 35501 : 35500;
+	const withPort = JSON.parse(readFileSync(join(repo, "default.project.json"), "utf8"));
+	withPort.servePort = movedTo;
+	writeFileSync(join(repo, "default.project.json"), JSON.stringify(withPort));
+	const moved = await until("move to servePort", async () => {
+		const [view] = await call<SlotView[]>("GET", "/slots");
+		return view.port === movedTo && view.state === "running" && view;
+	}, 30000);
+	assert.equal(moved.portSource, "servePort");
+	assert.match(moved.warnings.join("\n"), new RegExp(`Port moved from ${slot.port} to ${movedTo}`));
+	const answer = decode(new Uint8Array(await (await fetch(`http://localhost:${movedTo}/api/rojo`)).arrayBuffer())) as { projectName: string };
+	assert.equal(answer.projectName, projectName);
 
 	const stopped = await call<SlotView>("POST", `/slots/${slot.id}/stop`);
 	assert.equal(stopped.state, "stopped");

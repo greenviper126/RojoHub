@@ -6,7 +6,8 @@ import { test } from "node:test";
 
 import { parseWorktrees } from "../service/git";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
-import { allocatePort, PORT_RANGE, slugify } from "../service/registry";
+import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
+import { slugify } from "../service/registry";
 import { countConnections } from "../service/rojo";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
@@ -98,11 +99,64 @@ test("parseWorktrees reads porcelain output", () => {
 	assert.equal(worktrees[1].primary, false);
 });
 
-test("allocatePort skips owned, reserved and busy ports", async () => {
-	const busy = new Set([PORT_RANGE.first + 1]);
-	const port = await allocatePort([PORT_RANGE.first], async (candidate) => !busy.has(candidate));
-	assert.equal(port, PORT_RANGE.first + 2);
-	assert.notEqual(port, 34872);
+test("port settings: defaults, ranges, 34872 always excluded, bad input reported", () => {
+	const empty = parsePortSettings({});
+	assert.equal(empty.first, 34873);
+	assert.equal(empty.last, 35872);
+	assert.ok(empty.exclude.has(34872));
+	const custom = parsePortSettings({ portRange: "40000-40009", excludedPorts: [40001, "40003-40005", "40007"] });
+	assert.deepEqual([custom.first, custom.last], [40000, 40009]);
+	assert.deepEqual([...custom.exclude].sort(), [34872, 40001, 40003, 40004, 40005, 40007]);
+	assert.deepEqual(custom.problems, []);
+	assert.equal(parsePortSettings({ excludedPorts: [] }).exclude.has(34872), true, "cannot be un-excluded");
+	assert.match(parsePortSettings({ portRange: "5-1" }).problems[0], /portRange/);
+	assert.match(parsePortSettings({ excludedPorts: ["nope"] }).problems[0], /excludedPorts/);
+});
+
+const request = (id: string, seed: string, servePort: number | null = null): PortRequest => ({ id, name: id, seed, servePort });
+
+test("hashed ports are a pure function of the seed", () => {
+	const config = parsePortSettings({});
+	const seed = "commit:82cb97798f758a6c13a09e73c7b97436e5181ccf";
+	const alone = assignPorts([request("a", seed)], config);
+	const withOthers = assignPorts([request("x", "commit:1fb3"), request("a", seed)], config);
+	assert.equal(alone.get("a")!.port, preferredPort(seed, config));
+	assert.equal(alone.get("a")!.port, withOthers.get("a")!.port, "other projects do not move it");
+	assert.equal(alone.get("a")!.source, "hash");
+});
+
+test("servePort wins and hashed ports step around it", () => {
+	const config = parsePortSettings({});
+	const seed = "commit:abc";
+	const own = preferredPort(seed, config);
+	const result = assignPorts([request("hashed", seed), request("pinned", "commit:def", own)], config);
+	assert.equal(result.get("pinned")!.port, own);
+	assert.equal(result.get("pinned")!.source, "servePort");
+	assert.equal(result.get("hashed")!.port, own === 35872 ? 34873 : own + 1);
+	assert.match(result.get("hashed")!.note!, /taken by pinned/);
+});
+
+test("a hash collision goes to the project registered first", () => {
+	const tiny = parsePortSettings({ portRange: "40000-40001", excludedPorts: [40001] });
+	const full = assignPorts([request("first", "commit:1"), request("second", "commit:2")], tiny);
+	assert.equal(full.get("first")!.port, 40000);
+	assert.equal(full.get("second")!.port, null);
+	assert.match(full.get("second")!.error!, /No free port/);
+	const both = assignPorts([request("first", "commit:1"), request("second", "commit:1")], parsePortSettings({ portRange: "40000-40001" }));
+	assert.notEqual(both.get("first")!.port, both.get("second")!.port);
+	assert.equal(both.get("first")!.note, null);
+	assert.match(both.get("second")!.note!, /moved/);
+});
+
+test("excluded ports are skipped, two servePorts on one port are an error", () => {
+	const seed = "commit:abc";
+	const own = preferredPort(seed, parsePortSettings({}));
+	const result = assignPorts([request("a", seed)], parsePortSettings({ excludedPorts: [own] }));
+	assert.notEqual(result.get("a")!.port, own);
+	assert.match(result.get("a")!.note!, /excluded/);
+	const clash = assignPorts([request("a", "s", 40000), request("b", "t", 40000)], parsePortSettings({}));
+	assert.equal(clash.get("a")!.port, 40000);
+	assert.match(clash.get("b")!.error!, /also set by a/);
 });
 
 test("slugify", () => {

@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -38,36 +38,154 @@
       }
     ],
     "commands": [
-      { "command": "rojoHub.addProject", "title": "Add Project", "category": "Rojo-Hub", "icon": "$(add)" },
-      { "command": "rojoHub.removeProject", "title": "Remove Project", "category": "Rojo-Hub", "icon": "$(trash)" },
-      { "command": "rojoHub.start", "title": "Start Serving", "category": "Rojo-Hub", "icon": "$(play)" },
-      { "command": "rojoHub.stop", "title": "Stop Serving", "category": "Rojo-Hub", "icon": "$(debug-stop)" },
-      { "command": "rojoHub.switch", "title": "Switch Branch", "category": "Rojo-Hub", "icon": "$(git-branch)" },
-      { "command": "rojoHub.showLog", "title": "Show Rojo Log", "category": "Rojo-Hub", "icon": "$(output)" },
-      { "command": "rojoHub.copyAddress", "title": "Copy Address", "category": "Rojo-Hub" },
-      { "command": "rojoHub.refresh", "title": "Refresh", "category": "Rojo-Hub", "icon": "$(refresh)" },
-      { "command": "rojoHub.stopService", "title": "Stop Background Service", "category": "Rojo-Hub" }
+      {
+        "command": "rojoHub.addProject",
+        "title": "Add Project",
+        "category": "Rojo-Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rojoHub.removeProject",
+        "title": "Remove Project",
+        "category": "Rojo-Hub",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "rojoHub.start",
+        "title": "Start Serving",
+        "category": "Rojo-Hub",
+        "icon": "$(play)"
+      },
+      {
+        "command": "rojoHub.stop",
+        "title": "Stop Serving",
+        "category": "Rojo-Hub",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "rojoHub.switch",
+        "title": "Switch Branch",
+        "category": "Rojo-Hub",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "rojoHub.showLog",
+        "title": "Show Rojo Log",
+        "category": "Rojo-Hub",
+        "icon": "$(output)"
+      },
+      {
+        "command": "rojoHub.copyAddress",
+        "title": "Copy Address",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.refresh",
+        "title": "Refresh",
+        "category": "Rojo-Hub",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "rojoHub.stopService",
+        "title": "Stop Background Service",
+        "category": "Rojo-Hub"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "rojoHub.addProject", "when": "view == rojoHub.slots", "group": "navigation@1" },
-        { "command": "rojoHub.refresh", "when": "view == rojoHub.slots", "group": "navigation@2" },
-        { "command": "rojoHub.stopService", "when": "view == rojoHub.slots", "group": "zz" }
+        {
+          "command": "rojoHub.addProject",
+          "when": "view == rojoHub.slots",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rojoHub.refresh",
+          "when": "view == rojoHub.slots",
+          "group": "navigation@2"
+        },
+        {
+          "command": "rojoHub.stopService",
+          "when": "view == rojoHub.slots",
+          "group": "zz"
+        }
       ],
       "view/item/context": [
-        { "command": "rojoHub.switch", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "inline@1" },
-        { "command": "rojoHub.start", "when": "view == rojoHub.slots && viewItem == slot.stopped", "group": "inline@2" },
-        { "command": "rojoHub.stop", "when": "view == rojoHub.slots && viewItem == slot.running", "group": "inline@2" },
-        { "command": "rojoHub.switch", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "1@1" },
-        { "command": "rojoHub.start", "when": "view == rojoHub.slots && viewItem == slot.stopped", "group": "1@2" },
-        { "command": "rojoHub.stop", "when": "view == rojoHub.slots && viewItem == slot.running", "group": "1@2" },
-        { "command": "rojoHub.showLog", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "2@1" },
-        { "command": "rojoHub.copyAddress", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "2@2" },
-        { "command": "rojoHub.removeProject", "when": "view == rojoHub.slots && viewItem =~ /^slot/", "group": "3@1" }
+        {
+          "command": "rojoHub.switch",
+          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "group": "inline@1"
+        },
+        {
+          "command": "rojoHub.start",
+          "when": "view == rojoHub.slots && viewItem == slot.stopped",
+          "group": "inline@2"
+        },
+        {
+          "command": "rojoHub.stop",
+          "when": "view == rojoHub.slots && viewItem == slot.running",
+          "group": "inline@2"
+        },
+        {
+          "command": "rojoHub.switch",
+          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "group": "1@1"
+        },
+        {
+          "command": "rojoHub.start",
+          "when": "view == rojoHub.slots && viewItem == slot.stopped",
+          "group": "1@2"
+        },
+        {
+          "command": "rojoHub.stop",
+          "when": "view == rojoHub.slots && viewItem == slot.running",
+          "group": "1@2"
+        },
+        {
+          "command": "rojoHub.showLog",
+          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "group": "2@1"
+        },
+        {
+          "command": "rojoHub.copyAddress",
+          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "group": "2@2"
+        },
+        {
+          "command": "rojoHub.removeProject",
+          "when": "view == rojoHub.slots && viewItem =~ /^slot/",
+          "group": "3@1"
+        }
       ],
       "commandPalette": [
-        { "command": "rojoHub.copyAddress", "when": "false" }
+        {
+          "command": "rojoHub.copyAddress",
+          "when": "false"
+        }
       ]
+    },
+    "configuration": {
+      "title": "Rojo-Hub",
+      "properties": {
+        "rojoHub.excludedPorts": {
+          "type": "array",
+          "scope": "application",
+          "default": [],
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
+        },
+        "rojoHub.portRange": {
+          "type": "string",
+          "scope": "application",
+          "default": "34873-35872",
+          "pattern": "^s*d+s*-s*d+s*$",
+          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose `default.project.json` sets `servePort` uses that instead."
+        }
+      }
     }
   },
   "scripts": {

@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
-import type { SlotView, Target, TargetOption } from "../common/api";
+import type { PortSettings, SlotView, Target, TargetOption } from "../common/api";
 import { git, listTargets, listWorktrees, orcaNames, pathKey, primaryCheckout, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
-import { allocatePort, Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
+import { assignPorts, loadPortConfig, repoSeed, savePortSettings, type PortAssignment } from "./ports";
+import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
 
 const READY_TIMEOUT_MS = 30000;
@@ -35,6 +36,11 @@ export class Hub {
 	readonly registry: Registry;
 	private readonly runtimes = new Map<string, Runtime>();
 	private poller: NodeJS.Timeout | null = null;
+	private ticks = 0;
+	private assignments = new Map<string, PortAssignment>();
+	private portProblems: string[] = [];
+	/** Slots with a port move queued, so a slow restart is not queued twice. */
+	private readonly moving = new Set<string>();
 
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
@@ -92,6 +98,10 @@ export class Hub {
 	async restore(): Promise<void> {
 		this.poller = setInterval(() => this.pollLogs(), 1000);
 		this.poller.unref();
+		for (const slot of this.registry.slots) {
+			if (!slot.seed) slot.seed = await repoSeed(slot.repoPath, slot.projectName);
+		}
+		this.refreshPorts();
 		await Promise.all(
 			this.registry.slots.map((slot) =>
 				this.enqueue(slot.id, async () => {
@@ -119,6 +129,7 @@ export class Hub {
 		instead of a slot that claims to be running.
 	*/
 	private pollLogs(): void {
+		if (++this.ticks % 3 === 0) this.refreshPorts();
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			if (runtime.state !== "running") continue;
@@ -158,6 +169,59 @@ export class Hub {
 		}).catch(() => undefined);
 	}
 
+	/*
+		Recomputes every slot's port from the port settings, the project files'
+		servePort and the repo seeds (src/service/ports.ts). A slot whose port
+		changed gets it through its queue; a running one is restarted on the new
+		port, which Studio sees as a new session.
+	*/
+	private refreshPorts(): void {
+		const config = loadPortConfig(this.home);
+		this.portProblems = config.problems;
+		const requests = this.registry.slots.map((slot) => {
+			let servePort: number | null = null;
+			try {
+				const value = readProject(join(slot.repoPath, slot.projectFile)).servePort;
+				if (Number.isInteger(value)) servePort = value as number;
+			} catch {
+				// an unreadable project file shows up when the slot starts
+			}
+			return { id: slot.id, name: slot.projectName, seed: slot.seed ?? `name:${slot.projectName}`, servePort };
+		});
+		this.assignments = assignPorts(requests, config);
+		for (const slot of this.registry.slots) {
+			const assigned = this.assignments.get(slot.id);
+			if (!assigned?.port || assigned.port === slot.port) continue;
+			if (slot.port === 0) {
+				slot.port = assigned.port;
+				this.registry.save();
+				continue;
+			}
+			if (this.moving.has(slot.id)) continue;
+			this.moving.add(slot.id);
+			void this.enqueue(slot.id, async () => {
+				const now = this.assignments.get(slot.id);
+				if (!now?.port || now.port === slot.port) return;
+				const from = slot.port;
+				const runtime = this.runtime(slot.id);
+				const wasServing = runtime.state === "running" || runtime.state === "error";
+				if (wasServing) await this.stopLocked(slot);
+				slot.port = now.port;
+				this.registry.save();
+				runtime.notes = [`Port moved from ${from} to ${slot.port}${wasServing ? "; reconnect Studio to the new port" : ""}.`];
+				if (wasServing && slot.wantRunning) await this.startLocked(slot);
+			})
+				.catch(() => undefined)
+				.finally(() => this.moving.delete(slot.id));
+		}
+	}
+
+	/** Stores new global port settings and moves any slot whose port changes. */
+	setPortSettings(settings: PortSettings): void {
+		savePortSettings(this.home, settings);
+		this.refreshPorts();
+	}
+
 	view(slot: SlotRecord): SlotView {
 		const runtime = this.runtime(slot.id);
 		return {
@@ -172,14 +236,21 @@ export class Hub {
 			targetLabel: runtime.targetLabel,
 			branch: runtime.branch,
 			mode: runtime.mode,
-			warnings: [...runtime.notes, ...runtime.warnings],
-			error: runtime.error,
+			warnings: [
+				...runtime.notes,
+				...(this.assignments.get(slot.id)?.note ? [this.assignments.get(slot.id)!.note!] : []),
+				...this.portProblems,
+				...runtime.warnings,
+			],
+			error: this.assignments.get(slot.id)?.error ?? runtime.error,
+			portSource: this.assignments.get(slot.id)?.source ?? "hash",
 			sessionId: runtime.sessionId,
 			logFile: this.logFile(slot.id),
 		};
 	}
 
 	list(): SlotView[] {
+		this.refreshPorts();
 		return this.registry.slots.map((slot) => this.view(slot));
 	}
 
@@ -203,21 +274,24 @@ export class Hub {
 		}
 		let id = slugify(name);
 		while (this.registry.slots.some((slot) => slot.id === id)) id += "-2";
-		const port = await allocatePort(
-			this.registry.slots.map((slot) => slot.port),
-			portFree,
-		);
 		const slot: SlotRecord = {
 			id,
 			projectName: name,
 			repoPath,
 			projectFile,
-			port,
+			seed: await repoSeed(repoPath, name),
+			port: 0,
 			target: { kind: "worktree", path: repoPath },
 			wantRunning: false,
 			activeView: null,
 		};
 		this.registry.slots.push(slot);
+		this.refreshPorts();
+		const assigned = this.assignments.get(slot.id);
+		if (!assigned?.port) {
+			this.registry.slots.pop();
+			throw new Conflict(assigned?.error ?? "No port could be assigned");
+		}
 		this.registry.save();
 		await this.describeTarget(slot);
 		return this.view(slot);
@@ -301,6 +375,8 @@ export class Hub {
 		runtime.state = "starting";
 		runtime.error = null;
 		try {
+			const assigned = this.assignments.get(slot.id);
+			if (assigned?.error) throw new Conflict(assigned.error);
 			const tree = await this.prepareTree(slot, slot.target);
 			const plan = this.writeFiles(slot, tree);
 			runtime.mode = plan.mode;
@@ -348,7 +424,7 @@ export class Hub {
 		throw new Conflict(
 			info
 				? `Port ${port} is held by another Rojo serving "${info.projectName}". Stop it (it is not one of the Hub's).`
-				: `Port ${port} is held by another program.`,
+				: `Port ${port} is held by another program. Add it to rojoHub.excludedPorts in VS Code's settings and this project moves to the next free port.`,
 		);
 	}
 

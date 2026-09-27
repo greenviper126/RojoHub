@@ -20,8 +20,10 @@ to keep several projects served side by side without hand-managing ports.
 
 ## Acceptance criteria
 
-- [ ] Registering a project gives it a port from the Hub range (never 34872, which `/JumpTo` uses)
-      that stays the same across Hub restarts, reboots and branch switches.
+- [ ] A project's port is deterministic: `servePort` from its project file if set, else a hash of
+      its repo's first commit into the range, so it is the same on every machine, after every
+      reinstall, and across restarts and branch switches. 34872 (Rojo's default) is never used.
+- [ ] Ports can be excluded globally, for all projects, from VS Code's user settings.
 - [ ] Two registered projects can serve at the same time, each on its own port, each with its own
       `rojo` binary chosen by that project's `rokit.toml`.
 - [ ] Registering refuses a project whose Rojo project name is already used by another slot (the
@@ -152,15 +154,14 @@ Consequences:
 - **Extension** (`src/extension`): Projects view (port, what is served, Studio connection count,
   warnings), a branch picker, a status bar item for the window's own project, start/stop/remove,
   and the Rojo log. Polls the service every 2 s.
-- **State** in `%LOCALAPPDATA%\RojoHub\`: `registry.json`, `service.log`,
+- **State** in `%LOCALAPPDATA%\RojoHub\`: `registry.json`, `service.log`, `settings.json`,
   `slots\<id>\{slot.project.json, borrowed.project.json, rojo.log, rojo.previous.log}`, and
   `views\<id>\<commit>\` for branches without a worktree.
 
 ### Slots
 
-- Registered from any folder in a repo; the primary checkout is what is stored. Port: the lowest
-  free port in 34873-34899 that no slot owns (34872 is never used). Name: the primary's project
-  `name`, which must be unique across slots.
+- Registered from any folder in a repo; the primary checkout is what is stored. Name: the
+  primary's project `name`, which must be unique across slots. Port: see Ports.
 - `rojo serve` runs with the primary checkout as its working directory, so that project's
   `rokit.toml` picks the rojo version.
 - The slot file (`slot.project.json`) holds the name, the session fields copied from the primary
@@ -179,6 +180,31 @@ Consequences:
 - Worktrees are served in place, so edits made there (by agents or by hand) reach Studio.
 - A branch with no worktree is served from a Hub view: `git worktree add --detach` of its commit
   into a new folder. Branches already checked out in a worktree are offered only as that worktree.
+
+### Ports
+
+Decided with Viper on 2026-09-27: deterministic by default, explicit when wanted, excluded globally.
+Implemented in `src/service/ports.ts`; recomputed every 3 s and on every change.
+
+1. **`servePort`** in the primary's project file wins (Rojo's own field, committed with the repo,
+   also what plain `rojo serve` uses). Two projects setting the same `servePort` is an error on the
+   one registered later.
+2. **Everyone else is hashed**: SHA-256 of the seed, mod the range size. The seed is the repo's
+   oldest root commit (`git log --max-parents=0 --all`, ties to the smaller hash), which every clone
+   shares and which survives renaming the repo, folder or project; a repo with no commits falls
+   back to the project name. The hashed port steps forward (wrapping) past excluded ports, ports
+   claimed by `servePort`, and ports taken by projects registered earlier, so rule 2 always yields
+   to rule 1, and the slot says when it moved. With 1000 ports and today's nine repos there are no
+   collisions.
+3. **Range and exclusions** are global VS Code user settings (`rojoHub.portRange`, default
+   `34873-35872`; `rojoHub.excludedPorts`, ports or `"first-last"` ranges), application-scoped so no
+   workspace can override them. The extension sends them to the service (`PUT /settings`), which
+   keeps the last values in `settings.json`. 34872 is excluded whatever the settings say. Windows'
+   dynamic port range on this machine starts at 49152, so it never overlaps the default range.
+
+A running slot whose port changes (a new `servePort`, a new exclusion) is stopped and restarted on
+the new port: a new session, so the slot tells you to reconnect Studio. A port held by a program
+outside the Hub is reported at start, suggesting an exclusion.
 
 ### Connection state
 

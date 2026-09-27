@@ -8,10 +8,6 @@ import type { Target } from "../common/api";
 	what must survive a restart lives here; process state is rediscovered.
 */
 
-export const PORT_RANGE = { first: 34873, last: 34899 };
-/** /JumpTo's port in TheLaundryShift; never handed out. */
-export const RESERVED_PORTS = new Set([34872]);
-
 export interface SlotRecord {
 	id: string;
 	projectName: string;
@@ -19,6 +15,9 @@ export interface SlotRecord {
 	repoPath: string;
 	/** Project file name relative to a checkout, normally default.project.json. */
 	projectFile: string;
+	/** What the port is hashed from: the repo's first commit (see ports.ts). */
+	seed: string;
+	/** The port last assigned; recomputed from ports.ts's rules, stored to notice moves. */
 	port: number;
 	target: Target;
 	/** Whether the slot should be serving; restored when the service starts. */
@@ -70,17 +69,4 @@ export function slugify(name: string): string {
 			.replace(/[^a-z0-9]+/g, "-")
 			.replace(/^-+|-+$/g, "") || "project"
 	);
-}
-
-/*
-	The lowest port in the Hub range that no slot owns and nothing is listening
-	on. `isFree` is injected so tests do not need real sockets.
-*/
-export async function allocatePort(taken: Iterable<number>, isFree: (port: number) => Promise<boolean>): Promise<number> {
-	const owned = new Set(taken);
-	for (let port = PORT_RANGE.first; port <= PORT_RANGE.last; port++) {
-		if (owned.has(port) || RESERVED_PORTS.has(port)) continue;
-		if (await isFree(port)) return port;
-	}
-	throw new Conflict(`No free port left in ${PORT_RANGE.first}-${PORT_RANGE.last}`);
 }

@@ -15,6 +15,7 @@ import { Conflict, NotFound } from "./registry";
 	POST   /slots/:id/stop
 	GET    /slots/:id/targets
 	POST   /slots/:id/switch      { target }
+	PUT    /settings              { portRange?, excludedPorts? }
 	POST   /shutdown              { stopServing? }
 */
 
@@ -46,6 +47,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			if (method === "GET" && url.pathname === "/health") {
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
 				return send(response, 200, health);
+			}
+			if (method === "PUT" && url.pathname === "/settings") {
+				const input = await body(request);
+				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];
+				hub.setPortSettings({ portRange: typeof input.portRange === "string" ? input.portRange : "", excludedPorts });
+				return send(response, 200, { ok: true });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {
 				const input = await body(request);
