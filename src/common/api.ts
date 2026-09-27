@@ -5,7 +5,7 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.8.0";
+export const SERVICE_VERSION = "0.8.1";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -14,7 +14,11 @@ export const SERVICE_VERSION = "0.8.0";
 */
 export type Target = { kind: "worktree"; path: string } | { kind: "branch"; ref: string };
 
-export type SlotState = "stopped" | "starting" | "running" | "error";
+/*
+	"offline" is never sent by the service: the extension uses it for projects
+	it read from registry.json while the service is not running.
+*/
+export type SlotState = "stopped" | "starting" | "running" | "error" | "offline";
 
 export interface SlotView {
 	id: string;

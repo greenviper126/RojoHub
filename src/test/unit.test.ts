@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { expandGroup, pathBetween } from "../common/groups";
+import { savedState } from "../extension/saved";
 import { parseWorktrees } from "../service/git";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
@@ -199,4 +200,36 @@ test("countConnections follows Rojo's websocket log lines", () => {
 	assert.equal(countConnections(lines), 1);
 	assert.equal(countConnections(["[ERROR librojo::web::api] WebSocket error: reset"], 1), 0);
 	assert.equal(countConnections(["[DEBUG librojo::web::api] WebSocket stream ended"], 0), 0);
+});
+
+test("savedState shows the registry's projects and groups while the service is stopped", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-saved-"));
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "no registry yet");
+	writeFileSync(
+		join(home, "registry.json"),
+		JSON.stringify({
+			version: 1,
+			slots: [
+				{ id: "tls", projectName: "TheLaundryShift", repoPath: "C:\r\TLS", projectFile: "default.project.json", seed: "commit:x", port: 35045, target: { kind: "worktree", path: "C:\r\TLS" }, wantRunning: true, activeView: null },
+				{ id: "ai", projectName: "VluxyAI", repoPath: "C:\r\AI", projectFile: "default.project.json", seed: "commit:y", port: 35761, target: { kind: "branch", ref: "refs/heads/feature/fsm" }, wantRunning: false, activeView: "abc" },
+			],
+			groups: [
+				{ id: "outer", name: "Outer", slotIds: [], groupIds: ["tls-group"], active: true },
+				{ id: "tls-group", name: "TLS", slotIds: ["tls", "ai"] },
+			],
+		}),
+	);
+	const known = [{ id: "tls", targetLabel: "chore/untrack-wally-lock", portSource: "servePort", branch: "chore/untrack-wally-lock" }] as unknown as Parameters<typeof savedState>[1];
+	const { slots, groups } = savedState(home, known);
+	assert.deepEqual(slots.map((slot) => [slot.id, slot.port, slot.state, slot.targetLabel]), [
+		["tls", 35045, "offline", "chore/untrack-wally-lock"],
+		["ai", 35761, "offline", "feature/fsm"],
+	]);
+	assert.equal(slots[0].portSource, "servePort", "keeps what the service last said");
+	assert.deepEqual(groups.map((group) => [group.name, group.projectIds, group.active, group.groupIds]), [
+		["Outer", ["tls", "ai"], true, ["tls-group"]],
+		["TLS", ["tls", "ai"], false, []],
+	]);
+	writeFileSync(join(home, "registry.json"), "{ not json");
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "a broken file shows nothing rather than failing");
 });

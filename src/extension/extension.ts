@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
@@ -7,6 +8,7 @@ import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/a
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel } from "../common/panel";
 import { client, ensureService } from "./client";
+import { savedState } from "./saved";
 import { HubPanel } from "./panel";
 
 /*
@@ -21,6 +23,8 @@ const POLL_MS = 2000;
 let panel: HubPanel;
 let serviceScript = "";
 let serviceHealth: { running: boolean; version: string | null } = { running: false, version: null };
+/** The service's state folder: from its /health once seen, else where it puts it by default. */
+let hubHome = join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
@@ -38,15 +42,25 @@ function primaryOf(folder: string): Promise<string | null> {
 	});
 }
 
+/* Starts the service if it is not running, so any action works after "Stop service". */
+async function ensureRunning(): Promise<void> {
+	if (serviceHealth.running && (await client.health())) return;
+	await ensureService(serviceScript);
+	await pushSettings();
+	serviceHealth.running = true;
+}
+
 async function refresh(): Promise<void> {
 	const health = await client.health();
 	serviceHealth = { running: !!health, version: health?.version ?? null };
+	if (health?.home) hubHome = health.home;
 	try {
 		[lastSlots, lastGroups] = health ? await Promise.all([client.slots(), client.groups()]) : [[], []];
 	} catch {
 		lastSlots = [];
 		lastGroups = [];
 	}
+	if (!health) ({ slots: lastSlots, groups: lastGroups } = savedState(hubHome, lastSlots));
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
 		service: serviceHealth,
@@ -69,7 +83,8 @@ function updateStatus(): void {
 		return;
 	}
 	const connected = slot.state === "running" && slot.connections > 0;
-	const icon = slot.state === "error" ? "$(error)" : slot.state !== "running" ? "$(circle-slash)" : connected ? "$(pass-filled)" : "$(circle-large-outline)";
+	const icon =
+		slot.state === "error" ? "$(error)" : slot.state === "offline" ? "$(debug-disconnect)" : slot.state !== "running" ? "$(circle-slash)" : connected ? "$(pass-filled)" : "$(circle-large-outline)";
 	statusItem.text = `${icon} Rojo :${slot.port} · ${slot.targetLabel}`;
 	statusItem.tooltip = `${slot.projectName}: ${slot.state}${slot.state === "running" ? `, ${slot.connections} Studio connection(s)` : ""}. Click to show it in the Rojo-Hub panel.`;
 	statusItem.command = { command: "rojoHub.focusProject", title: "Rojo-Hub", arguments: [slot.id] };
@@ -90,9 +105,12 @@ async function pickSlot(argument: unknown, placeholder: string): Promise<SlotVie
 }
 
 /** Runs a command with a progress notification and turns failures into error messages. */
-async function run<T>(title: string, work: () => Promise<T>): Promise<T | undefined> {
+async function run<T>(title: string, work: () => Promise<T>, needsService = true): Promise<T | undefined> {
 	try {
-		return await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, work);
+		return await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, async () => {
+			if (needsService) await ensureRunning();
+			return work();
+		});
 	} catch (error) {
 		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
 		return undefined;
@@ -458,7 +476,10 @@ function orcaRepos():Promise<{ path: string; displayName: string }[]> {
 */
 async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefined> {
 	try {
-		return await panel.progress(work);
+		return await panel.progress(async () => {
+			await ensureRunning();
+			return work();
+		});
 	} catch (error) {
 		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
 		return undefined;
@@ -497,6 +518,7 @@ async function onPanel(message: FromPanel): Promise<void> {
 			return;
 		case "targets":
 			try {
+				await ensureRunning();
 				panel.post({ type: "targets", id: message.id, options: await client.targets(message.id) });
 			} catch (error) {
 				panel.post({ type: "targets", id: message.id, options: null, error: error instanceof Error ? error.message : String(error) });
@@ -626,7 +648,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				"Stop Service, Keep Rojo Running",
 				"Stop Service and Rojo",
 			);
-			if (choice) await run("Stopping service", () => client.shutdown(choice === "Stop Service and Rojo"));
+			if (choice) {
+				await run("Stopping service", () => client.shutdown(choice === "Stop Service and Rojo"), false);
+				void vscode.window.showInformationMessage("Rojo-Hub's service is stopped. Your projects and groups are saved; any action starts it again.");
+			}
 		},
 	};
 	for (const [id, handler] of Object.entries(commands)) {

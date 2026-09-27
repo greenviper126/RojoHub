@@ -582,3 +582,17 @@ button:focus-visible {
 .confirm-only strong {
 	font-weight: 600;
 }
+
+.dot.offline {
+	border: 2px dashed var(--muted);
+	opacity: 0.7;
+}
+
+.banner {
+	margin-top: 6px;
+	border-color: var(--vscode-inputValidation-warningBorder, var(--warn));
+}
+
+.banner p {
+	margin: 0;
+}

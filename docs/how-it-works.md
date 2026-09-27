@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.8.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.8.1, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -172,6 +172,7 @@ started it is disabled.
 | green ring | serving, no Studio plugin connected |
 | green dot | serving, at least one Studio plugin connected |
 | red dot | error (the card shows the message; the log has the rest) |
+| dashed grey ring | the service is stopped, so the state is unknown |
 
 ## 5. Projects
 
@@ -352,6 +353,12 @@ runs a separate background service that owns every project and its Rojo.
   reason. This is a new session.
 - **Stop Background Service** asks whether to keep Rojo running (Studio stays connected) or stop
   everything.
+- **While the service is stopped**, nothing is forgotten: projects and groups live in
+  `registry.json`. The panel reads that file and keeps showing them, with a banner saying the
+  service is stopped and a *Start service* button. Their lights are dashed grey and their status
+  says *Service stopped*, because only the service knows whether a Rojo is still serving. Pressing
+  any action (Start on a project or group, opening a branch picker, and so on) starts the service
+  first and then does it.
 - Only listens on `127.0.0.1`; nothing is reachable from other machines.
 
 ### Local API
@@ -420,6 +427,10 @@ fix pending in PR #1319). It happens with plain `rojo serve` too. Anything that 
 containing files under a served tree triggers it: deleting it in Explorer, a `git checkout` or
 rebase that removes a folder, deleting a worktree the project served earlier in the same session.
 Rojo-Hub restarts Rojo on the same port and tells you; reconnect Studio.
+
+**My projects disappeared after stopping the service**: they have not; they are saved in
+`registry.json`. From 0.8.1 the panel keeps showing them while the service is stopped. Press *Start
+service*, or any Start button.
 
 **Nothing shows up after installing**: reload the window, and check the extension is installed
 in the VS Code profile you are using (profiles have separate extension lists).

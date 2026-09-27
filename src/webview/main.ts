@@ -61,8 +61,15 @@ function iconButton(action: string, iconName: string, title: string, data: Recor
 
 function dot(slot: SlotView): string {
 	if (slot.state === "starting") return `<span class="dot starting" title="Starting">${icon("loading", "codicon-modifier-spin")}</span>`;
-	const kind = slot.state === "error" ? "error" : slot.state !== "running" ? "stopped" : slot.connections > 0 ? "connected" : "serving";
-	const title = { error: "Error", stopped: "Stopped", connected: "Serving, Studio connected", serving: "Serving, no Studio connected" }[kind];
+	const kind =
+		slot.state === "error" ? "error" : slot.state === "offline" ? "offline" : slot.state !== "running" ? "stopped" : slot.connections > 0 ? "connected" : "serving";
+	const title = {
+		error: "Error",
+		offline: "Service stopped: state unknown",
+		stopped: "Stopped",
+		connected: "Serving, Studio connected",
+		serving: "Serving, no Studio connected",
+	}[kind];
 	return `<span class="dot ${kind}" title="${title}"></span>`;
 }
 
@@ -74,6 +81,7 @@ function statusLine(slot: SlotView): string {
 	}
 	if (slot.state === "starting") return `<span class="muted">Starting…</span>`;
 	if (slot.state === "error") return `<span class="bad">${icon("error")} Error</span>`;
+	if (slot.state === "offline") return `<span class="muted">Service stopped</span>`;
 	return `<span class="muted">Stopped</span>`;
 }
 
@@ -350,7 +358,16 @@ function render(): void {
 		? `<span class="muted small">${icon("pass")} Service running${state.service.version ? ` · v${escape(state.service.version)}` : ""}</span><span class="grow"></span>${button("stop-service", "Stop", { icon: "debug-stop", kind: "ghost", title: "Stop the background service" })}`
 		: `<span class="bad small">${icon("error")} Service not running</span><span class="grow"></span>${button("start-service", "Start", { icon: "play", kind: "secondary" })}`;
 
+	const banner = state.service.running
+		? ""
+		: `<div class="card banner">
+			<div class="row">${icon("debug-disconnect")}<strong>The Rojo-Hub service is stopped</strong></div>
+			<p class="muted small">Your projects and groups are saved and shown below. Start the service to serve them; pressing Start on any project or group starts it too.</p>
+			<div class="row">${button("start-service", "Start service", { icon: "play", kind: "primary" })}</div>
+		</div>`;
+
 	app.innerHTML = `
+		${banner}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
