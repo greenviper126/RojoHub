@@ -157,6 +157,15 @@ export class Groups {
 		return result;
 	}
 
+	/* Stops every serving project and marks every group stopped. */
+	async stopAll(): Promise<{ stopped: string[]; failed: { id: string; error: string }[] }> {
+		for (const group of this.groups) group.active = false;
+		this.registry.save();
+		const result: GroupResult = { group: { id: "", name: "", slotIds: [], groupIds: [], active: false, projectIds: [] }, started: [], stopped: [], kept: [], failed: [] };
+		await Promise.all(this.registry.slots.filter((slot) => this.serving(slot.id)).map((slot) => this.run(result, slot.id, "stop")));
+		return { stopped: result.stopped, failed: result.failed };
+	}
+
 	private async run(result: GroupResult, slotId: string, action: "start" | "stop"): Promise<void> {
 		try {
 			if (action === "start") await this.hub.start(slotId);

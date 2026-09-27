@@ -22,6 +22,7 @@ import { Conflict, NotFound } from "./registry";
 	DELETE /groups/:id
 	POST   /groups/:id/start      { only? }   only: also stop every project outside the group
 	POST   /groups/:id/stop
+	POST   /stop-all                                 stop every serving project, mark every group stopped
 	PUT    /settings              { portRange?, excludedPorts? }
 	POST   /shutdown              { stopServing? }
 */
@@ -60,6 +61,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
 				return send(response, 200, health);
 			}
+			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
 				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];

@@ -19,7 +19,8 @@ export interface Candidate {
 }
 
 export interface PanelState {
-	service: { running: boolean; version: string | null };
+	/** Kept out of sight: the extension starts the service itself. `error` is set only when it could not. */
+	service: { running: boolean; version: string | null; error: string | null };
 	slots: SlotView[];
 	groups: GroupView[];
 	settings: { portRange: string; excludedPorts: (number | string)[] };
@@ -55,6 +56,5 @@ export type FromPanel =
 	| { type: "startGroup"; id: string; only: boolean }
 	| { type: "stopGroup"; id: string }
 	| { type: "saveSettings"; portRange: string; excludedPorts: (number | string)[] }
-	| { type: "startService" }
-	| { type: "stopService" }
+	| { type: "stopAll" }
 	| { type: "walkthrough" };

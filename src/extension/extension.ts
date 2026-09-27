@@ -22,7 +22,9 @@ const POLL_MS = 2000;
 
 let panel: HubPanel;
 let serviceScript = "";
-let serviceHealth: { running: boolean; version: string | null } = { running: false, version: null };
+let serviceHealth: { running: boolean; version: string | null; error: string | null } = { running: false, version: null, error: null };
+/** A start of the service already under way, so concurrent callers wait for the same one. */
+let starting: Promise<void> | null = null;
 /** The service's state folder: from its /health once seen, else where it puts it by default. */
 let hubHome = join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
 let statusItem: vscode.StatusBarItem;
@@ -42,17 +44,36 @@ function primaryOf(folder: string): Promise<string | null> {
 	});
 }
 
-/* Starts the service if it is not running, so any action works after "Stop service". */
+/*
+	The service is plumbing the user never manages: whenever it is not running
+	it is started, here. A failure is kept in serviceHealth.error for the panel
+	and retried on the next action or Refresh, not on every poll, so a broken
+	install does not spawn a process every two seconds.
+*/
 async function ensureRunning(): Promise<void> {
-	if (serviceHealth.running && (await client.health())) return;
-	await ensureService(serviceScript);
-	await pushSettings();
-	serviceHealth.running = true;
+	if (await client.health()) return;
+	starting ??= (async () => {
+		try {
+			await ensureService(serviceScript);
+			await pushSettings();
+			serviceHealth.error = null;
+		} catch (error) {
+			serviceHealth.error = error instanceof Error ? error.message : String(error);
+			throw error;
+		} finally {
+			starting = null;
+		}
+	})();
+	await starting;
 }
 
 async function refresh(): Promise<void> {
-	const health = await client.health();
-	serviceHealth = { running: !!health, version: health?.version ?? null };
+	let health = await client.health();
+	if (!health && !serviceHealth.error) {
+		await ensureRunning().catch(() => undefined);
+		health = await client.health();
+	}
+	serviceHealth = { running: !!health, version: health?.version ?? null, error: health ? null : serviceHealth.error };
 	if (health?.home) hubHome = health.home;
 	try {
 		[lastSlots, lastGroups] = health ? await Promise.all([client.slots(), client.groups()]) : [[], []];
@@ -168,8 +189,7 @@ async function openMenu(): Promise<void> {
 		{ label: "$(add) Add Project", run: () => addProject() },
 		{ label: "$(new-folder) New Group", description: "a set of projects to start together", run: () => newGroup() },
 		{ label: "$(gear) Port Settings", description: "range and globally excluded ports", run: () => vscode.commands.executeCommand("workbench.action.openSettings", "rojoHub") },
-		{ label: "$(refresh) Reconnect to Service", run: () => vscode.commands.executeCommand("rojoHub.refresh") },
-		{ label: "$(debug-stop) Stop Background Service", run: () => vscode.commands.executeCommand("rojoHub.stopService") },
+		{ label: "$(debug-stop) Stop All", description: "stop every serving project", run: () => vscode.commands.executeCommand("rojoHub.stopAll") },
 	);
 	const picked = await vscode.window.showQuickPick(items, { title: "Rojo-Hub", placeHolder: "Pick a project, or an action", matchOnDescription: true });
 	await picked?.run?.();
@@ -308,6 +328,12 @@ function reportGroup(result: GroupResult | undefined): void {
 			`Rojo-Hub: stopped ${result.group.name}, but kept ${result.kept.map((entry) => `${name(entry.id)} (in ${entry.because})`).join(", ")} running because another running group uses it.`,
 		);
 	}
+}
+
+function reportStopAll(result: { stopped: string[]; failed: { id: string; error: string }[] }): void {
+	if (result.failed.length === 0) return;
+	const name = (id: string) => lastSlots.find((slot) => slot.id === id)?.projectName ?? id;
+	void vscode.window.showErrorMessage(`Rojo-Hub: could not stop ${result.failed.map((entry) => `${name(entry.id)} (${entry.error.split("\n")[0]})`).join(", ")}`);
 }
 
 /** Adds a project or a group to a group; the service refuses loops with the chain that would loop. */
@@ -504,11 +530,11 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "ready":
 			return refresh();
 		case "refresh":
-		case "startService":
-			await act("service", async () => {
-				await ensureService(serviceScript);
-				await pushSettings();
-			});
+			serviceHealth.error = null;
+			await act("service", async () => undefined);
+			return;
+		case "stopAll":
+			await act("stop-all", async () => reportStopAll(await client.stopAll()));
 			return;
 		case "start":
 			await act(`slot:${message.id}`, () => client.start(message.id));
@@ -578,9 +604,6 @@ async function onPanel(message: FromPanel): Promise<void> {
 			await config.update("excludedPorts", message.excludedPorts, vscode.ConfigurationTarget.Global);
 			return;
 		}
-		case "stopService":
-			await vscode.commands.executeCommand("rojoHub.stopService");
-			return;
 		case "walkthrough":
 			await vscode.commands.executeCommand("workbench.action.openWalkthrough", "greenviper126.rojo-hub#rojoHub.start", false);
 			return;
@@ -641,17 +664,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await pushSettings();
 			});
 		},
-		"rojoHub.stopService": async () => {
-			const choice = await vscode.window.showWarningMessage(
-				"Stop the Rojo-Hub background service?",
-				{ modal: true, detail: "Leaving Rojo running keeps Studio connected; the next service adopts it." },
-				"Stop Service, Keep Rojo Running",
-				"Stop Service and Rojo",
-			);
-			if (choice) {
-				await run("Stopping service", () => client.shutdown(choice === "Stop Service and Rojo"), false);
-				void vscode.window.showInformationMessage("Rojo-Hub's service is stopped. Your projects and groups are saved; any action starts it again.");
+		"rojoHub.stopAll": async () => {
+			await refresh();
+			const serving = lastSlots.filter((slot) => slot.state === "running" || slot.state === "starting");
+			if (serving.length === 0) {
+				void vscode.window.showInformationMessage("Rojo-Hub: nothing is serving.");
+				return;
 			}
+			const sure = await vscode.window.showWarningMessage(
+				`Stop all ${serving.length} serving project${serving.length === 1 ? "" : "s"}?`,
+				{ modal: true, detail: `This stops ${serving.map((slot) => slot.projectName).join(", ")}. Studio places connected to them disconnect.` },
+				"Stop All",
+			);
+			if (sure === "Stop All") await run("Stopping everything", async () => reportStopAll(await client.stopAll()));
 		},
 	};
 	for (const [id, handler] of Object.entries(commands)) {

@@ -76,6 +76,7 @@ export const client = {
 	deleteGroup: (id: string) => call<{ ok: true }>("DELETE", `/groups/${encodeURIComponent(id)}`),
 	startGroup: (id: string, only: boolean) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/start`, { only }),
 	stopGroup: (id: string) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/stop`),
+	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
 	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };

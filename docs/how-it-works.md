@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.8.1, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.9.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -86,8 +86,9 @@ running through this, so Studio stays connected, and the new service adopts them
 **Requirements**: Windows; git on `PATH`; `rojo` on `PATH` through [Rokit](https://github.com/rojo-rbx/rokit)
 (each project's `rokit.toml` picks its Rojo version); Rojo 7.7. Orca is optional.
 
-**Uninstall**: stop the service first (*Stop Background Service → Stop Service and Rojo*), then
-uninstall the extension. Delete `%LOCALAPPDATA%\RojoHub\` to remove its state and views.
+**Uninstall**: press *Stop all*, uninstall the extension, then end the background service with
+`curl -X POST http://127.0.0.1:34870/shutdown` (or sign out). Delete `%LOCALAPPDATA%\RojoHub\` to
+remove its state and views.
 
 ## 4. Where to find it in VS Code
 
@@ -146,8 +147,9 @@ projects are serving (green when all are). Inside:
 *Save* and *Undo*. Mistakes are pointed out before saving. These edit the VS Code user settings
 described in [Settings](#12-settings).
 
-**Footer**: whether the background service is running, and its version, with *Stop* (or *Start*
-when it is not running) and Refresh.
+**Footer**: how many projects are serving, **Stop all**, and Refresh. *Stop all* stops every
+serving project and marks every group not running; it asks first, on the panel, naming what it will
+stop. The background service itself never appears: Rojo-Hub starts it whenever it is needed.
 
 While an action runs, VS Code's progress bar shows at the top of the panel and the button that
 started it is disabled.
@@ -172,7 +174,7 @@ started it is disabled.
 | green ring | serving, no Studio plugin connected |
 | green dot | serving, at least one Studio plugin connected |
 | red dot | error (the card shows the message; the log has the rest) |
-| dashed grey ring | the service is stopped, so the state is unknown |
+| dashed grey ring | unavailable: Rojo-Hub's service could not be started |
 
 ## 5. Projects
 
@@ -341,8 +343,11 @@ switched to. Removing a project removes it from every group. Group names are uni
 VS Code extensions stop when their window closes, and you keep several windows open, so Rojo-Hub
 runs a separate background service that owns every project and its Rojo.
 
-- **Started by the extension** when nothing answers on `127.0.0.1:34870`, using VS Code's own
-  runtime (no separate Node install needed). It keeps running after windows close.
+- **You never manage it.** The panel has no service controls. The extension starts the service
+  whenever nothing answers on `127.0.0.1:34870`: when a window opens, when the panel refreshes, and
+  before any action. It uses VS Code's own runtime (no separate Node install needed) and keeps
+  running after windows close. What serves is decided only by starting and stopping projects and
+  groups, and *Stop all*.
 - **Rojo processes are independent of the service.** If the service stops or is replaced, Rojo keeps
   serving and Studio stays connected; the next service *adopts* each Rojo that still answers with
   its project's name.
@@ -351,14 +356,11 @@ runs a separate background service that owns every project and its Rojo.
 - **Crash recovery**: if a project's Rojo dies unexpectedly, the service starts it again on the
   same port and shows *Rojo crashed at … and was restarted; reconnect Studio*, with Rojo's own
   reason. This is a new session.
-- **Stop Background Service** asks whether to keep Rojo running (Studio stays connected) or stop
-  everything.
-- **While the service is stopped**, nothing is forgotten: projects and groups live in
-  `registry.json`. The panel reads that file and keeps showing them, with a banner saying the
-  service is stopped and a *Start service* button. Their lights are dashed grey and their status
-  says *Service stopped*, because only the service knows whether a Rojo is still serving. Pressing
-  any action (Start on a project or group, opening a branch picker, and so on) starts the service
-  first and then does it.
+- **If it cannot be started** (a broken install, say), the panel shows *Rojo-Hub could not start*
+  with the reason and *Try again*, and still lists projects and groups read from `registry.json`,
+  marked unavailable. It is not retried on every refresh, only on *Try again* or the next action,
+  so a broken install does not spawn a process every two seconds.
+- Projects and groups are never lost when the service stops: they live in `registry.json`.
 - Only listens on `127.0.0.1`; nothing is reachable from other machines.
 
 ### Local API
@@ -380,6 +382,7 @@ debugging.
 | `PUT /groups/:id` | `{ name?, slotIds?, groupIds? }` | Rename or change members; `groupIds` that would loop are refused (409) with the chain |
 | `DELETE /groups/:id` | | Delete a group |
 | `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped |
+| `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
 | `PUT /settings` | `{ portRange?, excludedPorts? }` | Port settings (sent by the extension) |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
@@ -417,8 +420,7 @@ within a few seconds.
 
 Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). Only **Rojo-Hub:
 Open Menu** appears in the command palette; it offers the same actions as menus. The panel's title
-bar has Open Menu and Refresh, and its `…` menu has Add Project, New Group and Stop Background
-Service. Clicking the status bar item opens the panel on that window's project.
+bar has Open Menu and Refresh, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
 
 ## 14. Known limits and troubleshooting
 
@@ -428,9 +430,9 @@ containing files under a served tree triggers it: deleting it in Explorer, a `gi
 rebase that removes a folder, deleting a worktree the project served earlier in the same session.
 Rojo-Hub restarts Rojo on the same port and tells you; reconnect Studio.
 
-**My projects disappeared after stopping the service**: they have not; they are saved in
-`registry.json`. From 0.8.1 the panel keeps showing them while the service is stopped. Press *Start
-service*, or any Start button.
+**"Rojo-Hub could not start"**: the background service did not come up. The message says why;
+`%LOCALAPPDATA%\RojoHub\service.log` has more. Your projects and groups are still saved. Fix the
+cause and press *Try again*.
 
 **Nothing shows up after installing**: reload the window, and check the extension is installed
 in the VS Code profile you are using (profiles have separate extension lists).

@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -92,11 +92,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "rojoHub.stopService",
-        "title": "Stop Background Service",
-        "category": "Rojo-Hub"
-      },
-      {
         "command": "rojoHub.newGroup",
         "title": "New Group",
         "category": "Rojo-Hub",
@@ -147,6 +142,12 @@
         "command": "rojoHub.focusProject",
         "title": "Show Project in Panel",
         "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.stopAll",
+        "title": "Stop All",
+        "category": "Rojo-Hub",
+        "icon": "$(debug-stop)"
       }
     ],
     "menus": {
@@ -172,7 +173,7 @@
           "group": "1@2"
         },
         {
-          "command": "rojoHub.stopService",
+          "command": "rojoHub.stopAll",
           "when": "view == rojoHub.panel",
           "group": "zz"
         }
@@ -215,10 +216,6 @@
           "when": "false"
         },
         {
-          "command": "rojoHub.stopService",
-          "when": "false"
-        },
-        {
           "command": "rojoHub.newGroup",
           "when": "false"
         },
@@ -252,6 +249,10 @@
         },
         {
           "command": "rojoHub.focusProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stopAll",
           "when": "false"
         }
       ]

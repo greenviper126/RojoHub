@@ -289,6 +289,15 @@ test("groups nest without loops, serve only, and stop without taking shared proj
 	await call("DELETE", `/groups/${outer.id}`);
 	const again = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
 
+	// Stop all stops every serving project and marks every group stopped
+	await call<GroupResult>("POST", `/groups/${again.id}/start`, {});
+	assert.equal(await state(a.id), "running");
+	const all = await call<{ stopped: string[]; failed: unknown[] }>("POST", "/stop-all");
+	assert.deepEqual(all.stopped.sort(), [a.id, b.id].sort());
+	assert.deepEqual(all.failed, []);
+	assert.equal(await state(b.id), "stopped");
+	assert.equal((await call<GroupView[]>("GET", "/groups")).every((group) => !group.active), true, "no group left running");
+
 	await call("PUT", `/groups/${again.id}`, { name: "Renamed" });
 	await call("DELETE", `/slots/${b.id}`);
 	const groups = await call<GroupView[]>("GET", "/groups");

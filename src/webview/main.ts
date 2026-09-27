@@ -33,6 +33,8 @@ const ui = {
 	confirmDelete: null as string | null,
 	/** The group whose "Only this" is waiting for Yes/No. */
 	confirmOnly: null as string | null,
+	/** "Stop all" is waiting for Yes/No. */
+	confirmStopAll: false,
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
@@ -65,7 +67,7 @@ function dot(slot: SlotView): string {
 		slot.state === "error" ? "error" : slot.state === "offline" ? "offline" : slot.state !== "running" ? "stopped" : slot.connections > 0 ? "connected" : "serving";
 	const title = {
 		error: "Error",
-		offline: "Service stopped: state unknown",
+		offline: "Unavailable: Rojo-Hub's service is not running",
 		stopped: "Stopped",
 		connected: "Serving, Studio connected",
 		serving: "Serving, no Studio connected",
@@ -81,7 +83,7 @@ function statusLine(slot: SlotView): string {
 	}
 	if (slot.state === "starting") return `<span class="muted">Starting…</span>`;
 	if (slot.state === "error") return `<span class="bad">${icon("error")} Error</span>`;
-	if (slot.state === "offline") return `<span class="muted">Service stopped</span>`;
+	if (slot.state === "offline") return `<span class="muted">Unavailable</span>`;
 	return `<span class="muted">Stopped</span>`;
 }
 
@@ -354,24 +356,29 @@ function render(): void {
 			</div>`
 			: state.groups.map(groupCard).join(""));
 
-	const service = state.service.running
-		? `<span class="muted small">${icon("pass")} Service running${state.service.version ? ` · v${escape(state.service.version)}` : ""}</span><span class="grow"></span>${button("stop-service", "Stop", { icon: "debug-stop", kind: "ghost", title: "Stop the background service" })}`
-		: `<span class="bad small">${icon("error")} Service not running</span><span class="grow"></span>${button("start-service", "Start", { icon: "play", kind: "secondary" })}`;
+	const serving = slots.filter((slot) => slot.state === "running" || slot.state === "starting");
+	const footer = ui.confirmStopAll
+		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${serving.length} serving project${serving.length === 1 ? "" : "s"}: <strong>${serving
+				.map((slot) => escape(slot.projectName))
+				.join(", ")}</strong>? Studio places connected to them disconnect.</span></div>
+			<div class="row">${button("stop-all-yes", "Yes, stop all", { icon: "debug-stop", kind: "danger" })}${button("stop-all-no", "Cancel", { kind: "secondary" })}</div>`
+		: `<div class="row"><span class="muted small">${serving.length === 0 ? "Nothing serving" : `${serving.length} of ${slots.length} serving`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
 
-	const banner = state.service.running
-		? ""
-		: `<div class="card banner">
-			<div class="row">${icon("debug-disconnect")}<strong>The Rojo-Hub service is stopped</strong></div>
-			<p class="muted small">Your projects and groups are saved and shown below. Start the service to serve them; pressing Start on any project or group starts it too.</p>
-			<div class="row">${button("start-service", "Start service", { icon: "play", kind: "primary" })}</div>
-		</div>`;
+	// The service is invisible unless it could not be started at all.
+	const banner = state.service.error
+		? `<div class="card banner">
+			<div class="row">${icon("error")}<strong>Rojo-Hub could not start</strong></div>
+			<p class="muted small">${escape(state.service.error)} Your projects and groups are saved and shown below.</p>
+			<div class="row">${button("refresh", "Try again", { icon: "refresh", kind: "primary" })}</div>
+		</div>`
+		: "";
 
 	app.innerHTML = `
 		${banner}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
-		<footer class="row footer">${service}${iconButton("refresh", "refresh", "Refresh")}</footer>`;
+		<footer class="footer">${footer}</footer>`;
 
 	if (focusKey) {
 		const again = app.querySelector<HTMLInputElement>(`[data-key="${CSS.escape(focusKey)}"]`);
@@ -560,10 +567,17 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "refresh":
 			return send({ type: "refresh" });
-		case "stop-service":
-			return send({ type: "stopService" });
-		case "start-service":
-			return send({ type: "startService" });
+		case "stop-all":
+			ui.confirmStopAll = true;
+			return render();
+		case "stop-all-no":
+			ui.confirmStopAll = false;
+			return render();
+		case "stop-all-yes":
+			ui.confirmStopAll = false;
+			ui.busy.add("stop-all");
+			send({ type: "stopAll" });
+			return render();
 		case "walkthrough":
 			return send({ type: "walkthrough" });
 	}

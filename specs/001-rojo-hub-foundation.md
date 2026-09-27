@@ -28,6 +28,8 @@ to keep several projects served side by side without hand-managing ports.
       that would loop. A group starts, stops, or serves exclusively (stopping everything else, after
       a confirmation naming what stops) in one action, leaving already-serving members alone.
 - [ ] Stopping a group keeps serving any project another running group also holds.
+- [ ] The background service is invisible: started automatically whenever needed, never started or
+      stopped by the user. The panel offers *Stop all* (confirmed, naming what stops) instead.
 - [ ] Everything can be done visually in a custom sidebar panel (project cards with an in-card
       branch picker, group cards with an add dropdown, port settings), without command-palette
       menus; *Rojo-Hub: Open Menu* offers the same actions for keyboard use. The panel opens itself
