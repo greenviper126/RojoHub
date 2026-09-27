@@ -54,8 +54,8 @@ function updateStatus(): void {
 	const connected = slot.state === "running" && slot.connections > 0;
 	const icon = slot.state === "error" ? "$(error)" : slot.state !== "running" ? "$(circle-slash)" : connected ? "$(pass-filled)" : "$(circle-large-outline)";
 	statusItem.text = `${icon} Rojo :${slot.port} · ${slot.targetLabel}`;
-	statusItem.tooltip = `${slot.projectName}: ${slot.state}${slot.state === "running" ? `, ${slot.connections} Studio connection(s)` : ""}. Click to switch branch.`;
-	statusItem.command = { command: "rojoHub.switch", title: "Switch Branch", arguments: [slot.id] };
+	statusItem.tooltip = `${slot.projectName}: ${slot.state}${slot.state === "running" ? `, ${slot.connections} Studio connection(s)` : ""}. Click for its menu.`;
+	statusItem.command = { command: "rojoHub.projectMenu", title: "Rojo-Hub", arguments: [slot.id] };
 	statusItem.show();
 }
 
@@ -87,6 +87,70 @@ async function run<T>(title: string, work: () => Promise<T>): Promise<T | undefi
 
 interface TargetPick extends vscode.QuickPickItem {
 	option?: TargetOption;
+}
+
+interface MenuItem extends vscode.QuickPickItem {
+	run?: () => unknown;
+}
+
+function stateText(slot: SlotView): string {
+	if (slot.state === "running") return slot.connections > 0 ? `serving · Studio connected (${slot.connections})` : "serving · no Studio connected";
+	if (slot.state === "error") return `error · ${(slot.error ?? "").split("\n")[0]}`;
+	return slot.state;
+}
+
+function slotIcon(slot: SlotView): string {
+	if (slot.state === "error") return "$(error)";
+	if (slot.state === "starting") return "$(loading~spin)";
+	if (slot.state !== "running") return "$(circle-slash)";
+	return slot.connections > 0 ? "$(pass-filled)" : "$(circle-large-outline)";
+}
+
+/*
+	Everything in one place, like Rojo's own "Rojo: Open Menu": the projects,
+	then Hub-wide actions. Picking a project opens its actions.
+*/
+async function openMenu(): Promise<void> {
+	await refresh();
+	const items: MenuItem[] = lastSlots.map((slot) => ({
+		label: `${slotIcon(slot)} ${slot.projectName}`,
+		description: `:${slot.port} · ${slot.targetLabel}`,
+		detail: stateText(slot),
+		run: () => projectMenu(slot.id),
+	}));
+	items.push(
+		{ label: "Rojo-Hub", kind: vscode.QuickPickItemKind.Separator },
+		{ label: "$(add) Add Project", run: () => addProject() },
+		{ label: "$(gear) Port Settings", description: "range and globally excluded ports", run: () => vscode.commands.executeCommand("workbench.action.openSettings", "rojoHub") },
+		{ label: "$(refresh) Reconnect to Service", run: () => vscode.commands.executeCommand("rojoHub.refresh") },
+		{ label: "$(debug-stop) Stop Background Service", run: () => vscode.commands.executeCommand("rojoHub.stopService") },
+	);
+	const picked = await vscode.window.showQuickPick(items, { title: "Rojo-Hub", placeHolder: "Pick a project, or an action", matchOnDescription: true });
+	await picked?.run?.();
+}
+
+async function projectMenu(id: string): Promise<void> {
+	await refresh();
+	const slot = lastSlots.find((entry) => entry.id === id);
+	if (!slot) return openMenu();
+	const serving = slot.state === "running" || slot.state === "starting";
+	const items: MenuItem[] = [
+		{ label: "$(git-branch) Switch Branch…", description: `now ${slot.targetLabel}`, run: () => switchSlot(slot.id) },
+		serving
+			? { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) }
+			: { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) },
+		{ label: "$(copy) Copy Address", description: `localhost:${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
+		{ label: "$(output) Show Rojo Log", run: () => vscode.commands.executeCommand("rojoHub.showLog", slot.id) },
+		{ label: "$(trash) Remove Project", run: () => vscode.commands.executeCommand("rojoHub.removeProject", slot.id) },
+		{ label: "", kind: vscode.QuickPickItemKind.Separator },
+		{ label: "$(arrow-left) All Projects", run: () => openMenu() },
+	];
+	const warnings = [...(slot.error ? [slot.error.split("\n")[0]] : []), ...slot.warnings];
+	const picked = await vscode.window.showQuickPick(items, {
+		title: `${slot.projectName} · :${slot.port} · ${stateText(slot)}`,
+		placeHolder: warnings.length > 0 ? `⚠ ${warnings[0]}` : "What should this project do?",
+	});
+	await picked?.run?.();
 }
 
 async function switchSlot(argument: unknown): Promise<void> {
@@ -198,6 +262,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	const serviceScript = context.asAbsolutePath("dist/service.js");
 	const commands: Record<string, (argument?: unknown) => unknown> = {
+		"rojoHub.openMenu": () => openMenu(),
+		"rojoHub.projectMenu": (argument) => (typeof argument === "string" ? projectMenu(argument) : openMenu()),
 		"rojoHub.addProject": () => addProject(),
 		"rojoHub.switch": (argument) => switchSlot(argument),
 		"rojoHub.start": async (argument) => {

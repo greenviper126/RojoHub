@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -38,6 +38,17 @@
       }
     ],
     "commands": [
+      {
+        "command": "rojoHub.openMenu",
+        "title": "Open Menu",
+        "category": "Rojo-Hub",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "rojoHub.projectMenu",
+        "title": "Project Menu",
+        "category": "Rojo-Hub"
+      },
       {
         "command": "rojoHub.addProject",
         "title": "Add Project",
@@ -93,6 +104,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "rojoHub.openMenu",
+          "when": "view == rojoHub.slots",
+          "group": "navigation@0"
+        },
         {
           "command": "rojoHub.addProject",
           "when": "view == rojoHub.slots",
@@ -158,7 +174,43 @@
       ],
       "commandPalette": [
         {
+          "command": "rojoHub.projectMenu",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.addProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.removeProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.start",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stop",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.switch",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.showLog",
+          "when": "false"
+        },
+        {
           "command": "rojoHub.copyAddress",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.refresh",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stopService",
           "when": "false"
         }
       ]
