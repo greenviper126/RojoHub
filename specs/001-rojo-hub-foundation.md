@@ -26,7 +26,9 @@ to keep several projects served side by side without hand-managing ports.
 - [ ] Ports can be excluded globally, for all projects, from VS Code's user settings.
 - [ ] Projects can be grouped; a group starts, stops, or serves exclusively (stopping everything
       else) in one action, leaving already-serving members' sessions alone.
-- [ ] Everything is reachable from one command, *Rojo-Hub: Open Menu*; the sidebar opens itself
+- [ ] Everything can be done visually in a custom sidebar panel (project cards with an in-card
+      branch picker, group cards with an add dropdown, port settings), without command-palette
+      menus; *Rojo-Hub: Open Menu* offers the same actions for keyboard use. The panel opens itself
       the first time Rojo-Hub runs in a VS Code profile.
 - [ ] Two registered projects can serve at the same time, each on its own port, each with its own
       `rojo` binary chosen by that project's `rokit.toml`.
@@ -155,9 +157,10 @@ Consequences:
   by the extension with VS Code's runtime (`ELECTRON_RUN_AS_NODE`), detached; keeps running when
   windows close. Rojo processes are detached too, so a service restart (or extension update) does
   not drop Studio: the next service adopts a rojo that still answers with the slot's project name.
-- **Extension** (`src/extension`): Projects view (port, what is served, Studio connection count,
-  warnings), a branch picker, a status bar item for the window's own project, start/stop/remove,
-  and the Rojo log. Polls the service every 2 s.
+- **Extension** (`src/extension`): hosts the sidebar panel, a webview (`src/webview`, bundled to
+  `dist/webview.js`, styled only with VS Code theme variables and codicons) that draws project and
+  group cards and posts every click back (`src/common/panel.ts`); a status bar item for the
+  window's own project; and *Open Menu* quick picks. Polls the service every 2 s.
 - **State** in `%LOCALAPPDATA%\RojoHub\`: `registry.json`, `service.log`, `settings.json`,
   `slots\<id>\{slot.project.json, borrowed.project.json, rojo.log, rojo.previous.log}`, and
   `views\<id>\<commit>\` for branches without a worktree.

@@ -1,6 +1,6 @@
 # Switch branches live
 
-Click a project and choose **Switch Branch…**. The list shows:
+Click the branch shown on a project's card. A searchable list opens inside the card:
 
 - **Worktrees**: every git worktree of the project, under Orca's names. They're served in place, so edits made there (by you or an agent) reach Studio live.
 - **Branches**: every other branch. Rojo-Hub checks it out into a folder of its own and serves that.

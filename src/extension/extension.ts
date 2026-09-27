@@ -4,17 +4,22 @@ import { dirname, resolve } from "node:path";
 import * as vscode from "vscode";
 
 import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import type { Candidate, FromPanel } from "../common/panel";
 import { client, ensureService } from "./client";
-import { GroupItem, SlotItem, SlotTree } from "./tree";
+import { HubPanel } from "./panel";
 
 /*
-	The front end. All state lives in the background service; this polls it and
-	sends it commands.
+	The front end. All state lives in the background service; this polls it,
+	draws it in the sidebar panel (panel.ts, src/webview) and the status bar,
+	and sends it commands. "Rojo-Hub: Open Menu" offers the same actions as
+	quick picks for keyboard use.
 */
 
 const POLL_MS = 2000;
 
-let tree: SlotTree;
+let panel: HubPanel;
+let serviceScript = "";
+let serviceHealth: { running: boolean; version: string | null } = { running: false, version: null };
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
@@ -33,13 +38,22 @@ function primaryOf(folder: string): Promise<string | null> {
 }
 
 async function refresh(): Promise<void> {
+	const health = await client.health();
+	serviceHealth = { running: !!health, version: health?.version ?? null };
 	try {
-		[lastSlots, lastGroups] = await Promise.all([client.slots(), client.groups()]);
+		[lastSlots, lastGroups] = health ? await Promise.all([client.slots(), client.groups()]) : [[], []];
 	} catch {
 		lastSlots = [];
 		lastGroups = [];
 	}
-	tree.update(lastSlots, lastGroups);
+	const config = vscode.workspace.getConfiguration("rojoHub");
+	panel.update({
+		service: serviceHealth,
+		slots: lastSlots,
+		groups: lastGroups,
+		settings: { portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) },
+		here: lastSlots.filter((slot) => workspaceRepos.includes(pathKey(slot.repoPath))).map((slot) => slot.id),
+	});
 	updateStatus();
 }
 
@@ -56,13 +70,12 @@ function updateStatus(): void {
 	const connected = slot.state === "running" && slot.connections > 0;
 	const icon = slot.state === "error" ? "$(error)" : slot.state !== "running" ? "$(circle-slash)" : connected ? "$(pass-filled)" : "$(circle-large-outline)";
 	statusItem.text = `${icon} Rojo :${slot.port} · ${slot.targetLabel}`;
-	statusItem.tooltip = `${slot.projectName}: ${slot.state}${slot.state === "running" ? `, ${slot.connections} Studio connection(s)` : ""}. Click for its menu.`;
-	statusItem.command = { command: "rojoHub.projectMenu", title: "Rojo-Hub", arguments: [slot.id] };
+	statusItem.tooltip = `${slot.projectName}: ${slot.state}${slot.state === "running" ? `, ${slot.connections} Studio connection(s)` : ""}. Click to show it in the Rojo-Hub panel.`;
+	statusItem.command = { command: "rojoHub.focusProject", title: "Rojo-Hub", arguments: [slot.id] };
 	statusItem.show();
 }
 
 async function pickSlot(argument: unknown, placeholder: string): Promise<SlotView | undefined> {
-	if (argument instanceof SlotItem) return argument.slot;
 	if (typeof argument === "string") return lastSlots.find((slot) => slot.id === argument);
 	await refresh();
 	if (lastSlots.length === 0) {
@@ -172,7 +185,6 @@ function groupMembers(group: GroupView): SlotView[] {
 }
 
 async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
-	if (argument instanceof GroupItem) return argument.group;
 	if (typeof argument === "string") return lastGroups.find((group) => group.id === argument);
 	await refresh();
 	if (lastGroups.length === 0) {
@@ -222,17 +234,6 @@ async function addToGroup(argument: unknown): Promise<void> {
 		{ title: `Add to ${current.name}`, placeHolder: "Pick a project to add" },
 	);
 	if (picked) await run(`Adding to ${current.name}`, () => client.updateGroup(current.id, { slotIds: [...current.slotIds, picked.id] }));
-}
-
-/* The ✕ on a project inside a group: takes it out of that group only. */
-async function removeFromGroup(argument: unknown): Promise<void> {
-	if (!(argument instanceof SlotItem) || !argument.groupId) return;
-	const group = lastGroups.find((entry) => entry.id === argument.groupId);
-	if (!group) return;
-	const slotId = argument.slot.id;
-	await run(`Removing ${argument.slot.projectName} from ${group.name}`, () =>
-		client.updateGroup(group.id, { slotIds: group.slotIds.filter((id) => id !== slotId) }),
-	);
 }
 
 async function renameGroup(argument: unknown): Promise<void> {
@@ -342,26 +343,36 @@ async function switchSlot(argument: unknown): Promise<void> {
 	}
 }
 
-async function addProject(): Promise<void> {
+/** Folders that could be added: this window's folders, then Orca's repos, minus registered ones. */
+async function candidates(): Promise<Candidate[]> {
 	const known = new Set(lastSlots.map((slot) => pathKey(slot.repoPath)));
-	const items: (vscode.QuickPickItem & { path?: string })[] = [];
+	const found: Candidate[] = [];
+	const seen = (path: string) => known.has(pathKey(path)) || found.some((item) => pathKey(item.path) === pathKey(path));
 	for (const folder of vscode.workspace.workspaceFolders ?? []) {
 		const primary = await primaryOf(folder.uri.fsPath);
-		if (primary && !known.has(pathKey(primary))) items.push({ label: `$(folder) ${folder.name}`, description: primary, path: primary });
+		if (primary && !seen(primary)) found.push({ label: folder.name, path: primary, source: "workspace" });
 	}
 	for (const repo of await orcaRepos()) {
-		if (!known.has(pathKey(repo.path)) && !items.some((item) => item.path && pathKey(item.path) === pathKey(repo.path))) {
-			items.push({ label: `$(repo) ${repo.displayName}`, description: repo.path, path: repo.path });
-		}
+		if (!seen(repo.path)) found.push({ label: repo.displayName, path: resolve(repo.path), source: "orca" });
 	}
+	return found;
+}
+
+async function browseForProject(): Promise<string | undefined> {
+	const chosen = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: "Add Project", title: "Pick a folder with a default.project.json" });
+	return chosen?.[0]?.fsPath;
+}
+
+async function addProject(): Promise<void> {
+	const items: (vscode.QuickPickItem & { path?: string })[] = (await candidates()).map((item) => ({
+		label: `${item.source === "orca" ? "$(repo)" : "$(folder)"} ${item.label}`,
+		description: item.path,
+		path: item.path,
+	}));
 	items.push({ label: "$(folder-opened) Browse…" });
 	const picked = await vscode.window.showQuickPick(items, { placeHolder: "Which project should get a Rojo port?" });
 	if (!picked) return;
-	let path = picked.path;
-	if (!path) {
-		const chosen = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: "Add Project" });
-		path = chosen?.[0]?.fsPath;
-	}
+	const path = picked.path ?? (await browseForProject());
 	if (!path) return;
 	const added = await run("Adding project", () => client.add(path!));
 	if (!added) return;
@@ -397,12 +408,125 @@ function orcaRepos():Promise<{ path: string; displayName: string }[]> {
 	});
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
-	tree = new SlotTree();
-	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-	context.subscriptions.push(vscode.window.registerTreeDataProvider("rojoHub.slots", tree), statusItem);
+/*
+	Runs one panel action: the panel's progress bar while it works, errors as
+	a notification, then fresh state (which clears the button's busy look).
+*/
+async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefined> {
+	try {
+		return await panel.progress(work);
+	} catch (error) {
+		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
+		return undefined;
+	} finally {
+		panel.post({ type: "busy", key, busy: false });
+		await refresh();
+	}
+}
 
-	const serviceScript = context.asAbsolutePath("dist/service.js");
+async function confirmRemove(slot: SlotView): Promise<boolean> {
+	const sure = await vscode.window.showWarningMessage(
+		`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,
+		{ modal: true },
+		"Remove",
+	);
+	return sure === "Remove";
+}
+
+async function onPanel(message: FromPanel): Promise<void> {
+	const slot = "id" in message ? lastSlots.find((entry) => entry.id === message.id) : undefined;
+	switch (message.type) {
+		case "ready":
+			return refresh();
+		case "refresh":
+		case "startService":
+			await act("service", async () => {
+				await ensureService(serviceScript);
+				await pushSettings();
+			});
+			return;
+		case "start":
+			await act(`slot:${message.id}`, () => client.start(message.id));
+			return;
+		case "stop":
+			await act(`slot:${message.id}`, () => client.stop(message.id));
+			return;
+		case "targets":
+			try {
+				panel.post({ type: "targets", id: message.id, options: await client.targets(message.id) });
+			} catch (error) {
+				panel.post({ type: "targets", id: message.id, options: null, error: error instanceof Error ? error.message : String(error) });
+			}
+			return;
+		case "switch":
+			await act(`slot:${message.id}`, () => client.switch(message.id, message.target));
+			return;
+		case "copy":
+			if (!slot) return;
+			await vscode.env.clipboard.writeText(`localhost:${slot.port}`);
+			void vscode.window.setStatusBarMessage(`$(copy) Copied localhost:${slot.port}`, 2500);
+			return;
+		case "log":
+			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
+			return;
+		case "remove":
+			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));
+			return;
+		case "candidates":
+			panel.post({ type: "candidates", items: await candidates() });
+			return;
+		case "addProject":
+		case "browse": {
+			const path = message.type === "addProject" ? message.path : await browseForProject();
+			if (!path) return;
+			const added = await act("add", () => client.add(path));
+			if (added) await panel.focus(added.id);
+			return;
+		}
+		case "newGroup":
+			await act("group:new", () => client.createGroup(message.name, []));
+			return;
+		case "renameGroup":
+			await act(`group:${message.id}`, () => client.updateGroup(message.id, { name: message.name }));
+			return;
+		case "deleteGroup":
+			await act(`group:${message.id}`, () => client.deleteGroup(message.id));
+			return;
+		case "addToGroup":
+		case "removeFromGroup": {
+			const group = lastGroups.find((entry) => entry.id === message.id);
+			if (!group) return;
+			const slotIds = message.type === "addToGroup" ? [...group.slotIds, message.slotId] : group.slotIds.filter((id) => id !== message.slotId);
+			await act(`group:${group.id}`, () => client.updateGroup(group.id, { slotIds }));
+			return;
+		}
+		case "startGroup":
+			reportGroup(await act(`group:${message.id}`, () => client.startGroup(message.id, message.only)));
+			return;
+		case "stopGroup":
+			reportGroup(await act(`group:${message.id}`, () => client.stopGroup(message.id)));
+			return;
+		case "saveSettings": {
+			const config = vscode.workspace.getConfiguration("rojoHub");
+			await config.update("portRange", message.portRange, vscode.ConfigurationTarget.Global);
+			await config.update("excludedPorts", message.excludedPorts, vscode.ConfigurationTarget.Global);
+			return;
+		}
+		case "stopService":
+			await vscode.commands.executeCommand("rojoHub.stopService");
+			return;
+		case "walkthrough":
+			await vscode.commands.executeCommand("workbench.action.openWalkthrough", "greenviper126.rojo-hub#rojoHub.start", false);
+			return;
+	}
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	panel = new HubPanel(context.extensionUri, onPanel);
+	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem);
+
+	serviceScript = context.asAbsolutePath("dist/service.js");
 	const commands: Record<string, (argument?: unknown) => unknown> = {
 		"rojoHub.openMenu": () => openMenu(),
 		"rojoHub.projectMenu": (argument) => (typeof argument === "string" ? projectMenu(argument) : openMenu()),
@@ -410,7 +534,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.newGroup": () => newGroup(),
 		"rojoHub.editGroup": (argument) => renameGroup(argument),
 		"rojoHub.addToGroup": (argument) => addToGroup(argument),
-		"rojoHub.removeFromGroup": (argument) => removeFromGroup(argument),
+		"rojoHub.focusProject": (argument) => (typeof argument === "string" ? panel.focus(argument) : vscode.commands.executeCommand(`${HubPanel.viewId}.focus`)),
 		"rojoHub.deleteGroup": (argument) => deleteGroup(argument),
 		"rojoHub.startGroup": (argument) => startGroup(argument, false),
 		"rojoHub.soloGroup": (argument) => startGroup(argument, true),
@@ -492,7 +616,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	*/
 	if (!context.globalState.get<boolean>("rojoHub.revealed")) {
 		await context.globalState.update("rojoHub.revealed", true);
-		void vscode.commands.executeCommand("workbench.view.extension.rojoHub");
+		void vscode.commands.executeCommand(`${HubPanel.viewId}.focus`);
 	}
 
 	const timer = setInterval(() => void refresh(), POLL_MS);

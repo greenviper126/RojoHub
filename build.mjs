@@ -1,12 +1,19 @@
-// Bundles the extension and the background service into dist/ with esbuild.
+// Bundles the extension, the background service and the sidebar panel into dist/ with esbuild,
+// and copies VS Code's codicon font next to the panel.
+import { cpSync, mkdirSync } from "node:fs";
 import { context } from "esbuild";
 
 const watch = process.argv.includes("--watch");
-const shared = { bundle: true, platform: "node", target: "node20", format: "cjs", sourcemap: true, logLevel: "info" };
+const shared = { bundle: true, sourcemap: true, logLevel: "info" };
 const builds = [
-	{ ...shared, entryPoints: ["src/extension/extension.ts"], outfile: "dist/extension.js", external: ["vscode"] },
-	{ ...shared, entryPoints: ["src/service/main.ts"], outfile: "dist/service.js" },
+	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/extension.ts"], outfile: "dist/extension.js", external: ["vscode"] },
+	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/service/main.ts"], outfile: "dist/service.js" },
+	{ ...shared, platform: "browser", target: "es2022", format: "iife", entryPoints: ["src/webview/main.ts"], outfile: "dist/webview.js" },
 ];
+
+mkdirSync("dist/codicons", { recursive: true });
+for (const file of ["codicon.css", "codicon.ttf"]) cpSync(`node_modules/@vscode/codicons/dist/${file}`, `dist/codicons/${file}`);
+
 for (const options of builds) {
 	const ctx = await context(options);
 	if (watch) await ctx.watch();

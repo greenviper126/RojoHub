@@ -1,8 +1,8 @@
 # Add a project
 
-Open the **Rojo-Hub** view in the activity bar, or run **Rojo-Hub: Open Menu**, and choose **Add Project**.
+Open the **Rojo-Hub** panel from the activity bar and click **+** on **Projects**.
 
-Rojo-Hub offers the folders open in this window and the repos Orca knows about. You can also browse to any folder that has a `default.project.json`.
+The panel lists the folders open in this window and the repos Orca knows about; click one to add it. **Browse…** picks any other folder that has a `default.project.json`.
 
 Each project gets its own port:
 

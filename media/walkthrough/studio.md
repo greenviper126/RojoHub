@@ -1,7 +1,7 @@
 # Connect Studio once
 
 1. Open the place in Roblox Studio.
-2. In the Rojo plugin, set the address to `localhost` and the project's port. **Copy Address** in the project's menu puts it on your clipboard.
+2. In the Rojo plugin, set the address to `localhost` and the project's port. Clicking the port on the project's card copies it.
 3. Click **Connect**.
 4. In the plugin's settings, turn on **Auto Reconnect**.
 

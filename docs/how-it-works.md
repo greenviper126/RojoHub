@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.6.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.7.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -91,46 +91,89 @@ uninstall the extension. Delete `%LOCALAPPDATA%\RojoHub\` to remove its state an
 
 ## 4. Where to find it in VS Code
 
-- **The Rojo-Hub sidebar**: an icon in the activity bar (a hub: one dot joined to four). It opens
-  by itself the first time Rojo-Hub runs in a VS Code profile. It holds one list with two
-  dropdowns that are always there, like the lists in the Extensions view. Each folds open and
-  closed, and when empty shows a clickable row instead of disappearing:
-  - **▾ Projects** (with how many are serving): every project. `+` on the header adds one; when
-    there are none it shows *Add a project…*. Each row shows the project's port and what it
-    serves; warnings and errors appear as rows under it. Row buttons: switch branch, ▶/■ start or
-    stop.
-  - **▾ Groups** (with how many there are), below Projects: each group, itself a dropdown of its
-    projects. `+` on the header makes a group; when there are none it shows *Make a group…*.
-    Group row buttons: `+` add a project (a dropdown of the projects not in it yet), ▶/■ start or
-    stop the group. An empty group shows *Add a project…*. Project rows inside a group also have
-    ✕, which takes the project out of that group.
+### The Rojo-Hub panel
 
-  The sidebar's title bar has Open Menu and Refresh; its `…` menu has Add Project, New Group and
-  Stop Background Service. Hovering a row shows the full details; right-clicking a project or
-  group lists all its actions. Clicking a project opens its menu.
-- **Rojo-Hub: Open Menu** (command palette): the one command that reaches everything, like Rojo's
-  own *Rojo: Open Menu*. Lists projects, then groups, then Add Project, New Group, Port Settings,
-  Reconnect to Service, Stop Background Service. Picking a project or group opens its own menu.
-- **The status bar**: in a window whose folder belongs to a registered project, the bottom bar
-  shows `Rojo :<port> · <what it serves>` with its state icon. Clicking it opens that project's
-  menu.
-- **Get Started walkthrough**: on VS Code's Welcome page (Help → Welcome, then *Get Started with
-  Rojo-Hub*). Five steps: add, start, connect Studio, switch, group.
+An icon in the activity bar (a hub: one dot joined to four) opens the Rojo-Hub panel in the
+sidebar. It opens by itself the first time Rojo-Hub runs in a VS Code profile. The panel is built
+for Rojo-Hub and drawn in VS Code's theme colours and icons. Everything can be done from it; no
+menus pop up at the top of the window.
 
-**State icons**
-
-| Icon | Meaning |
+| The panel (sample data) | Switching branch inside a card |
 |---|---|
-| ⊘ circle-slash | stopped |
-| spinning | starting |
-| ○ green outline | serving, no Studio plugin connected |
-| ● green filled | serving, at least one Studio plugin connected |
-| ✖ red | error (hover for the message, or Show Rojo Log) |
-| ⧉ layers (green when all serving) | a group; the description says how many of its projects serve |
+| ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
+
+It has three sections that fold open and closed (the panel remembers which are folded), and a
+footer:
+
+**Projects** (the header shows how many are serving, and `+` adds a project). Each project is a
+card:
+
+- a **status light** and the project's **name** (a *this window* badge marks the project this VS
+  Code window is open on; those come first);
+- the **port** (`:35045`), which copies `localhost:35045` when clicked;
+- **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
+  the branch picker inside the card: a search box, then *Worktrees* (under Orca's names) and
+  *Branches*, with the current one ticked. Clicking one switches; Enter picks the first match,
+  Escape closes it. Studio stays connected;
+- a **status line**: *Studio connected*, *Serving · waiting for Studio*, *Starting…*, *Stopped* or
+  *Error*;
+- **warnings** (yellow) and **errors** (red), in full;
+- **Start** or **Stop**, and buttons for the Rojo log, copying the address, and removing the
+  project (which asks first).
+
+Running projects have a green edge, and projects with an error a red one. With no projects, the
+section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
+
+**Add a project** (the `+`) opens a list inside the panel of the folders open in this window and the
+repos Orca knows about, each with a `+`, and a *Browse…* button for any other folder. The new
+project's card is highlighted once it is added.
+
+**Groups** (the header shows how many; `+` makes one). *New group* opens a name box in the panel;
+Enter or *Create* makes it. Each group is a card that folds open and closed, showing how many of its
+projects are serving (green when all are). Inside:
+
+- its projects, each with a status light, port and branch, and ✕ to take it out of the group
+  (clicking a project's name jumps to its card);
+- an **Add a project…** dropdown listing the projects not in the group yet: picking one adds it;
+- **Start**, **Only this** (start this group, stop every other project) and **Stop**;
+- ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete?* in
+  place; the projects stay).
+
+**Port settings** (folded by default): the port range and excluded ports as text boxes, with
+*Save* and *Undo*. Mistakes are pointed out before saving. These edit the VS Code user settings
+described in [Settings](#12-settings).
+
+**Footer**: whether the background service is running, and its version, with *Stop* (or *Start*
+when it is not running) and Refresh.
+
+While an action runs, VS Code's progress bar shows at the top of the panel and the button that
+started it is disabled.
+
+### Other ways in
+
+- **Rojo-Hub: Open Menu** (command palette, and the list icon in the panel's title bar): the same
+  actions as quick-pick menus for keyboard use, like Rojo's own *Rojo: Open Menu*.
+- **The status bar**: in a window whose folder belongs to a registered project, the bottom bar
+  shows `Rojo :<port> · <what it serves>` with its state icon. Clicking it opens the panel and
+  highlights that project's card.
+- **Get Started walkthrough**: on VS Code's Welcome page (Help → Welcome, then *Get Started with
+  Rojo-Hub*), or *Getting started guide* in the empty panel. Five steps: add, start, connect
+  Studio, switch, group.
+
+**Status lights**
+
+| Light | Meaning |
+|---|---|
+| grey ring | stopped |
+| spinner | starting |
+| green ring | serving, no Studio plugin connected |
+| green dot | serving, at least one Studio plugin connected |
+| red dot | error (the card shows the message; the log has the rest) |
 
 ## 5. Projects
 
-**Add Project** offers the folders open in the window, the repos Orca knows about, and *Browse…*.
+**Add a project** (the `+` on Projects) lists the folders open in the window and the repos Orca
+knows about, and offers *Browse…*.
 Any folder inside a repo works; the primary checkout is what gets registered. Registration fails
 when:
 
@@ -244,24 +287,23 @@ the Worktrees list.
 ## 9. Groups
 
 A group is a named set of projects; a project can be in several groups. Groups live in the
-**Groups** dropdown of the sidebar, below Projects.
+**Groups** section of the panel, below Projects.
 
-- **Make one** with the `+` on the Groups header (or *New Group* in Open Menu): type a name, and a dropdown of
-  your projects opens for the first one. Escape leaves the group empty.
-- **Add projects** one at a time with the group's `+`: each click opens a dropdown of the projects
-  not in the group yet.
-- **Take a project out** with the ✕ on its row inside the group. The project stays registered.
+- **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name in the box that
+  appears and press Enter or *Create*.
+- **Add projects** with the group card's **Add a project…** dropdown, which lists the projects not
+  in the group yet. Pick one to add it; do it again for the next.
+- **Take a project out** with the ✕ next to it in the group. The project stays registered.
 
-A group's actions (its row buttons, right-click, or its entry in Open Menu):
+A group card's actions:
 
 | Action | Effect |
 |---|---|
-| **Add Project to Group** | The dropdown described above. |
-| **Start Group** | Starts every project in the group that is not already serving. |
-| **Serve Only This Group** | Starts the group, and stops every serving project outside it. The profile switch. |
-| **Stop Group** | Stops every project in the group. |
-| **Rename Group** | Changes its name. |
-| **Delete Group** | Deletes the group only; its projects stay registered and keep their state. |
+| **Start** | Starts every project in the group that is not already serving. |
+| **Only this** | Starts the group, and stops every serving project outside it. The profile switch. |
+| **Stop** | Stops every project in the group. |
+| ✎ **Rename** | Edit the name in place; Enter saves, Escape cancels. |
+| 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only; its projects stay registered and keep their state. |
 
 Projects that are already serving are left alone, so their Studio sessions continue. If some
 projects fail to start, the others still start and one message lists the failures. A group
@@ -336,23 +378,15 @@ Both are **user settings that apply to every project and window**; a workspace c
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to any project: numbers (`35000`) or ranges (`"35000-35010"`). 34872 is always excluded. |
 
-*Open Menu → Port Settings* opens them. Changes apply within a few seconds.
+The panel's **Port settings** section edits them, as does *Open Menu → Port Settings*. Changes apply
+within a few seconds.
 
 ## 13. Commands
 
-Only **Rojo-Hub: Open Menu** appears in the command palette. The others are reached through the
-menu, the sidebar, and the status bar.
-
-| Command | Where |
-|---|---|
-| Open Menu | Palette, sidebar title |
-| Add Project | `+` on the Projects header, sidebar `…`, menu |
-| Refresh | Sidebar title, menu |
-| Stop Background Service | Sidebar `…`, menu |
-| Switch Branch, Start/Stop Serving, Copy Address, Show Rojo Log, Remove Project | Project menu, right-click a project, ▶/■ on its row, clicking its row |
-| New Group | `+` on the Groups header, sidebar `…`, menu |
-| Add Project to Group, Start Group, Serve Only This Group, Stop Group, Rename Group, Delete Group | Group menu, right-click a group, `+` and ▶/■ on its row |
-| Remove from Group | ✕ on a project inside a group, right-click it there |
+Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). Only **Rojo-Hub:
+Open Menu** appears in the command palette; it offers the same actions as menus. The panel's title
+bar has Open Menu and Refresh, and its `…` menu has Add Project, New Group and Stop Background
+Service. Clicking the status bar item opens the panel on that window's project.
 
 ## 14. Known limits and troubleshooting
 
