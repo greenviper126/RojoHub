@@ -7,7 +7,7 @@ import { after, before, test } from "node:test";
 
 import { decode } from "@msgpack/msgpack";
 
-import type { SlotView, TargetOption } from "../common/api";
+import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
 import { parsePortSettings, preferredPort } from "../service/ports";
 
 /*
@@ -225,4 +225,57 @@ test("one port, live switches, one session", async () => {
 	assert.equal(stopped.state, "stopped");
 	await call("DELETE", `/slots/${slot.id}`);
 	assert.deepEqual(await call("GET", "/slots"), []);
+});
+
+async function makeRepo(name: string): Promise<string> {
+	const dir = join(root, name);
+	mkdirSync(dir, { recursive: true });
+	gitIn(dir, "init", "-q", "-b", "main");
+	write(join(dir, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	write(
+		join(dir, "default.project.json"),
+		JSON.stringify({ name: `${name}-${process.pid}`, tree: { $className: "DataModel", ServerScriptService: { $className: "ServerScriptService", Code: { $path: "src" } } } }),
+	);
+	write(join(dir, "src", "Main.server.luau"), `print("${name}")\n`);
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", name);
+	return dir;
+}
+
+test("groups start, serve only, stop, and forget removed projects", async () => {
+	const [one, two] = await Promise.all([makeRepo("GroupOne"), makeRepo("GroupTwo")]);
+	const a = await call<SlotView>("POST", "/slots", { path: one });
+	const b = await call<SlotView>("POST", "/slots", { path: two });
+	const state = async (id: string) => (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === id)!.state;
+
+	const both = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
+	const onlyA = await call<GroupView>("POST", "/groups", { name: "Just One", slotIds: [a.id] });
+	await assert.rejects(call("POST", "/groups", { name: "both", slotIds: [] }), /already a group/);
+	await assert.rejects(call("POST", "/groups", { name: "Ghost", slotIds: ["nope"] }), /No project/);
+
+	let result = await call<GroupResult>("POST", `/groups/${both.id}/start`, {});
+	assert.deepEqual(result.failed, []);
+	assert.deepEqual(result.started.sort(), [a.id, b.id].sort());
+	assert.equal(await state(a.id), "running");
+	assert.equal(await state(b.id), "running");
+	const sessionA = (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId;
+
+	result = await call<GroupResult>("POST", `/groups/${onlyA.id}/start`, { only: true });
+	assert.deepEqual(result.stopped, [b.id], "serve-only stops projects outside the group");
+	assert.deepEqual(result.started, [], "members already serving are left alone");
+	assert.equal(await state(b.id), "stopped");
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId, sessionA, "same session kept");
+
+	result = await call<GroupResult>("POST", `/groups/${both.id}/stop`);
+	assert.equal(await state(a.id), "stopped");
+
+	await call("PUT", `/groups/${both.id}`, { name: "Renamed" });
+	await call("DELETE", `/slots/${b.id}`);
+	const groups = await call<GroupView[]>("GET", "/groups");
+	assert.deepEqual(groups.find((group) => group.id === both.id)!.slotIds, [a.id], "removed project leaves its groups");
+	assert.equal(groups.find((group) => group.id === both.id)!.name, "Renamed");
+	await call("DELETE", `/groups/${both.id}`);
+	await call("DELETE", `/groups/${onlyA.id}`);
+	await call("DELETE", `/slots/${a.id}`);
+	assert.deepEqual(await call("GET", "/groups"), []);
 });

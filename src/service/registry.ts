@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Target } from "../common/api";
+import type { GroupView, Target } from "../common/api";
 
 /*
 	The slots the Hub knows about, persisted as JSON in the Hub's folder. Only
@@ -26,14 +26,19 @@ export interface SlotRecord {
 	activeView: string | null;
 }
 
+/** A named set of projects started and stopped together (spec 001, "Groups"). */
+export type GroupRecord = GroupView;
+
 interface RegistryFile {
 	version: 1;
 	slots: SlotRecord[];
+	groups?: GroupRecord[];
 }
 
 export class Registry {
 	private readonly file: string;
 	slots: SlotRecord[] = [];
+	groups: GroupRecord[] = [];
 
 	constructor(readonly home: string) {
 		this.file = join(home, "registry.json");
@@ -41,11 +46,12 @@ export class Registry {
 		if (existsSync(this.file)) {
 			const parsed = JSON.parse(readFileSync(this.file, "utf8")) as RegistryFile;
 			this.slots = parsed.slots ?? [];
+			this.groups = parsed.groups ?? [];
 		}
 	}
 
 	save(): void {
-		const body: RegistryFile = { version: 1, slots: this.slots };
+		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups };
 		const temporary = this.file + ".tmp";
 		writeFileSync(temporary, JSON.stringify(body, null, "\t") + "\n");
 		renameSync(temporary, this.file);
@@ -55,6 +61,12 @@ export class Registry {
 		const slot = this.slots.find((entry) => entry.id === id);
 		if (!slot) throw new NotFound(`No project with id "${id}"`);
 		return slot;
+	}
+
+	group(id: string): GroupRecord {
+		const group = this.groups.find((entry) => entry.id === id);
+		if (!group) throw new NotFound(`No group with id "${id}"`);
+		return group;
 	}
 }
 

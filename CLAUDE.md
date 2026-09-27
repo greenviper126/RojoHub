@@ -12,7 +12,7 @@ npm run typecheck
 npm test              # unit + end-to-end against a real rojo 7.7 (Rokit's, on PATH) and a temp git repo
 npm run build         # esbuild -> dist/extension.js, dist/service.js
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.3.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.4.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
@@ -32,6 +32,11 @@ the running service.
   folder loses a subfolder (rojo-rbx/rojo#1305) and never unwatches. Views are per commit and are
   collected only while the slot's rojo is stopped.
 - Restarting rojo means a new session, so Studio disconnects. Switching must never restart it.
+
+## Documentation
+
+`docs/how-it-works.md` describes every feature, command, setting and file, and is the source for
+user documentation. Update it in the same change as any user-visible behaviour, alongside the spec.
 
 ## Working with Viper
 

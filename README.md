@@ -13,7 +13,8 @@ branch or Orca worktree without Studio's Rojo connection dropping.
 - **Background service.** A small local service owns the Rojo processes, so closing VS Code windows
   does not stop serving. It listens on `127.0.0.1:34870`.
 
-How it works, what was measured, and the known Rojo 7.7 crash on folder deletion:
+Full description of every feature, setting and file, for users and for writing user docs:
+[`docs/how-it-works.md`](docs/how-it-works.md). Why it is built this way, with measurements:
 [`specs/001-rojo-hub-foundation.md`](specs/001-rojo-hub-foundation.md).
 
 ## Install
@@ -21,7 +22,7 @@ How it works, what was measured, and the known Rojo 7.7 crash on folder deletion
 ```sh
 npm install
 npm run package
-code --install-extension rojo-hub-0.3.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.4.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 ```
 
 ## Develop

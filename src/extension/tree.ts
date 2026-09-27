@@ -1,22 +1,44 @@
 import * as vscode from "vscode";
 
-import type { SlotView } from "../common/api";
+import type { GroupView, SlotView } from "../common/api";
 
 /*
-	The Projects view: one row per slot, with its warnings and error as child
-	rows so they are readable without hovering.
+	The Projects view: groups as folders holding their projects, then the
+	projects in no group. A project in several groups appears under each.
+	Warnings and errors are child rows, so they read without hovering.
 */
 
 export class SlotItem extends vscode.TreeItem {
-	constructor(readonly slot: SlotView) {
+	constructor(
+		readonly slot: SlotView,
+		parent: string,
+	) {
 		const details = [...(slot.error ? [slot.error.split("\n")[0]] : []), ...slot.warnings];
 		super(slot.projectName, details.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
-		this.id = slot.id;
+		this.id = `${parent}/${slot.id}`;
 		this.description = `:${slot.port} · ${slot.targetLabel || "—"}`;
 		this.contextValue = slot.state === "running" || slot.state === "starting" ? "slot.running" : "slot.stopped";
-		this.iconPath = icon(slot);
+		this.iconPath = slotIcon(slot);
 		this.tooltip = tooltip(slot);
-		this.command = { command: "rojoHub.switch", title: "Switch Branch", arguments: [this] };
+		this.command = { command: "rojoHub.projectMenu", title: "Project Menu", arguments: [slot.id] };
+	}
+}
+
+export class GroupItem extends vscode.TreeItem {
+	constructor(
+		readonly group: GroupView,
+		readonly members: SlotView[],
+	) {
+		super(group.name, vscode.TreeItemCollapsibleState.Expanded);
+		const serving = members.filter((slot) => slot.state === "running").length;
+		this.id = `group/${group.id}`;
+		this.description = members.length === 0 ? "empty" : `${serving}/${members.length} serving`;
+		this.contextValue = serving === members.length && members.length > 0 ? "group.running" : serving > 0 ? "group.partial" : "group.stopped";
+		this.iconPath = new vscode.ThemeIcon(
+			"layers",
+			serving > 0 && serving === members.length ? new vscode.ThemeColor("testing.iconPassed") : undefined,
+		);
+		this.tooltip = `${group.name}: ${members.map((slot) => slot.projectName).join(", ") || "no projects"}`;
 	}
 }
 
@@ -28,7 +50,7 @@ export class DetailItem extends vscode.TreeItem {
 	}
 }
 
-function icon(slot: SlotView): vscode.ThemeIcon {
+function slotIcon(slot: SlotView): vscode.ThemeIcon {
 	switch (slot.state) {
 		case "running":
 			return slot.connections > 0
@@ -47,7 +69,7 @@ function tooltip(slot: SlotView): vscode.MarkdownString {
 	const studio =
 		slot.state !== "running" ? "—" : slot.connections === 0 ? "no plugin connected" : `${slot.connections} plugin${slot.connections === 1 ? "" : "s"} connected`;
 	const lines = [
-		`**${slot.projectName}** on \`localhost:${slot.port}\``,
+		`**${slot.projectName}** on \`localhost:${slot.port}\`${slot.portSource === "servePort" ? " (servePort)" : ""}`,
 		"",
 		`State: ${slot.state} · Studio: ${studio}`,
 		`Serving: ${slot.targetLabel}${slot.branch && slot.branch !== slot.targetLabel ? ` (${slot.branch})` : ""}`,
@@ -63,13 +85,15 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	private readonly changed = new vscode.EventEmitter<void>();
 	readonly onDidChangeTreeData = this.changed.event;
 	private slots: SlotView[] = [];
+	private groups: GroupView[] = [];
 	private signature = "";
 
-	update(slots: SlotView[]): void {
-		const signature = JSON.stringify(slots);
+	update(slots: SlotView[], groups: GroupView[]): void {
+		const signature = JSON.stringify([slots, groups]);
 		if (signature === this.signature) return;
 		this.signature = signature;
 		this.slots = slots;
+		this.groups = groups;
 		this.changed.fire();
 	}
 
@@ -78,7 +102,14 @@ export class SlotTree implements vscode.TreeDataProvider<vscode.TreeItem> {
 	}
 
 	getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
-		if (!element) return this.slots.map((slot) => new SlotItem(slot));
+		if (!element) {
+			const grouped = new Set(this.groups.flatMap((group) => group.slotIds));
+			return [
+				...this.groups.map((group) => new GroupItem(group, group.slotIds.map((id) => this.slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot))),
+				...this.slots.filter((slot) => !grouped.has(slot.id)).map((slot) => new SlotItem(slot, "root")),
+			];
+		}
+		if (element instanceof GroupItem) return element.members.map((slot) => new SlotItem(slot, element.group.id));
 		if (element instanceof SlotItem) {
 			const slot = element.slot;
 			return [

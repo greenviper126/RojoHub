@@ -3,9 +3,9 @@ import { dirname, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import type { SlotView, TargetOption } from "../common/api";
+import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
 import { client, ensureService } from "./client";
-import { SlotItem, SlotTree } from "./tree";
+import { GroupItem, SlotItem, SlotTree } from "./tree";
 
 /*
 	The front end. All state lives in the background service; this polls it and
@@ -18,6 +18,7 @@ let tree: SlotTree;
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
+let lastGroups: GroupView[] = [];
 
 function pathKey(path: string): string {
 	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -33,11 +34,12 @@ function primaryOf(folder: string): Promise<string | null> {
 
 async function refresh(): Promise<void> {
 	try {
-		lastSlots = await client.slots();
+		[lastSlots, lastGroups] = await Promise.all([client.slots(), client.groups()]);
 	} catch {
 		lastSlots = [];
+		lastGroups = [];
 	}
-	tree.update(lastSlots);
+	tree.update(lastSlots, lastGroups);
 	updateStatus();
 }
 
@@ -118,9 +120,21 @@ async function openMenu(): Promise<void> {
 		detail: stateText(slot),
 		run: () => projectMenu(slot.id),
 	}));
+	if (lastGroups.length > 0) items.push({ label: "Groups", kind: vscode.QuickPickItemKind.Separator });
+	for (const group of lastGroups) {
+		const members = groupMembers(group);
+		const serving = members.filter((slot) => slot.state === "running").length;
+		items.push({
+			label: `$(layers) ${group.name}`,
+			description: members.map((slot) => slot.projectName).join(", ") || "empty",
+			detail: `${serving}/${members.length} serving`,
+			run: () => groupMenu(group.id),
+		});
+	}
 	items.push(
 		{ label: "Rojo-Hub", kind: vscode.QuickPickItemKind.Separator },
 		{ label: "$(add) Add Project", run: () => addProject() },
+		{ label: "$(new-folder) New Group", description: "a set of projects to start together", run: () => newGroup() },
 		{ label: "$(gear) Port Settings", description: "range and globally excluded ports", run: () => vscode.commands.executeCommand("workbench.action.openSettings", "rojoHub") },
 		{ label: "$(refresh) Reconnect to Service", run: () => vscode.commands.executeCommand("rojoHub.refresh") },
 		{ label: "$(debug-stop) Stop Background Service", run: () => vscode.commands.executeCommand("rojoHub.stopService") },
@@ -150,6 +164,114 @@ async function projectMenu(id: string): Promise<void> {
 		title: `${slot.projectName} · :${slot.port} · ${stateText(slot)}`,
 		placeHolder: warnings.length > 0 ? `⚠ ${warnings[0]}` : "What should this project do?",
 	});
+	await picked?.run?.();
+}
+
+function groupMembers(group: GroupView): SlotView[] {
+	return group.slotIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
+}
+
+async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
+	if (argument instanceof GroupItem) return argument.group;
+	if (typeof argument === "string") return lastGroups.find((group) => group.id === argument);
+	await refresh();
+	if (lastGroups.length === 0) {
+		void vscode.window.showInformationMessage("No Rojo-Hub groups yet. Make one with New Group.");
+		return undefined;
+	}
+	const items = lastGroups.map((group) => ({ label: group.name, description: groupMembers(group).map((slot) => slot.projectName).join(", "), group }));
+	return (await vscode.window.showQuickPick(items, { placeHolder: placeholder }))?.group;
+}
+
+/** Multi-select of projects, with `selected` pre-ticked. */
+async function pickMembers(title: string, selected: string[]): Promise<string[] | undefined> {
+	await refresh();
+	if (lastSlots.length === 0) {
+		void vscode.window.showInformationMessage("Add a project first; groups are made of projects.");
+		return undefined;
+	}
+	const items = lastSlots.map((slot) => ({ label: slot.projectName, description: `:${slot.port}`, picked: selected.includes(slot.id), id: slot.id }));
+	const picked = await vscode.window.showQuickPick(items, { title, canPickMany: true, placeHolder: "Tick the projects in this group" });
+	return picked?.map((item) => item.id);
+}
+
+async function newGroup(): Promise<void> {
+	const name = await vscode.window.showInputBox({ title: "New Group", prompt: "Name the group (for example Laundry Shift, or Framework work)" });
+	if (!name?.trim()) return;
+	const members = await pickMembers(`Projects in ${name.trim()}`, []);
+	if (!members) return;
+	const group = await run(`Creating ${name.trim()}`, () => client.createGroup(name, members));
+	if (group) await groupMenu(group.id);
+}
+
+async function editGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Edit which group?");
+	if (!group) return;
+	const choice = await vscode.window.showQuickPick(
+		[
+			{ label: "$(checklist) Change Projects", action: "members" as const },
+			{ label: "$(edit) Rename", action: "rename" as const },
+		],
+		{ title: `Edit ${group.name}` },
+	);
+	if (choice?.action === "members") {
+		const members = await pickMembers(`Projects in ${group.name}`, group.slotIds);
+		if (members) await run(`Updating ${group.name}`, () => client.updateGroup(group.id, { slotIds: members }));
+	} else if (choice?.action === "rename") {
+		const name = await vscode.window.showInputBox({ title: `Rename ${group.name}`, value: group.name });
+		if (name?.trim()) await run(`Renaming ${group.name}`, () => client.updateGroup(group.id, { name }));
+	}
+}
+
+async function deleteGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Delete which group?");
+	if (!group) return;
+	const sure = await vscode.window.showWarningMessage(
+		`Delete the group ${group.name}? Its projects stay registered and keep serving.`,
+		{ modal: true },
+		"Delete Group",
+	);
+	if (sure) await run(`Deleting ${group.name}`, () => client.deleteGroup(group.id));
+}
+
+/** Tells the user about projects a group action could not start or stop. */
+function reportGroup(result: GroupResult | undefined): void {
+	if (!result || result.failed.length === 0) return;
+	const name = (id: string) => lastSlots.find((slot) => slot.id === id)?.projectName ?? id;
+	void vscode.window.showErrorMessage(`Rojo-Hub (${result.group.name}): ${result.failed.map((entry) => `${name(entry.id)}: ${entry.error.split("\n")[0]}`).join("; ")}`);
+}
+
+async function startGroup(argument: unknown, only: boolean): Promise<void> {
+	const group = await pickGroup(argument, only ? "Serve only which group?" : "Start which group?");
+	if (!group) return;
+	reportGroup(await run(only ? `Serving only ${group.name}` : `Starting ${group.name}`, () => client.startGroup(group.id, only)));
+}
+
+async function stopGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Stop which group?");
+	if (!group) return;
+	reportGroup(await run(`Stopping ${group.name}`, () => client.stopGroup(group.id)));
+}
+
+async function groupMenu(id: string): Promise<void> {
+	await refresh();
+	const group = lastGroups.find((entry) => entry.id === id);
+	if (!group) return openMenu();
+	const members = groupMembers(group);
+	const items: MenuItem[] = [
+		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id, false) },
+		{ label: "$(target) Serve Only This Group", description: "start these, stop every other project", run: () => startGroup(group.id, true) },
+		{ label: "$(debug-stop) Stop Group", run: () => stopGroup(group.id) },
+		{ label: "$(edit) Edit Group", run: () => editGroup(group.id) },
+		{ label: "$(trash) Delete Group", run: () => deleteGroup(group.id) },
+	];
+	if (members.length > 0) items.push({ label: "Projects", kind: vscode.QuickPickItemKind.Separator });
+	for (const slot of members) {
+		items.push({ label: `${slotIcon(slot)} ${slot.projectName}`, description: `:${slot.port} · ${slot.targetLabel}`, detail: stateText(slot), run: () => projectMenu(slot.id) });
+	}
+	items.push({ label: "", kind: vscode.QuickPickItemKind.Separator }, { label: "$(arrow-left) All Projects", run: () => openMenu() });
+	const serving = members.filter((slot) => slot.state === "running").length;
+	const picked = await vscode.window.showQuickPick(items, { title: `${group.name} · ${serving}/${members.length} serving` });
 	await picked?.run?.();
 }
 
@@ -265,6 +387,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.openMenu": () => openMenu(),
 		"rojoHub.projectMenu": (argument) => (typeof argument === "string" ? projectMenu(argument) : openMenu()),
 		"rojoHub.addProject": () => addProject(),
+		"rojoHub.newGroup": () => newGroup(),
+		"rojoHub.editGroup": (argument) => editGroup(argument),
+		"rojoHub.deleteGroup": (argument) => deleteGroup(argument),
+		"rojoHub.startGroup": (argument) => startGroup(argument, false),
+		"rojoHub.soloGroup": (argument) => startGroup(argument, true),
+		"rojoHub.stopGroup": (argument) => stopGroup(argument),
+		"rojoHub.groupMenu": (argument) => (typeof argument === "string" ? groupMenu(argument) : openMenu()),
 		"rojoHub.switch": (argument) => switchSlot(argument),
 		"rojoHub.start": async (argument) => {
 			const slot = await pickSlot(argument, "Start which project?");
@@ -334,6 +463,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 	);
 	await refresh();
+
+	/*
+		The first time Rojo-Hub runs in a VS Code profile, open its sidebar so a
+		new user sees where it lives and the Add Project button.
+	*/
+	if (!context.globalState.get<boolean>("rojoHub.revealed")) {
+		await context.globalState.update("rojoHub.revealed", true);
+		void vscode.commands.executeCommand("workbench.view.extension.rojoHub");
+	}
+
 	const timer = setInterval(() => void refresh(), POLL_MS);
 	context.subscriptions.push({ dispose: () => clearInterval(timer) });
 }

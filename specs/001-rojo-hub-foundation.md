@@ -24,6 +24,10 @@ to keep several projects served side by side without hand-managing ports.
       its repo's first commit into the range, so it is the same on every machine, after every
       reinstall, and across restarts and branch switches. 34872 (Rojo's default) is never used.
 - [ ] Ports can be excluded globally, for all projects, from VS Code's user settings.
+- [ ] Projects can be grouped; a group starts, stops, or serves exclusively (stopping everything
+      else) in one action, leaving already-serving members' sessions alone.
+- [ ] Everything is reachable from one command, *Rojo-Hub: Open Menu*; the sidebar opens itself
+      the first time Rojo-Hub runs in a VS Code profile.
 - [ ] Two registered projects can serve at the same time, each on its own port, each with its own
       `rojo` binary chosen by that project's `rokit.toml`.
 - [ ] Registering refuses a project whose Rojo project name is already used by another slot (the
@@ -205,6 +209,15 @@ Implemented in `src/service/ports.ts`; recomputed every 3 s and on every change.
 A running slot whose port changes (a new `servePort`, a new exclusion) is stopped and restarted on
 the new port: a new session, so the slot tells you to reconnect Studio. A port held by a program
 outside the Hub is reported at start, suggesting an exclusion.
+
+### Groups
+
+Asked for by Viper on 2026-09-27 ("kinda like a profile"). Implemented in `src/service/groups.ts`,
+stored in `registry.json`. A group is a name and an ordered list of project ids; a project can be
+in several. Start Group starts members not already serving; Serve Only This Group also stops every
+serving project outside it; Stop Group stops members. Already-serving members are never restarted,
+so their sessions survive. Failures are collected per project, not fatal to the rest. Groups hold
+membership only, not branches (possible follow-up). Removing a project removes it from its groups.
 
 ### Connection state
 

@@ -305,6 +305,7 @@ export class Hub {
 			await this.collectViews(slot);
 			rmSync(this.slotDir(id), { recursive: true, force: true });
 			this.registry.slots = this.registry.slots.filter((entry) => entry.id !== id);
+			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
 			this.registry.save();
 			this.runtimes.delete(id);
 		});

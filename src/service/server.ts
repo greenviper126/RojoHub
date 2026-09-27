@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { SERVICE_VERSION, type Health, type Target } from "../common/api";
+import { Groups } from "./groups";
 import type { Hub } from "./hub";
 import { Conflict, NotFound } from "./registry";
 
@@ -15,6 +16,12 @@ import { Conflict, NotFound } from "./registry";
 	POST   /slots/:id/stop
 	GET    /slots/:id/targets
 	POST   /slots/:id/switch      { target }
+	GET    /groups
+	POST   /groups                { name, slotIds }
+	PUT    /groups/:id            { name?, slotIds? }
+	DELETE /groups/:id
+	POST   /groups/:id/start      { only? }   only: also stop every project outside the group
+	POST   /groups/:id/stop
 	PUT    /settings              { portRange?, excludedPorts? }
 	POST   /shutdown              { stopServing? }
 */
@@ -37,7 +44,12 @@ function isTarget(value: unknown): value is Target {
 	return (target.kind === "worktree" && typeof target.path === "string") || (target.kind === "branch" && typeof target.ref === "string");
 }
 
+function isIdList(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void) {
+	const groups = new Groups(hub);
 	const server = createServer(async (request, response) => {
 		try {
 			const url = new URL(request.url ?? "/", "http://localhost");
@@ -58,6 +70,32 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				const input = await body(request);
 				send(response, 200, { ok: true });
 				return onShutdown(input.stopServing === true);
+			}
+			if (parts[0] === "groups" && parts.length === 1) {
+				if (method === "GET") return send(response, 200, groups.list());
+				if (method === "POST") {
+					const input = await body(request);
+					if (typeof input.name !== "string" || !isIdList(input.slotIds)) return send(response, 400, { error: "name and slotIds are required" });
+					return send(response, 200, groups.create(input.name, input.slotIds));
+				}
+			}
+			if (parts[0] === "groups" && parts.length >= 2) {
+				const id = parts[1];
+				const action = parts[2];
+				if (method === "PUT" && !action) {
+					const input = await body(request);
+					if (input.slotIds !== undefined && !isIdList(input.slotIds)) return send(response, 400, { error: "slotIds must be a list of project ids" });
+					return send(response, 200, groups.update(id, { name: typeof input.name === "string" ? input.name : undefined, slotIds: input.slotIds as string[] | undefined }));
+				}
+				if (method === "DELETE" && !action) {
+					groups.remove(id);
+					return send(response, 200, { ok: true });
+				}
+				if (method === "POST" && action === "start") {
+					const input = await body(request);
+					return send(response, 200, await groups.start(id, input.only === true));
+				}
+				if (method === "POST" && action === "stop") return send(response, 200, await groups.stop(id));
 			}
 			if (parts[0] === "slots" && parts.length === 1) {
 				if (method === "GET") return send(response, 200, hub.list());

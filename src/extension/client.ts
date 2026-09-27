@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { SERVICE_PORT, SERVICE_VERSION, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -70,6 +70,12 @@ export const client = {
 	stop: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/stop`),
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
 	switch: (id: string, target: Target) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/switch`, { target }),
+	groups: () => call<GroupView[]>("GET", "/groups"),
+	createGroup: (name: string, slotIds: string[]) => call<GroupView>("POST", "/groups", { name, slotIds }),
+	updateGroup: (id: string, changes: { name?: string; slotIds?: string[] }) => call<GroupView>("PUT", `/groups/${encodeURIComponent(id)}`, changes),
+	deleteGroup: (id: string) => call<{ ok: true }>("DELETE", `/groups/${encodeURIComponent(id)}`),
+	startGroup: (id: string, only: boolean) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/start`, { only }),
+	stopGroup: (id: string) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/stop`),
 	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };
