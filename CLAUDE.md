@@ -12,7 +12,7 @@ npm run typecheck
 npm test              # unit + end-to-end against a real rojo 7.7 (Rokit's, on PATH) and a temp git repo
 npm run build         # esbuild -> dist/extension.js, dist/service.js
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.2.0.vsix
+code --install-extension rojo-hub-0.2.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
