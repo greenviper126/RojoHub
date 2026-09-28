@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -363,6 +363,7 @@
     "@vscode/codicons": "^0.0.46-24",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
+    "jsonc-parser": "^3.3.1",
     "typescript": "^7.0.2"
   }
 }

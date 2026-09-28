@@ -596,3 +596,33 @@ button:focus-visible {
 .banner p {
 	margin: 0;
 }
+
+/* ---------- workspaces in the Projects list ---------- */
+
+.workspace {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.workspace-head {
+	min-height: 22px;
+	padding: 0 2px;
+}
+
+.workspace-head .name {
+	font-weight: 600;
+}
+
+.workspace-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-left: 6px;
+	padding-left: 8px;
+	border-left: 1px solid var(--border);
+}
+
+.member.addable .codicon-folder {
+	opacity: 0.7;
+}

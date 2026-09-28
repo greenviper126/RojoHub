@@ -6,9 +6,10 @@ import * as vscode from "vscode";
 
 import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
-import type { Candidate, FromPanel } from "../common/panel";
+import type { Candidate, FromPanel, WorkspaceInfo } from "../common/panel";
 import { client, ensureService } from "./client";
 import { savedState } from "./saved";
+import { findWorkspaces } from "./workspaces";
 import { HubPanel } from "./panel";
 
 /*
@@ -36,12 +37,37 @@ function pathKey(path: string): string {
 	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+/** Primary checkouts by folder; a folder's repo does not change while the window is open. */
+const primaries = new Map<string, Promise<string | null>>();
+
 function primaryOf(folder: string): Promise<string | null> {
-	return new Promise((done) => {
-		execFile("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: folder, windowsHide: true }, (error, stdout) => {
-			done(error ? null : resolve(dirname(stdout.trim())));
+	const key = pathKey(folder);
+	let found = primaries.get(key);
+	if (!found) {
+		found = new Promise((done) => {
+			execFile("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: folder, windowsHide: true }, (error, stdout) => {
+				done(error ? null : resolve(dirname(stdout.trim())));
+			});
 		});
-	});
+		primaries.set(key, found);
+	}
+	return found;
+}
+
+let lastWorkspaces: WorkspaceInfo[] = [];
+let workspaceSignature = "";
+
+/*
+	Re-reads the workspace files when the set of projects or the window's
+	workspace changes, or when forced (Refresh, after adding). The files are
+	small, but there is no reason to read them every two seconds.
+*/
+async function refreshWorkspaces(force = false): Promise<void> {
+	const windowFile = vscode.workspace.workspaceFile?.scheme === "file" ? vscode.workspace.workspaceFile.fsPath : null;
+	const signature = JSON.stringify([windowFile, lastSlots.map((slot) => [slot.id, slot.repoPath])]);
+	if (!force && signature === workspaceSignature) return;
+	workspaceSignature = signature;
+	lastWorkspaces = await findWorkspaces({ windowFile, slots: lastSlots, primaryOf }).catch(() => []);
 }
 
 /*
@@ -82,6 +108,7 @@ async function refresh(): Promise<void> {
 		lastGroups = [];
 	}
 	if (!health) ({ slots: lastSlots, groups: lastGroups } = savedState(hubHome, lastSlots));
+	await refreshWorkspaces();
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
 		service: serviceHealth,
@@ -89,6 +116,7 @@ async function refresh(): Promise<void> {
 		groups: lastGroups,
 		settings: { portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) },
 		here: lastSlots.filter((slot) => workspaceRepos.includes(pathKey(slot.repoPath))).map((slot) => slot.id),
+		workspaces: lastWorkspaces,
 	});
 	updateStatus();
 }
@@ -531,8 +559,26 @@ async function onPanel(message: FromPanel): Promise<void> {
 			return refresh();
 		case "refresh":
 			serviceHealth.error = null;
+			workspaceSignature = "";
 			await act("service", async () => undefined);
 			return;
+		case "addWorkspace": {
+			const workspace = lastWorkspaces.find((entry) => entry.file === message.file);
+			if (!workspace) return;
+			for (const folder of workspace.addable) await act("add", () => client.add(folder.path));
+			workspaceSignature = "";
+			await refresh();
+			return;
+		}
+		case "groupWorkspace": {
+			const workspace = lastWorkspaces.find((entry) => entry.file === message.file);
+			if (!workspace || workspace.slotIds.length === 0) return;
+			const taken = new Set(lastGroups.map((group) => group.name.toLowerCase()));
+			let name = workspace.name;
+			for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${workspace.name} ${n}`;
+			await act("group:new", () => client.createGroup(name, workspace.slotIds));
+			return;
+		}
 		case "stopAll":
 			await act("stop-all", async () => reportStopAll(await client.stopAll()));
 			return;
@@ -572,6 +618,7 @@ async function onPanel(message: FromPanel): Promise<void> {
 			const path = message.type === "addProject" ? message.path : await browseForProject();
 			if (!path) return;
 			const added = await act("add", () => client.add(path));
+			workspaceSignature = "";
 			if (added) await panel.focus(added.id);
 			return;
 		}

@@ -321,6 +321,60 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	</section>`;
 }
 
+/*
+	The Projects list, grouped by VS Code workspace when projects belong to
+	one. Purely visual: each project is drawn once, under the first workspace
+	that lists it (the window's own workspace first); other workspaces that
+	also list it show a short row that jumps to its card.
+*/
+function projectsList(slots: SlotView[]): string {
+	const workspaces = state?.workspaces ?? [];
+	if (workspaces.length === 0) return slots.map(projectCard).join("");
+	const home = new Map<string, string>();
+	for (const workspace of workspaces) for (const id of workspace.slotIds) if (!home.has(id)) home.set(id, workspace.file);
+	const byId = new Map(slots.map((slot) => [slot.id, slot]));
+
+	const blocks = workspaces.map((workspace) => {
+		const key = `ws:${workspace.file}`;
+		const collapsed = !!ui.collapsed[key];
+		const own = workspace.slotIds.filter((id) => home.get(id) === workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
+		const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
+		const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
+		const count = `${serving}/${workspace.slotIds.length}`;
+		const head = `<div class="row workspace-head">
+			<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
+			${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${count}</span>` : ""}
+			${workspace.isWindow ? `<span class="badge" title="The workspace this window has open">this window</span>` : ""}
+			<span class="grow"></span>
+			${workspace.slotIds.length ? button("group-workspace", "Group", { icon: "layers", kind: "ghost", data: { file: workspace.file }, title: `Make a group of this workspace's ${workspace.slotIds.length} project${workspace.slotIds.length === 1 ? "" : "s"}` }) : ""}
+		</div>`;
+		if (collapsed) return `<div class="workspace">${head}</div>`;
+		const elsewhereRows = elsewhere
+			.map(
+				(slot) => `<div class="member">${dot(slot)}<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">shown above</span></div>`,
+			)
+			.join("");
+		const addableRows = workspace.addable
+			.map(
+				(folder) => `<div class="member addable">${icon("folder")}<span class="grow ellipsis" title="${escape(folder.path)}">${escape(folder.label)}</span><span class="sub">not added</span>${button("add", "Add", { icon: "add", kind: "secondary", data: { path: folder.path }, title: `Add ${folder.label} to Rojo-Hub` })}</div>`,
+			)
+			.join("");
+		const addAll = workspace.addable.length > 1 ? `<div class="row">${button("add-workspace", `Add all ${workspace.addable.length}`, { icon: "add", kind: "secondary", data: { file: workspace.file } })}</div>` : "";
+		return `<div class="workspace">${head}<div class="workspace-body">${own.map(projectCard).join("")}${elsewhereRows}${addableRows}${addAll}</div></div>`;
+	});
+
+	const loose = slots.filter((slot) => !home.has(slot.id));
+	if (loose.length > 0) {
+		const key = "ws:other";
+		const collapsed = !!ui.collapsed[key];
+		blocks.push(`<div class="workspace other">
+			<div class="row workspace-head"><button class="group-toggle" data-action="toggle-section" data-id="${key}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
+			${collapsed ? "" : `<div class="workspace-body">${loose.map(projectCard).join("")}</div>`}
+		</div>`);
+	}
+	return blocks.join("");
+}
+
 /* ---------- whole panel ---------- */
 
 function render(): void {
@@ -345,7 +399,7 @@ function render(): void {
 				${button("open-adder", "Add a project", { icon: "add", kind: "primary" })}
 				${button("walkthrough", "Getting started guide", { icon: "book", kind: "ghost" })}
 			</div>`
-			: slots.map(projectCard).join(""));
+			: projectsList(slots));
 
 	const groupsBody =
 		newGroupForm() +
@@ -567,6 +621,12 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "refresh":
 			return send({ type: "refresh" });
+		case "add-workspace":
+			return send({ type: "addWorkspace", file: target.dataset.file ?? "" });
+		case "group-workspace":
+			ui.collapsed.groups = false;
+			persist();
+			return send({ type: "groupWorkspace", file: target.dataset.file ?? "" });
 		case "stop-all":
 			ui.confirmStopAll = true;
 			return render();

@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.9.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.10.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -125,6 +125,13 @@ card:
 Running projects have a green edge, and projects with an error a red one. With no projects, the
 section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
 
+**Grouped by workspace.** When projects belong to a VS Code workspace (a `.code-workspace`
+file), the Projects list groups them under that workspace's name, with its serving count, a *this
+window* badge for the workspace this window has open, and a **Group** button that makes a group
+of its projects. Folders the workspace lists that have a `default.project.json` but are not added
+yet appear under it as *not added* with an **Add** button (and *Add all* when there are several).
+Projects in no workspace are under **Other projects**. See [Workspaces](#workspaces).
+
 **Add a project** (the `+`) opens a list inside the panel of the folders open in this window and the
 repos Orca knows about, each with a `+`, and a *Browse…* button for any other folder. The new
 project's card is highlighted once it is added.
@@ -202,6 +209,26 @@ are left alone.
 
 **Remove Project** stops its Rojo, deletes its generated files and views, and removes it from every
 group. The project's own files are never touched.
+
+### Workspaces
+
+A VS Code workspace file (`.code-workspace`) lists folders that open together, like
+`TheLaundryShift.code-workspace` listing TheLaundryShift, VluxyAI and VluxySF. Rojo-Hub uses them
+only to arrange the Projects list; nothing about a project changes.
+
+- **Where it looks**: the workspace file this window has open, and the top folder of every added
+  project. Comments and trailing commas in the file are fine; remote (`uri`) folders are ignored.
+- **Which projects**: each folder the file lists is matched to an added project by its repo's
+  primary checkout, so a worktree folder counts as its project.
+- **Drawn once**: a project listed by two workspaces is drawn under the first (this window's
+  workspace first, then by name); the other shows a short *shown above* row that jumps to it.
+- **Adding and removing** stays per project: *Add* (or *Add all*) under a workspace adds its
+  folders one by one as ordinary projects, and a project's trash button removes it as usual.
+- **Group**: makes a group named after the workspace (or *Name 2*, … if taken) holding its added
+  projects. It is an ordinary group from then on; later changes to the workspace file do not
+  change it.
+- The workspace files are re-read when projects are added or removed, when the window's workspace
+  changes, and on Refresh.
 
 ## 6. Ports
 

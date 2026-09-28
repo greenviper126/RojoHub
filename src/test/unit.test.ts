@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import { expandGroup, pathBetween } from "../common/groups";
 import { savedState } from "../extension/saved";
+import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { parseWorktrees } from "../service/git";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
@@ -232,4 +233,53 @@ test("savedState shows the registry's projects and groups while the service is s
 	]);
 	writeFileSync(join(home, "registry.json"), "{ not json");
 	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "a broken file shows nothing rather than failing");
+});
+
+test("parseWorkspaceFile reads VS Code's commented, trailing-comma workspace files", () => {
+	const text = `{
+		// the main game and its libraries
+		"folders": [
+			{ "path": "." },
+			{ "path": "../VluxyAI" }, /* shared AI */
+			{ "uri": "vscode-remote://ssh/elsewhere" },
+			{ "path": "C:/abs/Thing", "name": "Thing" },
+		],
+		"settings": {},
+	}`;
+	const file = join("C:/r/TLS", "TLS.code-workspace");
+	assert.deepEqual(parseWorkspaceFile(text, file), [resolve("C:/r/TLS"), resolve("C:/r/VluxyAI"), resolve("C:/abs/Thing")]);
+});
+
+test("findWorkspaces groups registered projects and lists addable folders", async () => {
+	const root = mkdtempSync(join(tmpdir(), "rojo-hub-ws-"));
+	const make = (name: string, project: boolean) => {
+		mkdirSync(join(root, name), { recursive: true });
+		if (project) writeFileSync(join(root, name, "default.project.json"), "{}");
+	};
+	make("Game", true);
+	make("Lib", true);
+	make("Docs", false);
+	make("Solo", true);
+	writeFileSync(join(root, "Game", "Game.code-workspace"), JSON.stringify({ folders: [{ path: "." }, { path: "../Lib" }, { path: "../Docs" }, { path: "../Missing" }] }));
+	writeFileSync(join(root, "Solo", "Solo.code-workspace"), JSON.stringify({ folders: [{ path: "." }] }));
+	const primaryOf = async (folder: string) => folder;
+
+	const withGameOnly = await findWorkspaces({ windowFile: null, slots: [{ id: "game", repoPath: join(root, "Game") }], primaryOf });
+	assert.equal(withGameOnly.length, 1, "only workspaces in registered projects' folders are found");
+	assert.equal(withGameOnly[0].name, "Game");
+	assert.deepEqual(withGameOnly[0].slotIds, ["game"]);
+	assert.deepEqual(withGameOnly[0].addable, [{ label: "Lib", path: resolve(join(root, "Lib")) }], "Docs has no project file, Missing does not exist");
+
+	const all = await findWorkspaces({
+		windowFile: join(root, "Solo", "Solo.code-workspace"),
+		slots: [
+			{ id: "game", repoPath: join(root, "Game") },
+			{ id: "lib", repoPath: join(root, "Lib") },
+		],
+		primaryOf,
+	});
+	assert.deepEqual(all.map((workspace) => [workspace.name, workspace.isWindow, workspace.slotIds, workspace.addable.length]), [
+		["Solo", true, [], 1],
+		["Game", false, ["game", "lib"], 0],
+	], "the window's workspace comes first");
 });

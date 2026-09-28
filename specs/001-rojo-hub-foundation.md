@@ -28,6 +28,9 @@ to keep several projects served side by side without hand-managing ports.
       that would loop. A group starts, stops, or serves exclusively (stopping everything else, after
       a confirmation naming what stops) in one action, leaving already-serving members alone.
 - [ ] Stopping a group keeps serving any project another running group also holds.
+- [ ] Projects that belong to a VS Code workspace are grouped under it in the Projects list, purely
+      visually; unadded folders in it can be added one by one or all, and a workspace can be turned
+      into a group.
 - [ ] The background service is invisible: started automatically whenever needed, never started or
       stopped by the user. The panel offers *Stop all* (confirmed, naming what stops) instead.
 - [ ] Everything can be done visually in a custom sidebar panel (project cards with an in-card

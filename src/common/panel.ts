@@ -18,6 +18,19 @@ export interface Candidate {
 	source: "workspace" | "orca";
 }
 
+/** A VS Code .code-workspace file that holds registered projects or addable folders. */
+export interface WorkspaceInfo {
+	file: string;
+	/** The file name without .code-workspace. */
+	name: string;
+	/** Registered projects it lists, in its folder order. */
+	slotIds: string[];
+	/** Folders it lists that have a project file but are not registered yet. */
+	addable: { label: string; path: string }[];
+	/** The workspace this VS Code window has open. */
+	isWindow: boolean;
+}
+
 export interface PanelState {
 	/** Kept out of sight: the extension starts the service itself. `error` is set only when it could not. */
 	service: { running: boolean; version: string | null; error: string | null };
@@ -26,6 +39,8 @@ export interface PanelState {
 	settings: { portRange: string; excludedPorts: (number | string)[] };
 	/** Slot ids registered from this window's folders, shown first and marked. */
 	here: string[];
+	/** Workspaces for grouping the Projects list; purely visual. */
+	workspaces: WorkspaceInfo[];
 }
 
 export type ToPanel =
@@ -57,4 +72,6 @@ export type FromPanel =
 	| { type: "stopGroup"; id: string }
 	| { type: "saveSettings"; portRange: string; excludedPorts: (number | string)[] }
 	| { type: "stopAll" }
+	| { type: "addWorkspace"; file: string }
+	| { type: "groupWorkspace"; file: string }
 	| { type: "walkthrough" };
