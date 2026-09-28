@@ -26,8 +26,10 @@ it afterwards.
 - [x] Adding a folder uses `default.project.json` when there is one, without asking. With no
       `default.project.json`, a folder with one `*.project.json` uses that file, and a folder with
       several asks which one. A folder with none is refused, naming what it looked for.
-- [x] *Project file…* in the card's ⋯ menu and in the project's quick pick lists the folder's
-      `*.project.json` files with the current one marked, and changes it.
+- [x] The card shows the project file in a row of its own under the branch row, because it decides
+      what Studio gets ("its vital information to change to a user"). Clicking it, or *Project
+      File…* in the project's quick pick, lists the folder's `*.project.json` files with the current
+      one marked, and changes it.
 - [x] Changing it on a stopped project only saves it. On a serving project it asks first, since Rojo
       reads the project name, `servePort` and place IDs once per session (001): Rojo is restarted on
       the new file, and Studio reconnects. This is the one deliberate exception to "switching never
@@ -37,7 +39,7 @@ it afterwards.
 - [x] The port stays unless the new file sets `servePort` (or the old one did): ports come from the
       repo's first commit, not the file.
 - [x] `sourcemap.json`, Build place file and the served tree all follow the chosen file.
-- [x] A card whose file is not `default.project.json` shows the file's name (`test` for
+- [x] A folded card whose file is not `default.project.json` shows the file's name (`test` for
       `test.project.json`) beside the project's name.
 - [x] A worktree or branch without the chosen file shows the usual "has no test.project.json" error
       on the card. The choice stays.

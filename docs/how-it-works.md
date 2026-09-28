@@ -152,7 +152,7 @@ the order projects were added, which reordering does not touch.
 a project). Each project is a card:
 
 - a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
-  marks the project this VS Code window is open on). A project serving a file other than
+  marks the project this VS Code window is open on). Folded, a project serving a file other than
   `default.project.json` shows that file's name in a small tag after its own (`test` for
   `test.project.json`);
 - the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked; it shows a
@@ -165,13 +165,16 @@ a project). Each project is a card:
   Escape closes it. Studio stays connected. The picker opens with its list already drawn (see
   [Switching branches](#8-switching-branches)); its **Fetch** button (⟳, in the search box) and
   **New branch** row are described there too;
+- **the project file** it serves (`default.project.json`, `test.project.json`, …), in a row of its
+  own under that, since it decides what Studio gets. Clicking it picks another; see
+  [Project files](#project-files). In a narrow sidebar it shows just `default` or `test`;
 - **warnings** (yellow) and **errors** (red), in full. An error from Rojo shows its first line, then
   up to the last five lines Rojo logged about it, with *Show full log*;
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
   Studio), *Starting…*, *Stopped* or *Error*), a **⋯** menu, and **Start** or **Stop** at the right.
   The ⋯ menu has *Update sourcemap.json* with the sourcemap's status (for a project serving a
-  worktree; see [Sourcemaps](#sourcemaps)), *Project file…* (see [Project files](#project-files)),
-  *Build place file…*, *Show Rojo log* and *Remove from Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
+  worktree; see [Sourcemaps](#sourcemaps)), *Build place file…*, *Show Rojo log* and *Remove from
+  Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
 
 **Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
 borrowed project file and packages match what Studio gets. A save dialog opens on
@@ -291,7 +294,7 @@ this way:
 - otherwise the folder's only `*.project.json` (a library with just a `test.project.json`, say);
 - otherwise a list of the folder's project files to choose from.
 
-**Project file…**, in the card's ⋯ menu and in the project's menu, lists the folder's
+The **project file row** on the card (and *Project File…* in the project's menu) lists the folder's
 `*.project.json` files with the current one ticked and changes it. The choice is saved with the
 project, so it stays after restarts and updates. That is how a library is served with its tests:
 pick `test.project.json` (or whatever builds a place with the library and its tests in it).

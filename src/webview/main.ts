@@ -341,7 +341,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
 	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
-	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${fileTag(slot)}</button>`;
+	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${isFolded ? fileTag(slot) : ""}</button>`;
 	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
@@ -363,6 +363,9 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
+		<button class="target project-file" data-action="projectFile" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
+			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon("chevron-down")}
+		</button>
 		${claimNote(slot)}
 		${notices(slot)}
 		<div class="row card-foot">
@@ -420,8 +423,8 @@ function memberRow(group: GroupView, kind: "project" | "group", memberId: string
 /** The card's ⋯ button and, while it is open, its menu of less frequent actions. */
 function cardMenu(slot: SlotView): string {
 	const open = ui.menu === slot.id;
-	const item = (action: string, iconName: string, label: string, extra = "", title = "") =>
-		`<button class="menu-item${extra}" role="menuitem" data-action="${action}" data-id="${escape(slot.id)}"${title ? ` title="${escape(title)}"` : ""}>${icon(iconName)}<span>${escape(label)}</span></button>`;
+	const item = (action: string, iconName: string, label: string, extra = "") =>
+		`<button class="menu-item${extra}" role="menuitem" data-action="${action}" data-id="${escape(slot.id)}">${icon(iconName)}<span>${escape(label)}</span></button>`;
 	return `<span class="menu-anchor">
 		<button class="btn ghost icon-only${open ? " open" : ""}" data-action="menu" data-id="${escape(slot.id)}" title="More actions" aria-haspopup="menu" aria-expanded="${open}">${icon("ellipsis")}</button>
 		${
@@ -432,7 +435,6 @@ function cardMenu(slot: SlotView): string {
 							? `${item("sourcemap", "file-code", "Update sourcemap.json")}<div class="menu-note ${slot.sourcemap.state}" title="${escape(slot.sourcemap.detail)}">${icon(slot.sourcemap.state === "watching" ? "sync" : slot.sourcemap.state === "error" ? "warning" : "circle-slash")}<span>${escape(slot.sourcemap.state === "watching" ? "Sourcemap kept up to date" : slot.sourcemap.detail || "Sourcemap not kept")}</span></div><div class="menu-separator"></div>`
 							: ""
 					}
-					${item("projectFile", "file-code", "Project file…", "", `Serving ${slot.projectFile}; pick another *.project.json in the folder`)}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
@@ -443,7 +445,7 @@ function cardMenu(slot: SlotView): string {
 	</span>`;
 }
 
-/** Names a project file other than default.project.json beside the project's name: "test" for test.project.json (spec 005). */
+/** On a folded card, names a project file other than default.project.json beside the project's name: "test" for test.project.json (spec 005). */
 function fileTag(slot: SlotView): string {
 	if (slot.projectFile === "default.project.json") return "";
 	return `<span class="file-tag" title="Serves ${escape(slot.projectFile)}">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}</span>`;

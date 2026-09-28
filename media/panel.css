@@ -501,6 +501,20 @@ code {
 	box-shadow: 0 0 0 1px var(--accent);
 }
 
+/* The project file row under the branch row (spec 005): the same control, a little quieter. */
+.target.project-file {
+	min-height: 26px;
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.9em;
+}
+
+.target-kind {
+	flex: none;
+	color: var(--muted);
+	font-family: var(--vscode-font-family);
+	font-size: 0.85em;
+}
+
 .picker {
 	display: flex;
 	flex-direction: column;
@@ -1273,6 +1287,7 @@ button:focus-visible {
 
 @container panel (max-width: 260px) {
 	.wide-only,
+	.target-kind,
 	.port .host,
 	.workspace-body .member .sub,
 	.row .badge.icon-badge,
