@@ -2,6 +2,11 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.18.3
+
+- Listing details reworded for the VS Code Marketplace: a clearer description and keywords
+  (`roblox-studio`, `git-worktree`). No change to how Rojo-Hub works.
+
 ## 0.18.2 — first public release
 
 The first public release. Rojo-Hub was made ready for other people's machines: every requirement is

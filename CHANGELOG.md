@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.18.3
+
+- Listing details reworded for the VS Code Marketplace: a clearer description and keywords
+  (`roblox-studio`, `git-worktree`). No change to how Rojo-Hub works.
+
 ## 0.18.2 — first public release
 
 **Requirements** are checked and explained: Windows 10/11, VS Code 1.101+, git 2.31+, and Rojo

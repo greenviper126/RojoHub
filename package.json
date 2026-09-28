@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.18.2",
+  "version": "0.18.3",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -9,7 +9,7 @@
     "color": "#1b1f27",
     "theme": "dark"
   },
-  "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
+  "description": "Serve several Rojo projects at once, each on its own fixed port, and switch any of them to another git branch while Roblox Studio stays connected.",
   "license": "MIT",
   "categories": [
     "Other"
@@ -18,8 +18,8 @@
     "roblox",
     "rojo",
     "luau",
-    "studio",
-    "worktree"
+    "roblox-studio",
+    "git-worktree"
   ],
   "repository": {
     "type": "git",
