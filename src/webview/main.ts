@@ -339,22 +339,22 @@ function picker(slot: SlotView): string {
 function filePicker(slot: SlotView): string {
 	const open = ui.filePicker;
 	if (!open || open.id !== slot.id) return "";
-	const files = slot.projectFiles;
+	// A service older than 0.17.1 sends no list; show the current file rather than nothing.
+	const files = slot.projectFiles ?? [slot.projectFile];
 	const rows =
 		files.length === 0
 			? `<div class="muted pad">No *.project.json directly in the project's folder.</div>`
 			: files
 					.map((file) => {
 						const current = file === slot.projectFile;
-						const sub = current ? "Serving now" : file === "default.project.json" ? "The default" : "";
+						const sub = current ? "Current" : file === "default.project.json" ? "The default" : "";
 						return `<button class="list-item${current ? " current" : ""}" data-action="pick-file" data-id="${escape(slot.id)}" data-file="${escape(file)}">${icon("file-code")}<span class="grow"><span class="label">${escape(file)}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</span>${current ? icon("check") : ""}</button>`;
 					})
 					.join("");
 	const browse = `<button class="list-item create" data-action="browse-file" data-id="${escape(slot.id)}">${icon("folder-opened")}<span class="grow"><span class="label">Browse…</span><span class="sub">Pick a *.project.json in the project's folder</span></span></button>`;
-	const serving = slot.state !== "stopped";
 	return `<div class="picker file-picker">
 		<div class="list">${rows}${browse}</div>
-		<p class="hint">${serving ? "Rojo restarts on the new file (after asking), so Studio reconnects." : "Saved for this project; used when it next starts."}</p>
+		<p class="hint">Saved for this project; used when it next starts.</p>
 	</div>`;
 }
 
@@ -370,6 +370,9 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const pickerOpen = ui.picker?.id === slot.id;
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
+	// A running project's file is shown, not changed: stop it first (spec 005). An erroring one can change it.
+	const fileLocked = serving;
+	if (fileLocked && ui.filePicker?.id === slot.id) ui.filePicker = null;
 	const filesOpen = ui.filePicker?.id === slot.id;
 	const isFolded = folded(key, foldedByDefault) && !pickerOpen && !filesOpen;
 	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${isFolded ? fileTag(slot) : ""}</button>`;
@@ -394,9 +397,15 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
-		<button class="target project-file${filesOpen ? " open" : ""}" data-action="project-files" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
+		${
+			fileLocked
+				? `<button class="target project-file" disabled title="Serving ${escape(slot.projectFile)}. Stop the project to change its project file">
+			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon("lock-small")}
+		</button>`
+				: `<button class="target project-file${filesOpen ? " open" : ""}" data-action="project-files" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
 			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon(filesOpen ? "chevron-up" : "chevron-down")}
-		</button>
+		</button>`
+		}
 		${filePicker(slot)}
 		${claimNote(slot)}
 		${notices(slot)}

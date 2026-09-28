@@ -508,6 +508,12 @@ code {
 	font-size: 0.9em;
 }
 
+.target.project-file:disabled {
+	border-style: dashed;
+	opacity: 0.65;
+	cursor: default;
+}
+
 .target-kind {
 	flex: none;
 	color: var(--muted);

@@ -311,12 +311,10 @@ lists the same files as a quick pick. The choice is saved with the
 project, so it stays after restarts and updates. That is how a library is served with its tests:
 pick `test.project.json` (or whatever builds a place with the library and its tests in it).
 
-- On a **stopped** project the change is only saved.
-- On a **serving** project it asks first: Rojo reads the project name, `servePort` and place IDs
-  once per session, so Rojo restarts on the new file and Studio disconnects. With the plugin's Auto
-  Reconnect on, Studio reconnects by itself unless the new file has a different project `name`; then
-  connect it by hand once. This is the only change that restarts Rojo on purpose; switching branches
-  never does.
+- The file is changed while the project is **stopped** (or has an error, e.g. a branch without the
+  file). While it is **running or starting**, the row is greyed out with a lock and only shows which
+  file is served; stop the project to change it. Rojo reads the project name, `servePort` and place
+  IDs once per session, so a new file always means a new session.
 - The project takes the new file's `name`, which must not be another project's (the same rule as
   adding).
 - The port stays the same unless the new file sets `servePort` (or the old one did), since ports

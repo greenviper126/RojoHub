@@ -289,7 +289,9 @@ async function projectMenu(id: string): Promise<void> {
 			? { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) }
 			: { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) },
 		{ label: "$(copy) Copy Address", description: `localhost:${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
-		{ label: "$(file-code) Project File…", description: `now ${slot.projectFile}`, run: () => changeProjectFile(slot, null) },
+		fileLocked(slot)
+			? { label: "$(lock) Project File", description: `${slot.projectFile} · stop the project to change it` }
+			: { label: "$(file-code) Project File…", description: `now ${slot.projectFile}`, run: () => changeProjectFile(slot, null) },
 		{ label: "$(output) Show Rojo Log", run: () => vscode.commands.executeCommand("rojoHub.showLog", slot.id) },
 		{ label: "$(trash) Remove Project", run: () => vscode.commands.executeCommand("rojoHub.removeProject", slot.id) },
 		{ label: "", kind: vscode.QuickPickItemKind.Separator },
@@ -613,19 +615,20 @@ async function browseProjectFile(slot: SlotView): Promise<void> {
 	await useProjectFile(slot, file, `slot:${slot.id}`);
 }
 
-/* Switches a project to `file`, asking first when it is serving, since that restarts Rojo. */
+/*
+	A running or starting project's project file is shown, not changed: stop it
+	first (spec 005). An erroring one can change it, e.g. to a file the branch has.
+*/
+function fileLocked(slot: SlotView): boolean {
+	return slot.state === "running" || slot.state === "starting";
+}
+
+/* Switches a project to `file`. */
 async function useProjectFile(slot: SlotView, file: string, busyKey: string | null): Promise<void> {
 	if (file === slot.projectFile) return;
-	if (slot.state !== "stopped") {
-		const sure = await vscode.window.showWarningMessage(
-			`Serve ${file} for ${slot.projectName}?`,
-			{
-				modal: true,
-				detail: "Rojo restarts on the new file, so Studio disconnects. With the plugin's Auto Reconnect on it reconnects by itself, unless the file has a different project name; then connect Studio by hand once.",
-			},
-			"Restart on It",
-		);
-		if (sure !== "Restart on It") return;
+	if (fileLocked(slot)) {
+		void vscode.window.showInformationMessage(`Stop ${slot.projectName} to change its project file; it is serving ${slot.projectFile}.`);
+		return;
 	}
 	if (busyKey) await act(busyKey, () => client.setProjectFile(slot.id, file));
 	else await run(`Switching ${slot.projectName} to ${file}`, () => client.setProjectFile(slot.id, file));

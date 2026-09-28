@@ -36,10 +36,12 @@ it afterwards.
 - [x] Like the branch list, the file list is kept in the background and updates by itself ("it
       should store whats available to select in the background and auto update"): each project's
       status carries its folder's `*.project.json` files, read again at most every 2 seconds.
-- [x] Changing it on a stopped project only saves it. On a serving project it asks first, since Rojo
-      reads the project name, `servePort` and place IDs once per session (001): Rojo is restarted on
-      the new file, and Studio reconnects. This is the one deliberate exception to "switching never
-      restarts rojo", because it is not a switch.
+- [x] It is changed only while the project is stopped or has an error. While it is running or
+      starting, the row is greyed out and shows only what is served ("if the port is running /
+      project is running do not allow opening the json gray it"); *Project File* in the quick pick
+      says to stop it first. Rojo reads the project name, `servePort` and place IDs once per session
+      (001). The service's API still accepts a change on a serving project and restarts Rojo on the
+      new file; the panel does not offer it.
 - [x] The project takes the new file's `name`. The change is refused when another project already
       has that name, since Studio auto-connects by name, the same rule as adding.
 - [x] The port stays unless the new file sets `servePort` (or the old one did): ports come from the
