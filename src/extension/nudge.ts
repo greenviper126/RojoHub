@@ -15,7 +15,7 @@ const NUDGE_FILE = "agent-notice.json";
 const LATER_MS = 14 * 24 * 60 * 60 * 1000;
 
 export function showAgentNudge(home: string, projects: number, agents: AgentStatus[]): boolean {
-	if (projects === 0 || !agents.some((agent) => agent.installed) || agents.some((agent) => agent.state !== "absent")) return false;
+	if (projects === 0 || !agents.some((agent) => agent.installed) || agents.some((agent) => agent.installed && agent.state !== "absent")) return false;
 	try {
 		return Date.now() >= (JSON.parse(readFileSync(join(home, NUDGE_FILE), "utf8")) as { until?: number }).until!;
 	} catch {

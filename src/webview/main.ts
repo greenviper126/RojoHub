@@ -710,7 +710,7 @@ function settingsBody(): string {
 		${resetConfirm}
 		<p class="muted small">Projects get a port in this range, worked out from their repo's first commit, unless their project file sets <code>servePort</code>.${isDefault ? " This is the default." : ` The default is ${DEFAULT_PORT_RANGE}.`}</p>
 		<label>Excluded ports<input data-key="excluded" data-input="excluded" value="${escape(draft.excluded)}" placeholder="35000, 35100-35110" spellcheck="false"></label>
-		<p class="muted small">Never given to any project. 34872 (Rojo's default) is always excluded.</p>
+		<p class="muted small">Never given to any project. 34872 (Rojo's default) and 34870 (Rojo-Hub's service) are always excluded; a project file's servePort still wins.</p>
 		${draft.error ? `<div class="notice error">${icon("error")}<span>${escape(draft.error)}</span></div>` : ""}
 		<div class="row">${button("save-settings", "Save", { icon: "check", kind: "primary", disabled: !changed })}${changed ? button("reset-settings", "Undo", { kind: "secondary" }) : ""}</div>
 	</div>`;

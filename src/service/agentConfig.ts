@@ -154,8 +154,13 @@ export class AgentRegistrar {
 			await this.detect();
 			for (const agent of AGENTS) {
 				const wish = wishes[agent.id];
-				if (wish === undefined || !this.installed.get(agent.id)) continue;
+				if (wish === undefined) continue;
 				const state = agentState(agent);
+				if (!this.installed.get(agent.id)) {
+					// Its CLI is gone, so the entry cannot be taken out the documented way; say so instead of doing nothing.
+					if (!wish && state === "connected") this.errors.set(agent.id, `${agent.cli} is not on PATH, so Rojo-Hub cannot take its rojohub entry out. Remove it from ${agent.label}'s config by hand.`);
+					continue;
+				}
 				try {
 					if (wish && state === "absent") await runCli(agent.cli, agent.add);
 					else if (!wish && state === "connected") await runCli(agent.cli, agent.remove);

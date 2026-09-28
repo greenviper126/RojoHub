@@ -70,8 +70,11 @@ export const TOOLS: Tool[] = [
 	{
 		name: "release",
 		title: "Release a project",
-		description: "Drops your claim on a project, so other agents can switch it. The project keeps serving what it serves.",
-		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty } },
+		description: "Drops your claim on a project, so other agents can switch it. Pass path (your working directory) so it is your claim that is dropped. The project keeps serving what it serves.",
+		inputSchema: {
+			type: "object",
+			properties: { path: pathProperty, project: projectProperty, force: { type: "boolean", description: "Drop the claim without a path, whoever holds it. Only when the user asks." } },
+		},
 		annotations: { idempotentHint: true },
 	},
 	{
@@ -277,6 +280,8 @@ export class Mcp {
 		const { slot, root } = await this.pick(args);
 		const claim = this.hub.claimOf(slot.id);
 		if (!claim) return `${slot.projectName} was not claimed.`;
+		// Without a path there is no telling whose claim it is; another agent's is only dropped with force.
+		if (!root && args.force !== true) throw new Refusal(`${slot.projectName} is claimed by ${claim.label}. Pass path (your worktree) to release your own claim.`);
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {
 			throw new Refusal(`${slot.projectName} is claimed by ${claim.label}, not by your worktree; leaving it.`);
 		}

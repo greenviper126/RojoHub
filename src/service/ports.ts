@@ -147,6 +147,10 @@ export function assignPorts(requests: PortRequest[], config: PortConfig): Map<st
 	for (const request of requests) {
 		if (request.servePort === null) continue;
 		const port = request.servePort;
+		if (!isPort(port)) {
+			result.set(request.id, { port: null, source: "servePort", note: null, error: `servePort ${port} is not a port; use a whole number from 1 to 65535.` });
+			continue;
+		}
 		if (port === SERVICE_PORT) {
 			result.set(request.id, { port: null, source: "servePort", note: null, error: `servePort ${port} is Rojo-Hub's own service port. Pick another port in the project file.` });
 			continue;

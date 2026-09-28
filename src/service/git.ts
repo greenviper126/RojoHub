@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, statSync }
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { Target, TargetOption } from "../common/api";
+import { Conflict } from "./registry";
 
 /*
 	Runs git and resolves with stdout. Failures carry git's own stderr, which is
@@ -307,7 +308,7 @@ export async function checkBranchName(repo: string, name: string): Promise<strin
 	try {
 		return (await git(repo, ["check-ref-format", "--branch", name])).trim();
 	} catch {
-		throw new Error(`"${name}" is not a valid branch name (no spaces, "..", "~", "^", ":", "?", "*", "[" or a trailing "/" or ".lock").`);
+		throw new Conflict(`"${name}" is not a valid branch name (no spaces, "..", "~", "^", ":", "?", "*", "[" or a trailing "/" or ".lock").`);
 	}
 }
 

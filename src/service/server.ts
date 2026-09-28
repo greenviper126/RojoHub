@@ -256,7 +256,10 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (method === "POST" && action === "branch") {
 					const input = await body(request);
 					if (typeof input.name !== "string" || typeof input.base !== "string") return send(response, 400, { error: "name and base are required" });
-					return send(response, 200, await hub.createBranch(id, input.name, input.base));
+					// Making a branch from the picker is the user's switch too, so it clears an agent's claim like one.
+					const made = await hub.createBranch(id, input.name, input.base);
+					hub.setClaim(id, null);
+					return send(response, 200, { ...made, slot: { ...made.slot, claim: null } });
 				}
 				if (method === "POST" && action === "sourcemap") return send(response, 200, await hub.writeSourcemap(id));
 				if (method === "PUT" && action === "project-file") {

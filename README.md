@@ -2,62 +2,64 @@
 
 # Rojo-Hub
 
-Serve many Rojo projects at once, each on its own fixed port, and switch any of them to another
-branch or Orca worktree without Studio's Rojo connection dropping.
+A VS Code extension that serves many [Rojo](https://rojo.space) projects at once, each on its own
+fixed port, and switches any of them to another branch or worktree **without Studio disconnecting**.
 
-- **One port per project, the same everywhere.** A project's port is worked out from its repo's first
-  commit (or taken from `servePort` in its project file), so it is the same on every machine and
-  never changes. Global exclusions live in the `rojoHub.excludedPorts` setting.
-  Connect each Studio place to it once; with the Rojo plugin's *Auto Reconnect* setting on, the
-  place reconnects by itself from then on.
-- **Live branch switching.** Pick a worktree (listed under Orca's names) or any branch. The same
-  `rojo serve` keeps running and Studio receives the difference as one update.
-- **Background service.** A small local service owns the Rojo processes, so closing VS Code windows
-  does not stop serving. It listens on `127.0.0.1:34870`.
+**[Documentation](https://greenviper126.github.io/RojoHub/)** ·
+[Install](https://greenviper126.github.io/RojoHub/guide/install) ·
+[Changelog](CHANGELOG.md)
 
-Documentation: [greenviper126.github.io/RojoHub](https://greenviper126.github.io/RojoHub/). The
-full description of every feature, setting and file is in [`docs/how-it-works.md`](docs/how-it-works.md);
-why it is built this way, with measurements, in
-[`specs/001-rojo-hub-foundation.md`](specs/001-rojo-hub-foundation.md).
+<p align="center"><img src="site/public/images/panel-branch-picker.png" alt="A project card in the Rojo-Hub panel with the branch picker open" width="360"></p>
+
+## What it does
+
+- **One port per project, the same everywhere.** A project's port is worked out from its repo's
+  first commit (or taken from `servePort` in its project file), so it is the same on every machine.
+  Connect each Studio place once; with the Rojo plugin's *Auto Reconnect* on, it reconnects by itself.
+- **Live branch switching.** Pick a worktree or any branch. The same `rojo serve` keeps running and
+  Studio receives the difference as one update.
+- **Groups.** Start, stop or swap a whole set of projects at once, like a profile.
+- **Built for agents.** Claude Code, Codex and VS Code agents can serve their own worktree to Studio
+  through Rojo-Hub's MCP server, taking turns when several share one repo.
+- **Always serving.** A small background service owns the Rojo processes, so closing or reloading
+  VS Code windows does not stop anything. The panel follows it live.
 
 ## Requirements
 
 - Windows 10 or 11.
 - VS Code 1.101 or later.
 - git 2.31 or later on `PATH`.
-- [Rokit](https://github.com/rojo-rbx/rokit), with each project's pinned Rojo installed (`rokit install`
-  in the project). Rojo-Hub runs the Rojo that Rokit installed; one installed by Aftman or Foreman is
-  not found, but `rokit install` reads their `aftman.toml` and `foreman.toml` too.
+- [Rokit](https://github.com/rojo-rbx/rokit), with each project's pinned Rojo installed
+  (`rokit install` in the project). Rokit also reads `aftman.toml` and `foreman.toml`.
 - Rojo 7.7 or later, and its Studio plugin.
 
-## Install
+Details and setup steps: [Requirements](https://greenviper126.github.io/RojoHub/guide/requirements).
 
-Download `rojo-hub-<version>.vsix` from the
-[GitHub Releases](https://github.com/greenviper126/RojoHub/releases) page and install it, either with
-*Extensions: Install from VSIX...* in VS Code or from a terminal:
+## Getting started
 
-```sh
-code --install-extension rojo-hub-<version>.vsix --force
-```
+1. Download `rojo-hub-<version>.vsix` from [Releases](https://github.com/greenviper126/RojoHub/releases)
+   and install it: *Extensions view → ⋯ → Install from VSIX…*, or
+   `code --install-extension rojo-hub-<version>.vsix`. Each VS Code profile needs its own install.
+2. Open the **Rojo-Hub** panel in the activity bar and press **+** to add a project folder.
+3. Press **Start**, click the port to copy it, and connect the Rojo plugin in Studio to
+   `localhost` and that port.
+4. Click the branch on the card to switch. Studio stays connected.
 
-Each VS Code profile has its own extensions, so install it in every profile you use (add
-`--profile "<name>"` to the command). A Marketplace release is planned.
-
-To build the .vsix yourself:
-
-```sh
-npm install
-npm run package
-```
+The VS Code Marketplace and Open VSX listings are coming soon.
 
 ## Develop
 
 ```sh
+npm install
 npm run typecheck
-npm test            # unit tests plus an end-to-end run against a real rojo (needs rokit's rojo 7.7 on PATH)
-npm run build       # dist/extension.js and dist/service.js
+npm test              # unit tests, bundle smoke test, end-to-end against a real Rokit-installed Rojo 7.7
+npm run package       # rojo-hub-<version>.vsix
+npm run docs:dev      # the documentation site (site/)
 ```
+
+How it works inside, and why: [`docs/how-it-works.md`](docs/how-it-works.md) and
+[`specs/`](specs/).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Not affiliated with Roblox or the Rojo project.

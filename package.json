@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -389,7 +389,7 @@
             "pattern": "^\\s*\\d+\\s*(-\\s*\\d+\\s*)?$",
             "patternErrorMessage": "Write a port (35000) or a range (\"35000-35010\")."
           },
-          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
+          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872 (Rojo's default) and 34870 (Rojo-Hub's service) are always excluded. A project file's `servePort` still wins. A running project whose port changes is restarted on its new port."
         },
         "rojoHub.sourcemaps": {
           "type": "boolean",
@@ -430,7 +430,7 @@
             "codex": {
               "type": "boolean",
               "default": false,
-              "description": "Codex: adds rojohub to ~/.codex/config.toml (codex mcp add)."
+              "description": "Codex: adds rojohub to its config.toml in CODEX_HOME, normally ~/.codex (codex mcp add)."
             }
           },
           "default": {

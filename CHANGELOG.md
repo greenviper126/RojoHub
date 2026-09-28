@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.0 — first public release
+## 0.18.1 — first public release
 
 **Requirements** are checked and explained: Windows 10/11, VS Code 1.101+, git 2.31+, and Rojo
 installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoHub/guide/requirements)).
@@ -21,6 +21,10 @@ installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoH
 - A damaged `registry.json` is kept aside and the previous save restored.
 - Only Rojo-Hub's own views are pruned from git.
 - Fetch never shows a sign-in window.
+- A port move waits until the new port has held for a moment, so a `servePort` being typed with
+  auto-save does not restart Rojo at every keystroke.
+- A `servePort` of 34870 (Rojo-Hub's own port) is refused with an explanation.
+- Finding Rojo processes works whatever letters the Windows user name has.
 
 **Safer.**
 - Only programs on this PC can use the service: web pages, including DNS-rebinding and

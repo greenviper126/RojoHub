@@ -1,42 +1,65 @@
 # Your first project
 
+Three steps: add a project, start it, connect Studio.
+
+::: info Before you start
+The project must be a git repo with a `*.project.json` in its top folder, and a toolchain file that
+pins a Rojo installed by Rokit. See [Requirements](./requirements).
+:::
+
 ## 1. Add it
 
-Open the **Rojo-Hub** panel from the activity bar and press **+** on *Projects*. Pick a folder that
-is open in this window, a repo Orca knows about, or *Browse…*.
+Open the **Rojo-Hub** panel from the activity bar and press **+** on the *Projects* header. A list
+opens inside the panel with:
 
-![The Rojo-Hub panel](../../docs/images/panel-overview.png)
+- the folders open in this window,
+- the repos Orca knows about (if you use Orca),
+- **Browse…** for any other folder.
 
-Any folder inside the repo works; Rojo-Hub registers the repo's main checkout. It serves
-`default.project.json`, or asks which `*.project.json` when there is no default.
+Press **+** next to one. The new project's card is highlighted.
+
+- **Any folder inside the repo works.** Rojo-Hub registers the repo's primary checkout (its main
+  folder), even if you picked a worktree.
+- **Which project file:** `default.project.json` if there is one; otherwise the only
+  `*.project.json`; otherwise Rojo-Hub asks. You can change it later, see
+  [Project files](./projects#project-files).
+- A new project is **stopped** and serves its primary checkout.
 
 ::: warning Project names must be unique
-The Studio plugin reconnects a place only to a server reporting the name it saved, so two repos with
-the same Rojo project `name` cannot both be added. Rename one in its project file.
+The Studio plugin reconnects a place only to a server reporting the project `name` it saved, so two
+repos with the same Rojo project `name` cannot both be added. Rename one in its project file.
 :::
 
 ## 2. Start serving
 
-Press **Start** on the project's card. The status light turns into a green ring when Rojo is up.
+Press **Start** on the project's card. The card shows *Starting…*, then the status light turns into
+a green ring once Rojo answers.
 
 | Light | Meaning |
 |---|---|
 | grey ring | stopped |
 | spinner | starting |
-| green ring | serving, Studio not connected |
+| green ring | serving, no Studio connected yet |
 | green dot | serving, Studio connected |
-| red dot | error (the card shows it) |
+| red dot | error (the card shows the message) |
+
+If Rojo does not come up within 30 seconds, the card shows the end of Rojo's log. Common causes
+(the pinned Rojo is not installed, the port is taken) are in
+[Troubleshooting](/troubleshooting).
 
 ## 3. Connect Studio
 
-1. Open the place in Studio.
-2. Click the port on the card to copy it.
-3. In the Rojo plugin, set the address to `localhost` and paste the port, then **Connect**.
-4. In the plugin's settings, turn on **Auto Reconnect**.
+Click the **port** at the top right of the card to copy it, then connect the Rojo plugin in Studio
+to `localhost` and that port. Turn on **Auto Reconnect** in the plugin's settings and you never
+have to do it again. [Connecting Studio](./connecting-studio) has the details.
 
-From now on, opening that place connects it by itself. The port never changes, so you set it once.
+## What next
 
-## Next
+- [Switch the project to another branch](./switching) while Studio stays connected.
+- [Group projects](./groups) you use together.
+- [Tour the panel](./panel).
 
-- [Switch the project to another branch](./switching) without Studio disconnecting.
-- [Learn how ports are picked](./ports).
+::: tip The Get Started walkthrough
+VS Code's Welcome page has a five-step walkthrough (add, start, connect Studio, switch, group):
+*Help → Welcome → Get Started with Rojo-Hub*, or *Getting started guide* in the empty panel.
+:::
