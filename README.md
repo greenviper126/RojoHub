@@ -45,7 +45,8 @@ Details and setup steps: [Requirements](https://greenviper126.github.io/RojoHub/
    `localhost` and that port.
 4. Click the branch on the card to switch. Studio stays connected.
 
-The VS Code Marketplace and Open VSX listings are coming soon.
+Rojo-Hub has been submitted to the VS Code Marketplace and is waiting for Microsoft's review; an
+Open VSX listing will follow. Until then, install the `.vsix` from Releases as above.
 
 ## Develop
 

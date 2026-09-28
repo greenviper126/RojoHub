@@ -3,9 +3,10 @@
 Rojo-Hub is distributed as a `.vsix` file on the
 [GitHub Releases](https://github.com/greenviper126/RojoHub/releases) page.
 
-::: info Marketplace and Open VSX: coming soon
-Rojo-Hub is not on the VS Code Marketplace or Open VSX yet. Until it is, install the `.vsix` from
-GitHub Releases as below.
+::: info VS Code Marketplace: under review
+Rojo-Hub has been submitted to the VS Code Marketplace and is waiting for Microsoft's review. An
+Open VSX listing (for Cursor and VSCodium) will follow. Until then, install the `.vsix` from GitHub
+Releases as below.
 :::
 
 ## Install the .vsix
