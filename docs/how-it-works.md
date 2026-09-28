@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.13.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.14.2, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -113,8 +113,16 @@ first workspace (or, with no workspaces, the first project card); the rest start
 you fold or open is remembered. Opening a project from elsewhere (a group, Active ports, the status
 bar) unfolds its card and its workspace.
 
-**Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) on the
-left; drag one onto another to move it before or after it. Cards move within their workspace,
+**Collapse All** (the icon at the top right of the panel's title bar, as in the Explorer) folds
+everything except what is running: Projects and Groups stay open, and inside them the cards of
+serving or starting projects, the workspaces that hold them, and running groups stay open. Every
+other card and group folds, and Active ports and Port settings fold.
+
+The section headers stay at the top while their section scrolls under them, and the footer stays at
+the bottom of the panel.
+
+**Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) that
+appears in their left margin when the pointer is on them; drag one onto another to move it before or after it. Cards move within their workspace,
 workspaces among workspaces, groups among groups. The order is saved in the service, so every
 window shows it, and **it never changes a port**: which project keeps a port when two collide goes by
 the order projects were added, which reordering does not touch.
@@ -124,22 +132,25 @@ card:
 
 - a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
   marks the project this VS Code window is open on);
-- the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked;
+- the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked; it shows a
+  copy icon on hover and a green tick for a moment after copying;
 - **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
-  the branch picker inside the card: a search box, then *Worktrees* (under Orca's names) and
-  *Branches*, with the current one ticked. Clicking one switches; Enter picks the first match,
+  the branch picker inside the card: a search box, then, like Source Control's branch picker,
+  *Worktrees* (under Orca's names), *Local branches* and *Remote branches* (a cloud icon; only those
+  with no local branch of the same name), each with how many it holds. Branches show when they last
+  had a commit. The current one is ticked. Clicking one switches; Enter picks the first match,
   Escape closes it. Studio stays connected;
-- a **status line**: *Studio connected*, *Serving · waiting for Studio*, *Starting…*, *Stopped* or
-  *Error*;
 - **warnings** (yellow) and **errors** (red), in full;
-- **Start** or **Stop**, and buttons for the Rojo log and for removing the project (which asks
-  first).
+- a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
+  Studio), *Starting…*, *Stopped* or *Error*), buttons for the Rojo log and for removing the project (which asks first),
+  and **Start** or **Stop** at the right.
 
 A **folded** card is one row: grip, arrow, light, name, a warning or error icon if it has one, the
 port, and a start or stop button.
 
-Running projects have a green edge, and projects with an error a red one. With no projects, the
-section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
+A thin rail on the card's left edge shows its state: green while serving, blue while starting, red on
+an error (an erroring card is also tinted red). In a narrow sidebar the status pill shrinks to its
+icon. With no projects, the section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
 
 **Grouped by workspace.** When projects belong to a VS Code workspace (a `.code-workspace`
 file), the Projects list groups them under that workspace's name, with its serving count, a window icon
@@ -164,13 +175,14 @@ projects are serving (green when all are). Inside:
 - one **Start** / **Stop** button (Start while the group is not running, Stop while it is; Stop
   keeps projects another running group uses), then **Singleton** (serve only this group, stopping
   every other project; asks first, naming what it will stop);
-- a green *running* badge while the group is running;
-- ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete?* in
-  place; the projects stay).
+- a green *Running* pill and a green rail on the left edge while the group is running (the pill
+  hides when the sidebar is narrow);
+- ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete …?* on
+  a row under the name; the projects stay). Both show when the pointer is on the card.
 
 **Active ports** (below Groups; the header shows how many): every project serving right now, lowest
 port first, with its status light, name and branch, its address `localhost:<port>` (click to copy)
-and a copy button. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
+which copies it when clicked. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
 serving* when nothing is.
 
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
@@ -510,7 +522,7 @@ the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projec
 
 Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). Only **Rojo-Hub:
 Open Menu** appears in the command palette; it offers the same actions as menus. The panel's title
-bar has Open Menu and Refresh, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
+bar has Open Menu, Refresh and Collapse All, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
 
 ## 14. Known limits and troubleshooting
 

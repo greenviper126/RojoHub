@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.13.0",
+  "version": "0.14.2",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -144,6 +144,12 @@
         "category": "Rojo-Hub"
       },
       {
+        "command": "rojoHub.collapseAll",
+        "title": "Collapse All",
+        "category": "Rojo-Hub",
+        "icon": "$(collapse-all)"
+      },
+      {
         "command": "rojoHub.stopAll",
         "title": "Stop All",
         "category": "Rojo-Hub",
@@ -161,6 +167,11 @@
           "command": "rojoHub.refresh",
           "when": "view == rojoHub.panel",
           "group": "navigation@1"
+        },
+        {
+          "command": "rojoHub.collapseAll",
+          "when": "view == rojoHub.panel",
+          "group": "navigation@2"
         },
         {
           "command": "rojoHub.addProject",
@@ -249,6 +260,10 @@
         },
         {
           "command": "rojoHub.focusProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.collapseAll",
           "when": "false"
         },
         {

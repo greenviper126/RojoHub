@@ -49,6 +49,8 @@ const ui = {
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
+	/** A project whose address was just copied: its port chips show a tick for a moment. */
+	copied: null as string | null,
 	/** A project to unfold (with its workspace) on the next render: after "goto" or a status bar click. */
 	reveal: null as string | null,
 	/** What is being dragged, while a drag is under way; renders wait until it ends. */
@@ -117,16 +119,17 @@ function dot(slot: SlotView): string {
 	return `<span class="dot ${kind}" title="${title}"></span>`;
 }
 
-function statusLine(slot: SlotView): string {
+/** A small coloured pill saying what the project is doing. */
+function statusPill(slot: SlotView): string {
 	if (slot.state === "running") {
 		return slot.connections > 0
-			? `<span class="ok">${icon("plug")} Studio connected${slot.connections > 1 ? ` (${slot.connections})` : ""}</span>`
-			: `<span class="muted">Serving · waiting for Studio</span>`;
+			? `<span class="pill ok" title="Serving, and Studio is connected">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
+			: `<span class="pill live" title="Serving, waiting for Studio: connect Studio's Rojo plugin to this port">${icon("broadcast")}<span class="ellipsis">Serving</span></span>`;
 	}
-	if (slot.state === "starting") return `<span class="muted">Starting…</span>`;
-	if (slot.state === "error") return `<span class="bad">${icon("error")} Error</span>`;
-	if (slot.state === "offline") return `<span class="muted">Unavailable</span>`;
-	return `<span class="muted">Stopped</span>`;
+	if (slot.state === "starting") return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Starting…</span></span>`;
+	if (slot.state === "error") return `<span class="pill bad">${icon("error")}<span class="ellipsis">Error</span></span>`;
+	if (slot.state === "offline") return `<span class="pill">${icon("debug-disconnect")}<span class="ellipsis">Unavailable</span></span>`;
+	return `<span class="pill">${icon("circle-slash")}<span class="ellipsis">Stopped</span></span>`;
 }
 
 function notices(slot: SlotView): string {
@@ -134,6 +137,24 @@ function notices(slot: SlotView): string {
 	if (slot.error) rows.push(`<div class="notice error">${icon("error")}<span>${escape(slot.error.split("\n")[0])}</span></div>`);
 	for (const warning of slot.warnings) rows.push(`<div class="notice warning">${icon("warning")}<span>${escape(warning)}</span></div>`);
 	return rows.join("");
+}
+
+/** "3 days ago" for a unix time in seconds. */
+function ago(seconds: number): string {
+	const minutes = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
+	const steps: [number, string][] = [
+		[60 * 24 * 365, "year"],
+		[60 * 24 * 30, "month"],
+		[60 * 24 * 7, "week"],
+		[60 * 24, "day"],
+		[60, "hour"],
+		[1, "minute"],
+	];
+	for (const [size, unit] of steps) {
+		const count = Math.floor(minutes / size);
+		if (count >= 1) return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+	}
+	return "just now";
 }
 
 function picker(slot: SlotView): string {
@@ -150,17 +171,25 @@ function picker(slot: SlotView): string {
 		const isCurrent = (option: TargetOption) =>
 			(option.target.kind === "worktree" && slot.target.kind === "worktree" && option.target.path.toLowerCase() === slot.target.path.toLowerCase()) ||
 			(option.target.kind === "branch" && slot.target.kind === "branch" && option.target.ref === slot.target.ref);
-		const list = (kind: "worktree" | "branch", heading: string) => {
-			const rows = matches.filter(({ option }) => option.target.kind === kind);
+		// Like Source Control's branch picker: worktrees, then local branches, then remote ones.
+		const sectionOf = (option: TargetOption) =>
+			option.target.kind === "worktree" ? "worktree" : option.target.ref.startsWith("refs/remotes/") ? "remote" : "local";
+		const list = (section: "worktree" | "local" | "remote", heading: string, iconName: string, title: string) => {
+			const rows = matches.filter(({ option }) => sectionOf(option) === section);
 			if (rows.length === 0) return "";
-			return `<div class="list-heading">${escape(heading)}</div>${rows
-				.map(
-					({ option, index }) =>
-						`<button class="list-item${isCurrent(option) ? " current" : ""}" data-action="pick" data-index="${index}">${icon(kind === "worktree" ? "folder" : "git-branch")}<span class="grow"><span class="label">${escape(option.label)}</span><span class="sub">${escape(option.description)}</span></span>${isCurrent(option) ? icon("check") : ""}</button>`,
-				)
+			return `<div class="list-heading" title="${escape(title)}">${escape(heading)}<span class="list-count">${rows.length}</span></div>${rows
+				.map(({ option, index }) => {
+					const sub = section === "worktree" || !option.committedAt ? option.description : `last commit ${ago(option.committedAt)}`;
+					return `<button class="list-item${isCurrent(option) ? " current" : ""}" data-action="pick" data-index="${index}">${icon(iconName)}<span class="grow"><span class="label">${escape(option.label)}</span><span class="sub">${escape(sub)}</span></span>${isCurrent(option) ? icon("check") : ""}</button>`;
+				})
 				.join("")}`;
 		};
-		body = matches.length === 0 ? `<div class="muted pad">Nothing matches “${escape(open.search)}”.</div>` : list("worktree", "Worktrees") + list("branch", "Branches · served from a Hub copy");
+		body =
+			matches.length === 0
+				? `<div class="muted pad">Nothing matches “${escape(open.search)}”.</div>`
+				: list("worktree", "Worktrees", "folder", "Folders checked out on this repo; served in place") +
+					list("local", "Local branches", "git-branch", "Branches on this machine with no worktree; served from a Hub copy") +
+					list("remote", "Remote branches", "cloud", "Branches on the remote with no local branch of the same name; served from a Hub copy");
 	}
 	return `<div class="picker">
 		<div class="search">${icon("search")}<input data-key="search-${escape(slot.id)}" data-input="search" placeholder="Search worktrees and branches" value="${escape(open.search)}" spellcheck="false"></div>
@@ -183,11 +212,11 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
 	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
 	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span></button>`;
-	const port = `<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}">:${slot.port}</button>`;
+	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
 		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-			<div class="row">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${here}<span class="grow"></span>${port}${
+			<div class="row card-head">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${here}<span class="grow"></span>${port}${
 				serving
 					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
 					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
@@ -195,7 +224,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		</article>`;
 	}
 	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-		<div class="row">
+		<div class="row card-head">
 			${grip(list, slot.id)}${toggle}${here}
 			<span class="grow"></span>
 			${port}
@@ -204,17 +233,17 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
-		<div class="row status">${statusLine(slot)}</div>
 		${notices(slot)}
-		<div class="row actions">
+		<div class="row card-foot">
+			${statusPill(slot)}
+			<span class="grow"></span>
+			${iconButton("log", "output", "Show Rojo log", { id: slot.id })}
+			${iconButton("remove", "trash", "Remove from Rojo-Hub", { id: slot.id })}
 			${
 				serving
 					? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary", disabled: busy })
 					: button("start", "Start", { icon: "play", data: { id: slot.id }, kind: "primary", disabled: busy })
 			}
-			<span class="grow"></span>
-			${iconButton("log", "output", "Show Rojo log", { id: slot.id })}
-			${iconButton("remove", "trash", "Remove from Rojo-Hub", { id: slot.id })}
 		</div>
 	</article>`;
 }
@@ -257,9 +286,11 @@ function memberRow(group: GroupView, kind: "project" | "group", memberId: string
 	return `<div class="member">${body}${iconButton("remove-member", "close", `Take ${name} out of ${group.name} (asks first)`, { id: group.id, kind, member: memberId })}</div>`;
 }
 
-/** A port chip that copies localhost:<port>, the same as on a project card. */
-function portChip(slot: SlotView): string {
-	return `<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}">:${slot.port}</button>`;
+/** A port chip that copies localhost:<port>; it shows a tick for a moment after a copy. */
+function portChip(slot: SlotView, host = false): string {
+	const copied = ui.copied === slot.id;
+	const title = copied ? "Copied" : `Copy localhost:${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}`;
+	return `<button class="port${copied ? " copied" : ""}" data-action="copy" data-id="${escape(slot.id)}" title="${title}"><span>${host ? `<span class="host">localhost</span>` : ""}:${slot.port}</span>${icon(copied ? "check" : "copy", "port-icon")}</button>`;
 }
 
 /** Serving projects that Singleton would stop for a group. */
@@ -277,19 +308,20 @@ function groupCard(group: GroupView): string {
 	const open = !ui.closedGroups.has(group.id);
 	const busy = ui.busy.has(`group:${group.id}`);
 	const renaming = ui.renaming?.id === group.id;
-	const running = group.active ? `<span class="badge running" title="Started, and not stopped since">running</span>` : "";
+	const running = group.active ? `<span class="pill ok dense" title="Started, and not stopped since">Running</span>` : "";
 	const head = renaming
 		? `<input class="rename" data-key="rename-${escape(group.id)}" data-input="rename" value="${escape(ui.renaming!.name)}" spellcheck="false">
 		   ${iconButton("rename-save", "check", "Save name", { id: group.id })}${iconButton("rename-cancel", "close", "Cancel")}`
 		: `${grip("groups", group.id)}<button class="group-toggle" data-action="toggle-group" data-id="${escape(group.id)}" title="${open ? "Collapse" : "Expand"}">${icon(open ? "chevron-down" : "chevron-right")}${icon("layers")}<span class="name">${escape(group.name)}</span></button>
 		   <span class="count${serving > 0 && serving === everyProject.length ? " all" : ""}" title="${serving} of ${everyProject.length} projects serving">${serving}/${everyProject.length}</span>${running}
 		   <span class="grow"></span>
-		   ${
-				ui.confirmDelete === group.id
-					? `<span class="confirm">Delete?</span>${button("delete-group", "Yes", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}`
-					: iconButton("rename", "edit", "Rename group", { id: group.id }) + iconButton("ask-delete", "trash", "Delete group (what's in it stays)", { id: group.id })
-			}`;
-	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head">${head}</div></article>`;
+		   <span class="hover-tools">${iconButton("rename", "edit", "Rename group", { id: group.id })}${iconButton("ask-delete", "trash", "Delete group (what's in it stays)", { id: group.id })}</span>`;
+	// Deleting asks first, on its own row under the name, the same way taking a member out does.
+	const deleteConfirm =
+		ui.confirmDelete === group.id
+			? `<div class="member confirm-row">${icon("warning")}<span class="grow">Delete <strong>${escape(group.name)}</strong>? What's in it stays.</span>${button("delete-group", "Delete", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}</div>`
+			: "";
+	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head">${head}</div>${deleteConfirm}</article>`;
 
 	const nestedRows = nested
 		.map((child) => {
@@ -370,6 +402,7 @@ function groupCard(group: GroupView): string {
 
 	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}>
 		<div class="row head">${head}</div>
+		${deleteConfirm}
 		<div class="members">
 			${nestedRows}${projectRows}
 			${nested.length + members.length === 0 ? `<div class="muted pad small">Empty. Add projects or other groups below.</div>` : ""}
@@ -527,15 +560,14 @@ function projectsList(slots: SlotView[]): string {
 	to get a port into Studio's Rojo plugin.
 */
 function activePorts(serving: SlotView[]): string {
-	if (serving.length === 0) return `<div class="empty"><p class="muted small">Nothing serving. Start a project or a group and its port shows here.</p></div>`;
+	if (serving.length === 0) return `<div class="empty compact">${icon("plug", "empty-icon")}<p class="muted small">Nothing serving. Start a project or a group and its port shows here.</p></div>`;
 	const rows = [...serving]
 		.sort((a, b) => a.port - b.port)
 		.map(
 			(slot) => `<div class="member active-port">
 				${dot(slot)}
 				<span class="grow two-line"><button class="link ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">${escape(slot.targetLabel)}</span></span>
-				<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}">localhost:${slot.port}</button>
-				${iconButton("copy", "copy", `Copy localhost:${slot.port}`, { id: slot.id })}
+				${portChip(slot, true)}
 			</div>`,
 		)
 		.join("");
@@ -561,7 +593,8 @@ function render(): void {
 		adder() +
 		(slots.length === 0
 			? `<div class="empty">
-				<p>No projects yet.</p>
+				${icon("server-environment", "empty-icon")}
+				<p class="empty-title">No projects yet</p>
 				<p class="muted small">Each project gets its own Rojo port. Switch it to any branch while Studio stays connected.</p>
 				${button("open-adder", "Add a project", { icon: "add", kind: "primary" })}
 				${button("walkthrough", "Getting started guide", { icon: "book", kind: "ghost" })}
@@ -571,7 +604,8 @@ function render(): void {
 	const groupsBody =
 		newGroupForm() +
 		(state.groups.length === 0 && !ui.newGroup
-			? `<div class="empty">
+			? `<div class="empty compact">
+				${icon("layers", "empty-icon")}
 				<p class="muted small">Groups start and stop sets of projects together, like profiles.</p>
 				${button("open-new-group", "New group", { icon: "add", kind: "secondary" })}
 			</div>`
@@ -587,7 +621,7 @@ function render(): void {
 				.map((slot) => escape(slot.projectName))
 				.join(", ")}</strong>? Studio places connected to them disconnect.</span></div>
 			<div class="row">${button("stop-all-yes", "Yes, stop all", { icon: "debug-stop", kind: "danger" })}${button("stop-all-no", "Cancel", { kind: "secondary" })}</div>`
-		: `<div class="row"><span class="muted small">${serving.length === 0 ? "Nothing serving" : `${serving.length} of ${slots.length} serving`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
+		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `${serving.length} of ${slots.length} serving`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
 
 	// The service is invisible unless it could not be started at all.
 	const banner = state.service.error
@@ -702,7 +736,16 @@ document.addEventListener("click", (event) => {
 			send({ type: action, id });
 			return render();
 		case "copy":
-			return send({ type: "copy", id });
+			send({ type: "copy", id });
+			ui.copied = id;
+			render();
+			setTimeout(() => {
+				if (ui.copied === id) {
+					ui.copied = null;
+					render();
+				}
+			}, 1400);
+			return;
 		case "log":
 			return send({ type: "log", id });
 		case "remove":
@@ -893,6 +936,33 @@ document.addEventListener("keydown", (event) => {
 	else if (kind === "port-range" || kind === "excluded") saveSettings();
 });
 
+/*
+	Collapse All, from the panel's title bar. Projects and Groups stay open;
+	inside them only what is running stays open: serving projects (and the
+	workspace blocks that hold them) and running groups. Every other section
+	folds.
+*/
+function collapseAll(): void {
+	if (!state) return;
+	const live = new Set(state.slots.filter((slot) => slot.state === "running" || slot.state === "starting").map((slot) => slot.id));
+	ui.collapsed.projects = false;
+	ui.collapsed.groups = false;
+	ui.collapsed.ports = true;
+	ui.collapsed.settings = true;
+	for (const slot of state.slots) ui.collapsed[`card:${slot.id}`] = !live.has(slot.id);
+	const inWorkspace = new Set<string>();
+	for (const workspace of state.workspaces) {
+		workspace.slotIds.forEach((id) => inWorkspace.add(id));
+		ui.collapsed[`ws:${workspace.file}`] = !workspace.slotIds.some((id) => live.has(id));
+	}
+	ui.collapsed["ws:other"] = !state.slots.some((slot) => live.has(slot.id) && !inWorkspace.has(slot.id));
+	ui.closedGroups = new Set(state.groups.filter((group) => !group.active).map((group) => group.id));
+	ui.picker = null;
+	persist();
+	render();
+	document.scrollingElement?.scrollTo({ top: 0 });
+}
+
 function flash(id: string): void {
 	ui.collapsed.projects = false;
 	ui.reveal = id;
@@ -998,6 +1068,8 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			return;
 		case "focus":
 			return flash(message.id);
+		case "collapse":
+			return collapseAll();
 		case "busy":
 			if (message.busy) ui.busy.add(message.key);
 			else ui.busy.delete(message.key);
