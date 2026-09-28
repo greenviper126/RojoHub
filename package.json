@@ -4,6 +4,7 @@
   "version": "0.17.3",
   "private": true,
   "publisher": "greenviper126",
+  "icon": "media/icon.png",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
   "repository": "https://github.com/greenviper126/RojoHub",
   "engines": {
