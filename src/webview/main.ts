@@ -595,7 +595,7 @@ function agentsBody(): string {
 		</div>`
 		: "";
 	return `<div class="card agents">
-		<p class="muted small">Let AI agents put their own worktree into Studio, live, while they work.</p>
+		<p class="muted small">Give agents access to Rojo-Hub.</p>
 		<div class="agent-list">${rows}</div>
 		<button class="link small agents-more" data-action="toggle-agents-manual" aria-expanded="${ui.agentsManual}">${icon(ui.agentsManual ? "chevron-down" : "chevron-right")}Other agents and manual setup</button>
 		${manual}

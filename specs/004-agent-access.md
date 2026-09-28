@@ -1,6 +1,6 @@
 # 004 — Agent access
 
-Status: **implemented in 0.16.0**. Asked for by Viper: "How can we add better support for AI agents
+Status: **implemented in 0.16.0 (panel wording and notice in 0.16.1)**. Asked for by Viper: "How can we add better support for AI agents
 and orca with RojoHub? ... I just want this to work out of box for the most part", "as long as it
 doesnt cause issues and removing the extension removes that", "lets have this in the drop down
 settings specifically even if you add it in the actual settings too". Builds on 002 and 003.
