@@ -2,7 +2,7 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
-## 0.18.1 — first public release
+## 0.18.2 — first public release
 
 The first public release. Rojo-Hub was made ready for other people's machines: every requirement is
 stated and checked, it survives what other setups do to it, and the panel feels instant.
@@ -29,6 +29,8 @@ stated and checked, it survives what other setups do to it, and the panel feels 
 - An agent config that cannot be read for a moment shows *Can't read config* and is left alone.
 - After a branch switch the card shows the new branch's name at once.
 - Finding Rojo processes works whatever letters the Windows user name has.
+- Works when Windows uses 8.3 short names in your profile or project paths (`C:\Users\JOHNSM~1`):
+  a live switch reaches Studio, and views and worktrees are recognised.
 - A damaged `registry.json` is set aside and the previous save restored.
 - Fetch never shows a sign-in window; making a view no longer runs git hooks; your own worktrees
   on an unplugged drive are left alone.

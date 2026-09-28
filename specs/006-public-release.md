@@ -1,6 +1,6 @@
 # 006 — Public release
 
-Status: **implemented on `chore/public-release` in 0.18.1**; not yet tried against a real Studio. Asked for by Viper: "we need to get this
+Status: **implemented on `chore/public-release` in 0.18.2**; not yet tried against a real Studio. Asked for by Viper: "we need to get this
 ready for a public release so this needs to be compatiable out of the box for other people too. so we
 need to know what is required to use it and make sure you only need those things for it to run." Then:
 "fix all of the issues found and make sure everything is robust", and "we just want the inital page

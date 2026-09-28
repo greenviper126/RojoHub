@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.18.1, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.18.2, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents

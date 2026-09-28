@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.1 — first public release
+## 0.18.2 — first public release
 
 **Requirements** are checked and explained: Windows 10/11, VS Code 1.101+, git 2.31+, and Rojo
 installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoHub/guide/requirements)).
@@ -25,6 +25,8 @@ installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoH
   auto-save does not restart Rojo at every keystroke.
 - A `servePort` of 34870 (Rojo-Hub's own port) is refused with an explanation.
 - Finding Rojo processes works whatever letters the Windows user name has.
+- Works when Windows uses 8.3 short names in your profile or project paths (`C:\Users\JOHNSM~1`):
+  a live switch reaches Studio, and views and worktrees are recognised.
 
 **Safer.**
 - Only programs on this PC can use the service: web pages, including DNS-rebinding and
