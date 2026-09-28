@@ -172,6 +172,7 @@ window.acquireVsCodeApi = () => ({
 			reply({ type: "state", state: JSON.parse(JSON.stringify(state)) });
 			reply({ type: "busy", key: `agent:${message.id}`, busy: false });
 		}, 700);
+		if (message.type === "projectFiles") setTimeout(() => reply({ type: "projectFiles", id: message.id, files: ["default.project.json", "bench.project.json", "test.project.json"] }), 150);
 		if (message.type === "candidates") reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
 	},
 });

@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
-import { defaultProjectFile, DEFAULT_PROJECT_FILE, listProjectFiles } from "../common/projectFiles";
+import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
 import { agentWishes, askOnce, copySetup, registerVsCodeAgents, setAgentBox, vscodeAgentsOn } from "./agents";
@@ -572,10 +572,7 @@ async function projectFileFor(path: string): Promise<string | undefined> {
 	return picked;
 }
 
-/*
-	Lets the user pick another of the folder's *.project.json files for a
-	project. A serving project restarts on it, so that asks first.
-*/
+/* The project's quick pick: Project File… lists the folder's *.project.json files. */
 async function changeProjectFile(slot: SlotView, busyKey: string | null): Promise<void> {
 	const files = listProjectFiles(slot.repoPath);
 	if (files.length === 0) {
@@ -588,10 +585,40 @@ async function changeProjectFile(slot: SlotView, busyKey: string | null): Promis
 		file,
 	}));
 	const picked = await vscode.window.showQuickPick(items, { title: `${slot.projectName}: project file`, placeHolder: "Which project file should Rojo serve?" });
-	if (!picked || picked.file === slot.projectFile) return;
+	if (picked) await useProjectFile(slot, picked.file, busyKey);
+}
+
+/*
+	Browse… in the card's project file list: a file dialog that starts in the
+	project's folder. Only a *.project.json directly in that folder is taken,
+	since that is where the project's file must be on every branch.
+*/
+async function browseProjectFile(slot: SlotView): Promise<void> {
+	const chosen = await vscode.window.showOpenDialog({
+		defaultUri: vscode.Uri.file(slot.repoPath),
+		canSelectFiles: true,
+		canSelectFolders: false,
+		canSelectMany: false,
+		filters: { "Rojo project files": ["json"] },
+		openLabel: "Serve This File",
+		title: `${slot.projectName}: pick a *.project.json in its folder`,
+	});
+	const path = chosen?.[0]?.fsPath;
+	if (!path) return;
+	const file = basename(path);
+	if (pathKey(dirname(path)) !== pathKey(slot.repoPath) || !isProjectFileName(file)) {
+		void vscode.window.showErrorMessage(`Rojo-Hub: pick a *.project.json directly in ${slot.repoPath}. A project serves a project file from its own folder, so every branch has it in the same place.`);
+		return;
+	}
+	await useProjectFile(slot, file, `slot:${slot.id}`);
+}
+
+/* Switches a project to `file`, asking first when it is serving, since that restarts Rojo. */
+async function useProjectFile(slot: SlotView, file: string, busyKey: string | null): Promise<void> {
+	if (file === slot.projectFile) return;
 	if (slot.state !== "stopped") {
 		const sure = await vscode.window.showWarningMessage(
-			`Serve ${picked.file} for ${slot.projectName}?`,
+			`Serve ${file} for ${slot.projectName}?`,
 			{
 				modal: true,
 				detail: "Rojo restarts on the new file, so Studio disconnects. With the plugin's Auto Reconnect on it reconnects by itself, unless the file has a different project name; then connect Studio by hand once.",
@@ -600,8 +627,8 @@ async function changeProjectFile(slot: SlotView, busyKey: string | null): Promis
 		);
 		if (sure !== "Restart on It") return;
 	}
-	if (busyKey) await act(busyKey, () => client.setProjectFile(slot.id, picked.file));
-	else await run(`Switching ${slot.projectName} to ${picked.file}`, () => client.setProjectFile(slot.id, picked.file));
+	if (busyKey) await act(busyKey, () => client.setProjectFile(slot.id, file));
+	else await run(`Switching ${slot.projectName} to ${file}`, () => client.setProjectFile(slot.id, file));
 }
 
 async function addProject(): Promise<void> {
@@ -814,8 +841,14 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "log":
 			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 			return;
-		case "projectFile":
-			if (slot) await changeProjectFile(slot, `slot:${slot.id}`);
+		case "projectFiles":
+			if (slot) panel.post({ type: "projectFiles", id: slot.id, files: listProjectFiles(slot.repoPath) });
+			return;
+		case "setProjectFile":
+			if (slot) await useProjectFile(slot, message.file, `slot:${slot.id}`);
+			return;
+		case "browseProjectFile":
+			if (slot) await browseProjectFile(slot);
 			return;
 		case "remove":
 			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));

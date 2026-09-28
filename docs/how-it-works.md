@@ -171,8 +171,9 @@ a project). Each project is a card:
   [Switching branches](#8-switching-branches)); its **Fetch** button (⟳, in the search box) and
   **New branch** row are described there too;
 - **the project file** it serves (`default.project.json`, `test.project.json`, …), in a row of its
-  own under that, since it decides what Studio gets. Clicking it picks another; see
-  [Project files](#project-files). In a narrow sidebar it shows just `default` or `test`;
+  own under that, since it decides what Studio gets. Clicking it opens a list inside the card, like
+  the branch picker; see [Project files](#project-files). In a narrow sidebar it shows just
+  `default` or `test`;
 - **warnings** (yellow) and **errors** (red), in full. An error from Rojo shows its first line, then
   up to the last five lines Rojo logged about it, with *Show full log*;
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
@@ -299,8 +300,11 @@ this way:
 - otherwise the folder's only `*.project.json` (a library with just a `test.project.json`, say);
 - otherwise a list of the folder's project files to choose from.
 
-The **project file row** on the card (and *Project File…* in the project's menu) lists the folder's
-`*.project.json` files with the current one ticked and changes it. The choice is saved with the
+The **project file row** on the card opens a list inside the card of the folder's `*.project.json`
+files, with the current one ticked; clicking one switches to it, and Escape closes the list. At the
+bottom, **Browse…** opens a file dialog that starts in the project's folder, for picking the file by
+hand; only a `*.project.json` directly in that folder is taken. *Project File…* in the project's menu
+lists the same files as a quick pick. The choice is saved with the
 project, so it stays after restarts and updates. That is how a library is served with its tests:
 pick `test.project.json` (or whatever builds a place with the library and its tests in it).
 

@@ -51,6 +51,8 @@ const ui = {
 	picker: null as null | Picker,
 	/** Each project's last branch-picker list, so the picker opens with it drawn while a newer one is asked for. */
 	targets: new Map<string, TargetOption[]>(),
+	/** The project whose project file list is open, and the files in its folder once the extension says (spec 005). */
+	filePicker: null as null | { id: string; files: string[] | null },
 	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
 	menuDown: false,
@@ -330,6 +332,34 @@ function picker(slot: SlotView): string {
 }
 
 /*
+	The project file list under a card's project file row (spec 005): the
+	*.project.json files in the project's folder, the current one ticked, and
+	Browse… for a file dialog that starts in that folder.
+*/
+function filePicker(slot: SlotView): string {
+	const open = ui.filePicker;
+	if (!open || open.id !== slot.id) return "";
+	const rows =
+		open.files === null
+			? `<div class="muted pad">${icon("loading", "codicon-modifier-spin")} Reading the project's folder…</div>`
+			: open.files.length === 0
+				? `<div class="muted pad">No *.project.json directly in the project's folder.</div>`
+				: open.files
+						.map((file) => {
+							const current = file === slot.projectFile;
+							const sub = current ? "Serving now" : file === "default.project.json" ? "The default" : "";
+							return `<button class="list-item${current ? " current" : ""}" data-action="pick-file" data-id="${escape(slot.id)}" data-file="${escape(file)}">${icon("file-code")}<span class="grow"><span class="label">${escape(file)}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</span>${current ? icon("check") : ""}</button>`;
+						})
+						.join("");
+	const browse = `<button class="list-item create" data-action="browse-file" data-id="${escape(slot.id)}">${icon("folder-opened")}<span class="grow"><span class="label">Browse…</span><span class="sub">Pick a *.project.json in the project's folder</span></span></button>`;
+	const serving = slot.state !== "stopped";
+	return `<div class="picker file-picker">
+		<div class="list">${rows}${browse}</div>
+		<p class="hint">${serving ? "Rojo restarts on the new file (after asking), so Studio reconnects." : "Saved for this project; used when it next starts."}</p>
+	</div>`;
+}
+
+/*
 	A project card. Folded, it is one row (light, name, port, start/stop);
 	open, the full card. `list` is the drag list it belongs to.
 */
@@ -341,7 +371,8 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const pickerOpen = ui.picker?.id === slot.id;
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
-	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
+	const filesOpen = ui.filePicker?.id === slot.id;
+	const isFolded = folded(key, foldedByDefault) && !pickerOpen && !filesOpen;
 	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${isFolded ? fileTag(slot) : ""}</button>`;
 	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
@@ -364,9 +395,10 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
-		<button class="target project-file" data-action="projectFile" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
-			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon("chevron-down")}
+		<button class="target project-file${filesOpen ? " open" : ""}" data-action="project-files" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
+			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon(filesOpen ? "chevron-up" : "chevron-down")}
 		</button>
+		${filePicker(slot)}
 		${claimNote(slot)}
 		${notices(slot)}
 		<div class="row card-foot">
@@ -911,7 +943,19 @@ function parseExcluded(text: string): { values: (number | string)[]; bad: string
 	return { values, bad: null };
 }
 
+function openFilePicker(id: string): void {
+	ui.picker = null;
+	if (ui.filePicker?.id === id) ui.filePicker = null;
+	else {
+		ui.filePicker = { id, files: null };
+		send({ type: "projectFiles", id });
+	}
+	render();
+	document.querySelector<HTMLElement>(".file-picker .list-item")?.focus();
+}
+
 function openPicker(id: string): void {
+	ui.filePicker = null;
 	if (ui.picker?.id === id) {
 		ui.picker = null;
 	} else {
@@ -988,6 +1032,16 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "picker":
 			return openPicker(id);
+		case "project-files":
+			return openFilePicker(id);
+		case "pick-file":
+			ui.filePicker = null;
+			send({ type: "setProjectFile", id, file: target.dataset.file ?? "" });
+			return render();
+		case "browse-file":
+			ui.filePicker = null;
+			send({ type: "browseProjectFile", id });
+			return render();
 		case "pick":
 			return pick(Number(index));
 		case "menu":
@@ -1021,9 +1075,6 @@ document.addEventListener("click", (event) => {
 		case "sourcemap":
 			ui.busy.add(`slot:${id}`);
 			send({ type: "sourcemap", id });
-			return render();
-		case "projectFile":
-			send({ type: "projectFile", id });
 			return render();
 		case "build":
 			ui.busy.add(`build:${id}`);
@@ -1262,6 +1313,7 @@ document.addEventListener("keydown", (event) => {
 	const kind = input.dataset?.input;
 	if (event.key === "Escape") {
 		if (ui.menu) ui.menu = null;
+		else if (ui.filePicker) ui.filePicker = null;
 		else if (kind === "search") ui.picker = null;
 		else if (kind === "branch-name" && ui.picker) ui.picker.create = null;
 		else if (kind === "filter") ui.filter = null;
@@ -1437,6 +1489,12 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			return;
 		case "focus":
 			return flash(message.id);
+		case "projectFiles":
+			if (ui.filePicker?.id === message.id) {
+				ui.filePicker.files = message.files;
+				render();
+			}
+			return;
 		case "collapse":
 			return collapseAll();
 		case "fold":

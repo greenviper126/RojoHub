@@ -27,9 +27,12 @@ it afterwards.
       `default.project.json`, a folder with one `*.project.json` uses that file, and a folder with
       several asks which one. A folder with none is refused, naming what it looked for.
 - [x] The card shows the project file in a row of its own under the branch row, because it decides
-      what Studio gets ("its vital information to change to a user"). Clicking it, or *Project
-      File…* in the project's quick pick, lists the folder's `*.project.json` files with the current
-      one marked, and changes it.
+      what Studio gets ("its vital information to change to a user"). Clicking it opens a list in the
+      card, like the branch picker ("similar to the branch selection id like to be able to just
+      choose the json from dropdown"): the folder's `*.project.json` files with the current one
+      ticked, then **Browse…**, a file dialog starting in the project's folder ("an option to select
+      a json file manually"), which takes only a `*.project.json` directly in that folder. *Project
+      File…* in the project's quick pick lists the same files.
 - [x] Changing it on a stopped project only saves it. On a serving project it asks first, since Rojo
       reads the project name, `servePort` and place IDs once per session (001): Rojo is restarted on
       the new file, and Studio reconnects. This is the one deliberate exception to "switching never
