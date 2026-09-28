@@ -134,6 +134,7 @@ async function refresh(): Promise<void> {
 	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
 	noticeDisconnects(health ? lastSlots : []);
+	if (health) noticePortMoves(lastSlots);
 	await refreshWorkspaces();
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
@@ -148,6 +149,32 @@ async function refresh(): Promise<void> {
 		agentNudge: !!health && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 	});
 	updateStatus();
+}
+
+/** Each project's port at the last poll, to notice one that moved. */
+let lastPorts: Map<string, number> | null = null;
+
+/*
+	Says when a project's port moved (a removal, a servePort, the port settings,
+	another project file), since Studio's Rojo plugin still has the old one. Like
+	noticeDisconnects, only a window with the project open, or else the focused
+	window, says it.
+*/
+function noticePortMoves(slots: SlotView[]): void {
+	const before = lastPorts;
+	lastPorts = new Map(slots.filter((slot) => slot.port > 0).map((slot) => [slot.id, slot.port]));
+	if (!before) return;
+	for (const slot of slots) {
+		const from = before.get(slot.id);
+		if (!from || slot.port <= 0 || from === slot.port) continue;
+		if (!workspaceRepos.includes(pathKey(slot.repoPath)) && !vscode.window.state.focused) continue;
+		void vscode.window
+			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Set the Rojo plugin's port to ${slot.port} in its places.`, "Copy Port", "Show Project")
+			.then(async (choice) => {
+				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
+				if (choice === "Show Project") void panel.focus(slot.id);
+			});
+	}
 }
 
 /** Each serving project's Studio connections at the last poll, to notice a drop to none. */
@@ -755,10 +782,19 @@ async function buildPlace(slot: SlotView): Promise<void> {
 	if (choice) await vscode.commands.executeCommand("revealFileInOS", target);
 }
 
+/*
+	Asks before removing a project, naming every other project that takes a
+	different port because of it (one it had pushed off its own port moves
+	back), and which of those Studio has to reconnect to.
+*/
 async function confirmRemove(slot: SlotView): Promise<boolean> {
+	const moves = await client.portMovesOnRemove(slot.id).catch(() => []);
+	const detail = moves
+		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects and must reconnect to ${move.to}` : ""}.`)
+		.join("\n");
 	const sure = await vscode.window.showWarningMessage(
 		`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,
-		{ modal: true },
+		{ modal: true, detail: detail || undefined },
 		"Remove",
 	);
 	return sure === "Remove";
@@ -949,13 +985,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		},
 		"rojoHub.removeProject": async (argument) => {
 			const slot = await pickSlot(argument, "Remove which project?");
-			if (!slot) return;
-			const sure = await vscode.window.showWarningMessage(
-				`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,
-				{ modal: true },
-				"Remove",
-			);
-			if (sure) await run(`Removing ${slot.projectName}`, () => client.remove(slot.id));
+			if (slot && (await confirmRemove(slot))) await run(`Removing ${slot.projectName}`, () => client.remove(slot.id));
 		},
 		"rojoHub.showLog": async (argument) => {
 			const slot = await pickSlot(argument, "Show whose log?");

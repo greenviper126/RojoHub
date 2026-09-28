@@ -509,3 +509,37 @@ test("project files: added by default or the only one, changed live with a resta
 	await call("DELETE", `/slots/${slot.id}`);
 	await call("DELETE", `/slots/${solo.id}`);
 });
+
+test("removing a project that pushed another off its port says so first, then moves it back", async () => {
+	const [one, two] = await Promise.all([makeRepo("MoveOne"), makeRepo("MoveTwo")]);
+	const a = await call<SlotView>("POST", "/slots", { path: one });
+	const own = a.port;
+	await call("POST", `/slots/${a.id}/start`);
+
+	// Two claims One's hashed port with servePort, so One is pushed to the next free port
+	const project = JSON.parse(readFileSync(join(two, "default.project.json"), "utf8"));
+	project.servePort = own;
+	writeFileSync(join(two, "default.project.json"), JSON.stringify(project));
+	const b = await call<SlotView>("POST", "/slots", { path: two });
+	const pushed = await until("One pushed off its port", async () => {
+		const view = (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!;
+		return view.port !== own && view.state === "running" && view;
+	}, 30000);
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === b.id)!.port, own);
+
+	assert.deepEqual(await call("GET", `/slots/${b.id}/port-moves-on-remove`), [
+		{ id: a.id, projectName: a.projectName, from: pushed.port, to: own, serving: true },
+	]);
+	assert.deepEqual(await call("GET", `/slots/${a.id}/port-moves-on-remove`), [], "a servePort never moves");
+	await assert.rejects(call("GET", "/slots/nope/port-moves-on-remove"), /No project/);
+
+	await call("DELETE", `/slots/${b.id}`);
+	const back = await until("One back on its own port", async () => {
+		const view = (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!;
+		return view.port === own && view.state === "running" && view;
+	}, 30000);
+	assert.match(back.warnings.join("\n"), new RegExp(`Port moved from ${pushed.port} to ${own}`));
+
+	await call("POST", `/slots/${a.id}/stop`);
+	await call("DELETE", `/slots/${a.id}`);
+});

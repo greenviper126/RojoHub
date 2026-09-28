@@ -193,6 +193,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					await hub.remove(id);
 					return send(response, 200, { ok: true });
 				}
+				if (method === "GET" && action === "port-moves-on-remove") return send(response, 200, hub.portMovesOnRemove(id));
 				if (method === "POST" && action === "start") return send(response, 200, await hub.start(id));
 				if (method === "POST" && action === "stop") return send(response, 200, await hub.stop(id));
 				if (method === "GET" && action === "targets") return send(response, 200, await hub.targets(id));

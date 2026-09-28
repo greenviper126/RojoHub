@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-import type { PortSettings, SlotView, Target, TargetOption } from "../common/api";
+import type { PortMove, PortSettings, SlotView, Target, TargetOption } from "../common/api";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, headFile, inOrca, listWorktrees, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, readHead, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
-import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment } from "./ports";
+import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
@@ -238,17 +238,7 @@ export class Hub {
 	private refreshPorts(): void {
 		const config = loadPortConfig(this.home);
 		this.portProblems = config.problems;
-		const requests = this.registry.slots.map((slot) => {
-			let servePort: number | null = null;
-			try {
-				const value = readProject(join(slot.repoPath, slot.projectFile)).servePort;
-				if (Number.isInteger(value)) servePort = value as number;
-			} catch {
-				// an unreadable project file shows up when the slot starts
-			}
-			return { id: slot.id, name: slot.projectName, seed: slot.seed ?? `name:${slot.projectName}`, servePort };
-		});
-		this.assignments = assignPorts(requests, config);
+		this.assignments = assignPorts(this.portRequests(this.registry.slots), config);
 		for (const slot of this.registry.slots) {
 			const assigned = this.assignments.get(slot.id);
 			if (!assigned?.port || assigned.port === slot.port) continue;
@@ -274,6 +264,39 @@ export class Hub {
 				.catch(() => undefined)
 				.finally(() => this.moving.delete(slot.id));
 		}
+	}
+
+	private portRequests(slots: SlotRecord[]): PortRequest[] {
+		return slots.map((slot) => {
+			let servePort: number | null = null;
+			try {
+				const value = readProject(join(slot.repoPath, slot.projectFile)).servePort;
+				if (Number.isInteger(value)) servePort = value as number;
+			} catch {
+				// an unreadable project file shows up when the slot starts
+			}
+			return { id: slot.id, name: slot.projectName, seed: slot.seed ?? `name:${slot.projectName}`, servePort };
+		});
+	}
+
+	/*
+		The projects whose port would change if this one were removed: a project
+		that was pushed off its own port by it moves back. Worked out with the same
+		assignment that refreshPorts runs after the removal, so the Remove
+		confirmation can say it first.
+	*/
+	portMovesOnRemove(id: string): PortMove[] {
+		this.registry.get(id);
+		const rest = this.registry.slots.filter((slot) => slot.id !== id);
+		const after = assignPorts(this.portRequests(rest), loadPortConfig(this.home));
+		const moves: PortMove[] = [];
+		for (const slot of rest) {
+			const to = after.get(slot.id)?.port;
+			if (!to || !slot.port || to === slot.port) continue;
+			const state = this.runtime(slot.id).state;
+			moves.push({ id: slot.id, projectName: slot.projectName, from: slot.port, to, serving: state === "running" || state === "starting" || state === "error" });
+		}
+		return moves;
 	}
 
 	/** Stores new global port settings and moves any slot whose port changes. */
@@ -457,6 +480,7 @@ export class Hub {
 			this.runtimes.delete(id);
 			this.claims.delete(id);
 			this.trackRepos();
+			this.refreshPorts();
 		});
 	}
 

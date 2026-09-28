@@ -219,8 +219,17 @@ Implemented in `src/service/ports.ts`; recomputed every 3 s and on every change.
    keeps the last values in `settings.json`. 34872 is excluded whatever the settings say. Windows'
    dynamic port range on this machine starts at 49152, so it never overlaps the default range.
 
-A running slot whose port changes (a new `servePort`, a new exclusion) is stopped and restarted on
-the new port: a new session, so the slot tells you to reconnect Studio. A port held by a program
+A running slot whose port changes (a new `servePort`, a new exclusion, or removing the project that
+pushed it off its own port) is stopped and restarted on the new port: a new session, so the slot
+tells you to reconnect Studio.
+
+Added with Viper on 2026-09-28: removing a project may move others back, and that is allowed, but
+never silently. Before a removal the extension asks the service (`GET
+/slots/:id/port-moves-on-remove`), which runs the same assignment without that project, and the
+Remove confirmation names each project that would move and whether Studio has to reconnect. The
+removal recomputes ports at once rather than on the next tick. After any move, whatever caused it,
+VS Code shows a warning with the old and new port (in a window with the project open, else the
+focused window), since the Rojo plugin remembers the old port per place. A port held by a program
 outside the Hub is reported at start, suggesting an exclusion.
 
 ### Groups

@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.17.2";
+export const SERVICE_VERSION = "0.17.3";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -23,6 +23,16 @@ export type Target = { kind: "worktree"; path: string } | { kind: "branch"; ref:
 	it read from registry.json while the service is not running.
 */
 export type SlotState = "stopped" | "starting" | "running" | "error" | "offline";
+
+/** A project whose port would change if another project were removed (spec 001, "Ports"). */
+export interface PortMove {
+	id: string;
+	projectName: string;
+	from: number;
+	to: number;
+	/** Serving now, so the move restarts its rojo and Studio has to reconnect. */
+	serving: boolean;
+}
 
 export interface SlotView {
 	id: string;

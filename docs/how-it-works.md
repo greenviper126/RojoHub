@@ -353,7 +353,10 @@ because that command starts the real Rojo as a console program of its own.)
 are left alone.
 
 **Remove Project** stops its Rojo, deletes its generated files and views, and removes it from every
-group. The project's own files are never touched.
+group. The project's own files are never touched. If removing it frees a port that another project
+was pushed off (see [Ports](#6-ports)), that project moves back; the confirmation names each project
+that will move, from which port to which, and says when it is serving and Studio will have to
+reconnect.
 
 ### Workspaces
 
@@ -394,9 +397,12 @@ A project's port is decided by these rules, in order, and is recomputed every fe
 
 **Excluding ports** for all projects: the `rojoHub.excludedPorts` setting (see [Settings](#13-settings)).
 
-**When a port changes** (you add a `servePort`, or exclude the port a project is on), a serving
-project is restarted on its new port. That is a new session: reconnect Studio to the new port. The
-project shows *Port moved from A to B*.
+**When a port changes** (you add a `servePort`, exclude the port a project is on, or remove the
+project that had pushed it off its own port), a serving project is restarted on its new port. That is
+a new session: reconnect Studio to the new port. The project shows *Port moved from A to B*, and
+VS Code shows a warning, *… moved from port A to B*, with **Copy Port** and **Show Project**; the
+window with the project open says it, or else the focused window. The Rojo plugin remembers the last
+port per place, so set it to the new one once.
 
 **If another program already holds a project's port**, starting it fails with a message saying
 so; add that port to `rojoHub.excludedPorts` and the project moves.
