@@ -18,6 +18,7 @@ import { Conflict, NotFound } from "./registry";
 	POST   /slots/:id/fetch                          git fetch --all --prune, then the fresh list
 	POST   /slots/:id/branch      { name, base }     a new branch in its own worktree, and switch to it
 	POST   /slots/:id/build       { output }         rojo build of what the slot serves
+	POST   /slots/:id/sourcemap                      write the served worktree's sourcemap.json once
 	POST   /slots/:id/switch      { target }
 	GET    /groups
 	POST   /groups                { name, slotIds?, groupIds? }
@@ -28,7 +29,7 @@ import { Conflict, NotFound } from "./registry";
 	GET    /order                                    the panel's display order
 	PUT    /order                 { projects?, groups? }   (never changes ports)
 	POST   /stop-all                                 stop every serving project, mark every group stopped
-	PUT    /settings              { portRange?, excludedPorts? }
+	PUT    /settings              { portRange?, excludedPorts?, sourcemaps? }
 	POST   /shutdown              { stopServing? }
 */
 
@@ -85,7 +86,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
 				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];
-				hub.setPortSettings({ portRange: typeof input.portRange === "string" ? input.portRange : "", excludedPorts });
+				hub.setPortSettings({ portRange: typeof input.portRange === "string" ? input.portRange : "", excludedPorts, sourcemaps: input.sourcemaps !== false });
 				return send(response, 200, { ok: true });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {
@@ -157,6 +158,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					if (typeof input.name !== "string" || typeof input.base !== "string") return send(response, 400, { error: "name and base are required" });
 					return send(response, 200, await hub.createBranch(id, input.name, input.base));
 				}
+				if (method === "POST" && action === "sourcemap") return send(response, 200, await hub.writeSourcemap(id));
 				if (method === "POST" && action === "build") {
 					const input = await body(request);
 					if (typeof input.output !== "string") return send(response, 400, { error: "output is required" });

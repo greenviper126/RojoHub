@@ -4,9 +4,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { PortSettings, SlotView, Target, TargetOption } from "../common/api";
 import { branchExists, checkBranchName, git, headFile, inOrca, listWorktrees, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, readHead, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
-import { assignPorts, loadPortConfig, repoSeed, savePortSettings, type PortAssignment } from "./ports";
+import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
+import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
 
@@ -37,6 +38,10 @@ interface Runtime {
 	head: string | null;
 	/** The last such checkout, to explain a crash that follows it. */
 	checkout: { branch: string; at: number } | null;
+	/** Keeps the served worktree's sourcemap.json current while serving (spec 003). */
+	sourcemap: SourcemapWatcher | null;
+	/** Why there is no sourcemap watcher, for the panel. */
+	sourcemapOff: string;
 }
 
 /*
@@ -101,6 +106,8 @@ export class Hub {
 				headFile: null,
 				head: null,
 				checkout: null,
+				sourcemap: null,
+				sourcemapOff: "Kept up to date while the project is serving",
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -140,6 +147,7 @@ export class Hub {
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
 						this.trackHead(slot);
+						await this.syncSourcemap(slot);
 						return;
 					}
 					await this.startLocked(slot).catch(() => undefined);
@@ -249,6 +257,7 @@ export class Hub {
 	setPortSettings(settings: PortSettings): void {
 		savePortSettings(this.home, settings);
 		this.refreshPorts();
+		for (const slot of this.registry.slots) void this.enqueue(slot.id, () => this.syncSourcemap(slot)).catch(() => undefined);
 	}
 
 	view(slot: SlotRecord): SlotView {
@@ -277,6 +286,7 @@ export class Hub {
 			sessionId: runtime.sessionId,
 			logFile: this.logFile(slot.id),
 			targetsAt: this.targetCache.stamp(slot.repoPath),
+			sourcemap: runtime.sourcemap?.status ?? { state: "off", detail: runtime.sourcemapOff },
 		};
 	}
 
@@ -391,6 +401,17 @@ export class Hub {
 		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via };
 	}
 
+	/** Writes the served worktree's sourcemap.json once, on request, even where the watcher would not. */
+	async writeSourcemap(id: string): Promise<{ path: string }> {
+		const slot = this.registry.get(id);
+		if (slot.target.kind !== "worktree") throw new Conflict("This project serves a branch from a Hub copy, which nothing edits, so it has no sourcemap. Switch it to a worktree first.");
+		const tree = resolve(slot.target.path);
+		const rojo = resolveRojo(slot.repoPath);
+		if (!rojo.ok) throw new Conflict(rojo.error);
+		await writeSourcemap(rojo.binary, tree, slot.projectFile);
+		return { path: join(tree, "sourcemap.json") };
+	}
+
 	/*
 		Builds a place file of exactly what the slot serves: its slot file, so a
 		borrowed project file and Packages from the primary checkout match what
@@ -450,6 +471,7 @@ export class Hub {
 			this.watchBorrowed(slot, tree);
 			this.trackHead(slot);
 			await this.describeTarget(slot);
+			await this.syncSourcemap(slot);
 			if (runtime.state !== "running") await this.collectViews(slot);
 			return this.view(slot);
 		});
@@ -461,6 +483,9 @@ export class Hub {
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			runtime.watcher?.close();
+			// Sourcemap watchers are the service's own children; a service that takes over starts them again.
+			runtime.sourcemap?.stop();
+			runtime.sourcemap = null;
 			if (stopServing) await this.stopLocked(slot);
 		}
 	}
@@ -499,6 +524,7 @@ export class Hub {
 			runtime.log.poll();
 			runtime.log.takeProblems();
 			await this.describeTarget(slot);
+			await this.syncSourcemap(slot);
 		} catch (error) {
 			runtime.state = "error";
 			runtime.error = error instanceof Error ? error.message : String(error);
@@ -514,6 +540,7 @@ export class Hub {
 		runtime.sessionId = null;
 		runtime.error = null;
 		stopRojo(this.slotFile(slot.id));
+		await this.syncSourcemap(slot);
 		await this.waitForPortFree(slot.port).catch(() => undefined);
 		await this.collectViews(slot);
 	}
@@ -655,6 +682,34 @@ export class Hub {
 			}
 		}
 		await git(slot.repoPath, ["worktree", "prune"]).catch(() => undefined);
+	}
+
+	/*
+		Starts, moves or stops the slot's sourcemap watcher to match what it
+		serves (spec 003): only while serving a worktree in place, only where
+		sourcemap.json is gitignored or already there, and not when
+		rojoHub.sourcemaps is off. Otherwise it records why not.
+	*/
+	private async syncSourcemap(slot: SlotRecord): Promise<void> {
+		const runtime = this.runtime(slot.id);
+		const off = (detail: string) => {
+			runtime.sourcemap?.stop();
+			runtime.sourcemap = null;
+			runtime.sourcemapOff = detail;
+		};
+		const tree = slot.target.kind === "worktree" ? resolve(slot.target.path) : null;
+		if (loadPortSettings(this.home).sourcemaps === false) return off("Turned off (rojoHub.sourcemaps)");
+		if (runtime.state !== "running") return off("Kept up to date while the project is serving");
+		if (!tree) return off("Not kept for a branch served from a Hub copy, which nothing edits");
+		if (!existsSync(join(tree, slot.projectFile))) return off(`${basename(tree)} has no ${slot.projectFile}`);
+		if (!(await mayWrite(tree))) return off(`Not kept: sourcemap.json is not gitignored in ${basename(tree)}, so it would show up in git`);
+		if (runtime.sourcemap && pathKey(runtime.sourcemap.tree) === pathKey(tree)) return;
+		runtime.sourcemap?.stop();
+		runtime.sourcemap = null;
+		const rojo = resolveRojo(slot.repoPath);
+		if (!rojo.ok) return off(rojo.error);
+		stopStrayWatchers(tree);
+		runtime.sourcemap = new SourcemapWatcher(rojo.binary, tree, slot.projectFile);
 	}
 
 	private trackHead(slot: SlotRecord): void {

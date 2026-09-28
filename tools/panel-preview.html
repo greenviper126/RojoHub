@@ -113,7 +113,7 @@ if (params.get("width")) document.body.style.width = params.get("width") + "px";
 const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
 	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", port, portSource: "hash",
 	state, connections: 0, target: { kind: "worktree", path: `C:\\Users\\dev\\${projectName}` }, targetLabel, branch: targetLabel,
-	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, ...extra,
+	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, ...extra,
 });
 const state = {
 	service: { running: true, version: "0.13.0", error: null },

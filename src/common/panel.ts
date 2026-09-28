@@ -72,6 +72,7 @@ export type FromPanel =
 	| { type: "fetch"; id: string }
 	| { type: "createBranch"; id: string; name: string; base: string }
 	| { type: "build"; id: string }
+	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
 	| { type: "remove"; id: string }

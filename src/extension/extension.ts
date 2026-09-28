@@ -573,7 +573,11 @@ async function addProject(): Promise<void> {
 async function pushSettings(): Promise<void> {
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	await client
-		.putSettings({ portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) })
+		.putSettings({
+			portRange: config.get<string>("portRange", ""),
+			excludedPorts: config.get<(number | string)[]>("excludedPorts", []),
+			sourcemaps: config.get<boolean>("sourcemaps", true),
+		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
 
@@ -732,6 +736,11 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "build":
 			if (slot) await buildPlace(slot);
 			return;
+		case "sourcemap": {
+			const written = await act(`slot:${message.id}`, () => client.sourcemap(message.id));
+			if (written) void vscode.window.setStatusBarMessage(`$(check) Rojo-Hub wrote ${written.path}`, 4000);
+			return;
+		}
 		case "copy":
 			if (!slot) return;
 			await vscode.env.clipboard.writeText(`localhost:${slot.port}`);

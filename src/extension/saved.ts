@@ -45,6 +45,7 @@ export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: Slo
 			sessionId: null,
 			logFile: join(hubHome, "slots", record.id, "rojo.log"),
 			targetsAt: 0,
+			sourcemap: { state: "off", detail: "" },
 		};
 	});
 	const records = saved.groups ?? [];

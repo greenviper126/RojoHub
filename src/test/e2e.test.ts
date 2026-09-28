@@ -367,5 +367,26 @@ test("branch picker: cached list kept fresh, fetch, new branch, build, and a che
 	assert.equal(noticed.state, "running", "a checkout that removes no folder leaves Rojo running");
 	await until("the label to follow the checkout", async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.targetLabel === "swapped-in");
 
+	// Sourcemaps (spec 003): never created where git would show it; written on request; then kept up to date, through a crash
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	const sourcemap = join(made.path, "sourcemap.json");
+	assert.equal((await view()).sourcemap.state, "off");
+	assert.match((await view()).sourcemap.detail, /not gitignored/);
+	assert.throws(() => readFileSync(sourcemap), "nothing was written");
+	await call("POST", `/slots/${slot.id}/sourcemap`);
+	assert.ok(readFileSync(sourcemap, "utf8").includes("Main.server.luau"), "Update sourcemap.json writes it once");
+	await call("PUT", "/settings", { sourcemaps: true });
+	await until("the watcher", async () => (await view()).sourcemap.state === "watching");
+	write(join(made.path, "src", "Later.server.luau"), "print(1)\n");
+	await until("a new file in the sourcemap", async () => readFileSync(sourcemap, "utf8").includes("Later.server.luau"));
+	write(join(made.path, "src", "Gone", "X.luau"), "return 1\n");
+	await until("the folder in the sourcemap", async () => readFileSync(sourcemap, "utf8").includes("X.luau"));
+	rmSync(join(made.path, "src", "Gone"), { recursive: true, force: true }); // rojo-rbx/rojo#1305 kills the watcher
+	await sleep(2500);
+	write(join(made.path, "src", "AfterCrash.server.luau"), "print(2)\n");
+	await until("the restarted watcher to see a new file", async () => readFileSync(sourcemap, "utf8").includes("AfterCrash.server.luau"));
+	await call("PUT", "/settings", { sourcemaps: false });
+	await until("the watcher to stop", async () => (await view()).sourcemap.state === "off");
+
 	await call("DELETE", `/slots/${slot.id}`);
 });

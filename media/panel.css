@@ -1398,3 +1398,36 @@ button:focus-visible {
 .notice .link {
 	color: var(--vscode-textLink-foreground);
 }
+
+.menu-note {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: 260px;
+	padding: 2px 8px 4px 8px;
+	color: var(--muted);
+	font-size: 0.85em;
+	line-height: 1.35;
+}
+
+.menu-note span {
+	white-space: normal;
+}
+
+.menu-note .codicon {
+	flex: none;
+	font-size: 12px;
+}
+
+.menu-note.watching .codicon {
+	color: var(--ok);
+}
+
+.menu-note.error .codicon {
+	color: var(--warn);
+}
+
+.menu.down {
+	top: calc(100% + 4px);
+	bottom: auto;
+}

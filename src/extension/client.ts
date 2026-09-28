@@ -74,6 +74,7 @@ export const client = {
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
 	fetch: (id: string) => call<TargetOption[]>("POST", `/slots/${encodeURIComponent(id)}/fetch`),
 	createBranch: (id: string, name: string, base: string) => call<BranchResult>("POST", `/slots/${encodeURIComponent(id)}/branch`, { name, base }),
+	sourcemap: (id: string) => call<{ path: string }>("POST", `/slots/${encodeURIComponent(id)}/sourcemap`),
 	build: (id: string, output: string) => call<{ output: string; bytes: number }>("POST", `/slots/${encodeURIComponent(id)}/build`, { output }),
 	switch: (id: string, target: Target) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/switch`, { target }),
 	groups: () => call<GroupView[]>("GET", "/groups"),

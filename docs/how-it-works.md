@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.15.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.15.1, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -146,8 +146,9 @@ a project). Each project is a card:
   up to the last five lines Rojo logged about it, with *Show full log*;
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
   Studio), *Starting…*, *Stopped* or *Error*), a **⋯** menu, and **Start** or **Stop** at the right.
-  The ⋯ menu has *Build place file…*, *Show Rojo log* and *Remove from Rojo-Hub…* (which asks
-  first).
+  The ⋯ menu has *Update sourcemap.json* with the sourcemap's status (for a project serving a
+  worktree; see [Sourcemaps](#sourcemaps)), *Build place file…*, *Show Rojo log* and *Remove from
+  Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
 
 **Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
 borrowed project file and packages match what Studio gets. A save dialog opens on
@@ -381,6 +382,24 @@ connected:
 A name git does not allow, a branch that already exists, or a base that does not exist is pointed out
 in the form before anything is made. When it is done, a message offers *Open in New Window*.
 
+### Sourcemaps
+
+While a project serves a worktree, Rojo-Hub keeps that worktree's `sourcemap.json` up to date with
+the project's pinned `rojo sourcemap --watch`. luau-lsp reads it for Roblox types, and so do tools
+such as `wally-package-types`. It works whether or not VS Code, a window on that folder, or the
+luau-lsp extension is open, so an Orca agent editing a worktree with no window gets it too.
+
+- **Same file as luau-lsp.** It runs the same command luau-lsp's extension does
+  (`sourcemap <project file> --include-non-scripts`, from the worktree), so the two write identical
+  files and can both run.
+- **Recovers by itself.** Deleting a folder crashes Rojo 7.7's watcher (the same bug as below);
+  Rojo-Hub restarts it a second later, and gives up with a note after five crashes in a minute.
+  Nothing in Studio is affected.
+- **Never adds a file to git.** It writes only where `sourcemap.json` is gitignored or already
+  exists. Elsewhere the ⋯ menu says so, and *Update sourcemap.json* writes it once on request.
+- **Not for branches** served from a Hub copy: nothing edits those.
+- It stops with the project and moves with a switch. `rojoHub.sourcemaps` turns it off everywhere.
+
 **Checking out in a served worktree.** Switching in the picker never touches your folders. If you
 check out another branch *inside* a worktree that is being served (in a terminal, Source Control or
 Orca), Studio gets that branch, and the card says so: *‹branch› was checked out in ‹folder› while it
@@ -519,6 +538,7 @@ debugging.
 | `POST /slots/:id/fetch` | | `git fetch --all --prune`, then the fresh list |
 | `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output` |
+| `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{kind:"worktree",path}` or `{kind:"branch",ref}` |
 | `GET /groups` | | Every group |
 | `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
@@ -557,6 +577,7 @@ All are **user settings that apply to every project and window**; a workspace ca
 |---|---|---|
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to any project: numbers (`35000`) or ranges (`"35000-35010"`). 34872 is always excluded. |
+| `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |
 
 The panel's **Port settings** section edits the two port settings, as does *Open Menu → Port Settings*. Changes apply

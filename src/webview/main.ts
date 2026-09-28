@@ -51,8 +51,9 @@ const ui = {
 	picker: null as null | Picker,
 	/** Each project's last branch-picker list, so the picker opens with it drawn while a newer one is asked for. */
 	targets: new Map<string, TargetOption[]>(),
-	/** The project whose ⋯ menu is open. */
+	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
+	menuDown: false,
 	/** The Projects filter's text while the filter is open, else null. */
 	filter: null as string | null,
 	adding: null as null | { items: Candidate[] | null },
@@ -359,7 +360,12 @@ function cardMenu(slot: SlotView): string {
 		<button class="btn ghost icon-only${open ? " open" : ""}" data-action="menu" data-id="${escape(slot.id)}" title="More actions" aria-haspopup="menu" aria-expanded="${open}">${icon("ellipsis")}</button>
 		${
 			open
-				? `<div class="menu" role="menu">
+				? `<div class="menu${ui.menuDown ? " down" : ""}" role="menu">
+					${
+						slot.target.kind === "worktree"
+							? `${item("sourcemap", "file-code", "Update sourcemap.json")}<div class="menu-note ${slot.sourcemap.state}" title="${escape(slot.sourcemap.detail)}">${icon(slot.sourcemap.state === "watching" ? "sync" : slot.sourcemap.state === "error" ? "warning" : "circle-slash")}<span>${escape(slot.sourcemap.state === "watching" ? "Sourcemap kept up to date" : slot.sourcemap.detail || "Sourcemap not kept")}</span></div><div class="menu-separator"></div>`
+							: ""
+					}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
@@ -844,6 +850,7 @@ document.addEventListener("click", (event) => {
 			return pick(Number(index));
 		case "menu":
 			ui.menu = ui.menu === id ? null : id;
+			ui.menuDown = target.getBoundingClientRect().top < window.innerHeight / 2;
 			render();
 			document.querySelector<HTMLElement>(".menu .menu-item")?.focus();
 			return;
@@ -869,6 +876,10 @@ document.addEventListener("click", (event) => {
 			return;
 		case "create-branch":
 			return createBranch();
+		case "sourcemap":
+			ui.busy.add(`slot:${id}`);
+			send({ type: "sourcemap", id });
+			return render();
 		case "build":
 			ui.busy.add(`build:${id}`);
 			send({ type: "build", id });
