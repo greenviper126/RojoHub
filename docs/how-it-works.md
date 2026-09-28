@@ -136,10 +136,10 @@ the bottom of the panel.
 
 In a narrow sidebar the panel drops things in steps so names stay readable and nothing runs past a
 card's edge. Below about 280px: counts lose their words ("2/5"), the footer reads "3/5", ports lose
-`localhost`, Stop and Start become icons, the window badges, a folded card's error or warning icon
+`localhost`, Stop and Start and Agent access's Copy commands and Copy prompt become icons, the window badges, a folded card's error or warning icon
 (the card stays tinted) and "not added"/"shown above" hide, and a group's rename and delete show
 only on hover. Below about 230px: ports leave project headers and group members (Active ports still
-lists them) and the footer's Refresh hides. VS Code lets a sidebar be dragged as narrow as you like,
+lists them), the footer's Refresh hides and Stop all becomes an icon. VS Code lets a sidebar be dragged as narrow as you like,
 so below 170px the panel stops shrinking and scrolls sideways.
 
 **Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) that

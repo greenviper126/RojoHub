@@ -1270,11 +1270,13 @@ button:focus-visible {
 		display: inline;
 	}
 
-	.card-foot .btn > span {
+	.card-foot .btn > span,
+	.agents-manual .btn > span {
 		display: none;
 	}
 
-	.card-foot .btn:not(.icon-only) {
+	.card-foot .btn:not(.icon-only),
+	.agents-manual .btn {
 		padding: 0 6px;
 	}
 }
@@ -1284,6 +1286,14 @@ button:focus-visible {
 	.card-head .port,
 	.footer .btn.icon-only {
 		display: none;
+	}
+
+	.footer .btn > span {
+		display: none;
+	}
+
+	.footer .btn {
+		padding: 0 6px;
 	}
 
 	.workspace-body {
@@ -1554,6 +1564,14 @@ button:focus-visible {
 	display: flex;
 	flex-direction: column;
 	gap: var(--gap);
+}
+
+.agents-manual code {
+	overflow-wrap: anywhere;
+}
+
+.agents-manual .row {
+	flex-wrap: wrap;
 }
 
 /* An on/off switch drawn over a real checkbox, so keyboard and screen readers work as usual. */
