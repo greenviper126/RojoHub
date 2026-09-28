@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { SERVICE_VERSION, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
+import { SERVICE_VERSION, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
@@ -33,6 +33,7 @@ let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
+let lastOrder: DisplayOrder = { projects: [], groups: [] };
 
 function pathKey(path: string): string {
 	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -121,12 +122,12 @@ async function refresh(): Promise<void> {
 	checkOutdated(health?.version);
 	if (health?.home) hubHome = health.home;
 	try {
-		[lastSlots, lastGroups] = health ? await Promise.all([client.slots(), client.groups()]) : [[], []];
+		[lastSlots, lastGroups, lastOrder] = health ? await Promise.all([client.slots(), client.groups(), client.order()]) : [[], [], lastOrder];
 	} catch {
 		lastSlots = [];
 		lastGroups = [];
 	}
-	if (!health) ({ slots: lastSlots, groups: lastGroups } = savedState(hubHome, lastSlots));
+	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
 	await refreshWorkspaces();
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
@@ -136,6 +137,7 @@ async function refresh(): Promise<void> {
 		settings: { portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) },
 		here: lastSlots.filter((slot) => workspaceRepos.includes(pathKey(slot.repoPath))).map((slot) => slot.id),
 		workspaces: lastWorkspaces,
+		order: lastOrder,
 	});
 	updateStatus();
 }
@@ -271,13 +273,13 @@ function groupMembers(group: GroupView): SlotView[] {
 	return group.projectIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
 }
 
-/** Serving projects that "Only this" would stop for this group. */
+/** Serving projects that Singleton would stop for this group. */
 function wouldStop(group: GroupView): SlotView[] {
 	return lastSlots.filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
 }
 
 /*
-	"Only this" stops everything outside the group, so it always asks first and
+	Singleton stops everything outside the group, so it always asks first and
 	says exactly what it will stop.
 */
 async function confirmOnly(group: GroupView): Promise<boolean> {
@@ -286,8 +288,8 @@ async function confirmOnly(group: GroupView): Promise<boolean> {
 		stopping.length === 0
 			? "Nothing outside this group is serving, so this only starts the group."
 			: `This stops: ${stopping.map((slot) => slot.projectName).join(", ")}. Studio places connected to them disconnect.`;
-	const answer = await vscode.window.showWarningMessage(`Serve only ${group.name}?`, { modal: true, detail }, "Serve Only This Group");
-	return answer === "Serve Only This Group";
+	const answer = await vscode.window.showWarningMessage(`Singleton: serve only ${group.name}?`, { modal: true, detail }, "Singleton");
+	return answer === "Singleton";
 }
 
 async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
@@ -416,7 +418,7 @@ async function removeMember(group: GroupView, member: GroupMember): Promise<void
 }
 
 async function startGroup(argument: unknown, only: boolean): Promise<void> {
-	const group = await pickGroup(argument, only ? "Serve only which group?" : "Start which group?");
+	const group = await pickGroup(argument, only ? "Singleton: serve only which group?" : "Start which group?");
 	if (!group) return;
 	if (only && !(await confirmOnly(group))) return;
 	reportGroup(await run(only ? `Serving only ${group.name}` : `Starting ${group.name}`, () => client.startGroup(group.id, only)));
@@ -435,7 +437,7 @@ async function groupMenu(id: string): Promise<void> {
 	const members = groupMembers(group);
 	const items: MenuItem[] = [
 		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id, false) },
-		{ label: "$(target) Serve Only This Group", description: "start these, stop every other project", run: () => startGroup(group.id, true) },
+		{ label: "$(target) Singleton", description: "serve only this group: stop every other project", run: () => startGroup(group.id, true) },
 		{ label: "$(debug-stop) Stop Group", run: () => stopGroup(group.id) },
 		{ label: "$(add) Add Project to Group", run: () => addToGroup(group.id) },
 		{ label: "$(edit) Rename Group", run: () => renameGroup(group.id) },
@@ -618,6 +620,9 @@ async function onPanel(message: FromPanel): Promise<void> {
 			await act("group:new", () => client.createGroup(name, workspace.slotIds));
 			return;
 		}
+		case "reorder":
+			await act("reorder", () => client.putOrder({ projects: message.projects, groups: message.groups }));
+			return;
 		case "stopAll":
 			await act("stop-all", async () => reportStopAll(await client.stopAll()));
 			return;

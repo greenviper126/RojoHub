@@ -22,6 +22,8 @@ import { Conflict, NotFound } from "./registry";
 	DELETE /groups/:id
 	POST   /groups/:id/start      { only? }   only: also stop every project outside the group
 	POST   /groups/:id/stop
+	GET    /order                                    the panel's display order
+	PUT    /order                 { projects?, groups? }   (never changes ports)
 	POST   /stop-all                                 stop every serving project, mark every group stopped
 	PUT    /settings              { portRange?, excludedPorts? }
 	POST   /shutdown              { stopServing? }
@@ -60,6 +62,21 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			if (method === "GET" && url.pathname === "/health") {
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
 				return send(response, 200, health);
+			}
+			if (url.pathname === "/order") {
+				if (method === "GET") return send(response, 200, hub.registry.order);
+				if (method === "PUT") {
+					const input = await body(request);
+					if ((input.projects !== undefined && !isIdList(input.projects)) || (input.groups !== undefined && !isIdList(input.groups))) {
+						return send(response, 400, { error: "projects and groups must be lists of ids" });
+					}
+					hub.registry.order = {
+						projects: (input.projects as string[] | undefined) ?? hub.registry.order.projects,
+						groups: (input.groups as string[] | undefined) ?? hub.registry.order.groups,
+					};
+					hub.registry.save();
+					return send(response, 200, hub.registry.order);
+				}
 			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {

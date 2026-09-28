@@ -1,10 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import type { GroupView, SlotView } from "../common/api";
+import type { DisplayOrder, GroupView, SlotView } from "../common/api";
 import { expandGroup } from "../common/groups";
 
 interface SavedRegistry {
+	order?: { projects?: string[]; groups?: string[] };
 	slots?: { id: string; projectName: string; repoPath: string; projectFile: string; port: number; target: SlotView["target"] }[];
 	groups?: { id: string; name: string; slotIds: string[]; groupIds?: string[]; active?: boolean }[];
 }
@@ -14,14 +15,14 @@ interface SavedRegistry {
 	showing projects and groups while the service is not running. Everything is
 	"offline": whether a Rojo is still serving is only known to the service.
 */
-export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: SlotView[]; groups: GroupView[] } {
+export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: SlotView[]; groups: GroupView[]; order: DisplayOrder } {
 	const file = join(hubHome, "registry.json");
-	if (!existsSync(file)) return { slots: [], groups: [] };
+	if (!existsSync(file)) return { slots: [], groups: [], order: { projects: [], groups: [] } };
 	let saved: SavedRegistry;
 	try {
 		saved = JSON.parse(readFileSync(file, "utf8")) as SavedRegistry;
 	} catch {
-		return { slots: [], groups: [] };
+		return { slots: [], groups: [], order: { projects: [], groups: [] } };
 	}
 	const slots: SlotView[] = (saved.slots ?? []).map((record) => {
 		const known = lastSlots.find((slot) => slot.id === record.id);
@@ -54,5 +55,5 @@ export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: Slo
 		active: !!group.active,
 		projectIds: expandGroup(records, group.id),
 	}));
-	return { slots, groups };
+	return { slots, groups, order: { projects: saved.order?.projects ?? [], groups: saved.order?.groups ?? [] } };
 }

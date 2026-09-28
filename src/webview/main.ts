@@ -16,11 +16,18 @@ declare function acquireVsCodeApi(): { postMessage(message: FromPanel): void; ge
 const vscode = acquireVsCodeApi();
 const send = (message: FromPanel) => vscode.postMessage(message);
 
+/*
+	Fold state the user chose. A key missing from `collapsed` uses its default
+	(see folded()). v2 started over once, so everyone got the 0.13 defaults:
+	sections open except Port settings, and only the first item in Projects open.
+*/
 interface Persisted {
+	v: 2;
 	collapsed: Record<string, boolean>;
 	closedGroups: string[];
 }
-const saved = (vscode.getState() as Persisted | undefined) ?? { collapsed: { settings: true }, closedGroups: [] };
+const loaded = vscode.getState() as Partial<Persisted> | undefined;
+const saved: Persisted = loaded?.v === 2 ? (loaded as Persisted) : { v: 2, collapsed: {}, closedGroups: [] };
 
 let state: PanelState | null = null;
 const ui = {
@@ -31,7 +38,7 @@ const ui = {
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
 	confirmDelete: null as string | null,
-	/** The group whose "Only this" is waiting for Yes/No. */
+	/** The group whose Singleton is waiting for Yes/No. */
 	confirmOnly: null as string | null,
 	/** "Stop all" is waiting for Yes/No. */
 	confirmStopAll: false,
@@ -42,10 +49,41 @@ const ui = {
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
+	/** A project to unfold (with its workspace) on the next render: after "goto" or a status bar click. */
+	reveal: null as string | null,
+	/** What is being dragged, while a drag is under way; renders wait until it ends. */
+	drag: null as null | { list: string; key: string },
+	/** Each drag list's keys in the order last drawn, for turning a drop into a new order. */
+	lists: new Map<string, string[]>(),
 };
 
+/** Whether a foldable thing is folded: the user's choice if they made one, else its default. */
+function folded(key: string, byDefault: boolean): boolean {
+	return key in ui.collapsed ? ui.collapsed[key] : byDefault;
+}
+
+/** Sorts items by the user's saved order; anything not in it keeps its default place after those that are. */
+function arrange<T>(items: T[], keyOf: (item: T) => string, order: string[]): T[] {
+	const position = new Map(order.map((key, index) => [key, index]));
+	return items
+		.map((item, index) => ({ item, index, at: position.get(keyOf(item)) ?? Number.POSITIVE_INFINITY }))
+		.sort((a, b) => a.at - b.at || a.index - b.index)
+		.map(({ item }) => item);
+}
+
+/** The drag handle, and the attributes that make an element a drop target in a list. */
+function grip(list: string, key: string): string {
+	return `<span class="grip" draggable="true" data-drag-list="${escape(list)}" data-drag-key="${escape(key)}" title="Drag to reorder">${icon("gripper")}</span>`;
+}
+function dropAttributes(list: string, key: string): string {
+	return `data-drop-list="${escape(list)}" data-drop-key="${escape(key)}"`;
+}
+function remember(list: string, keys: string[]): void {
+	ui.lists.set(list, keys);
+}
+
 function persist(): void {
-	vscode.setState({ collapsed: ui.collapsed, closedGroups: [...ui.closedGroups] } satisfies Persisted);
+	vscode.setState({ v: 2, collapsed: ui.collapsed, closedGroups: [...ui.closedGroups] } satisfies Persisted);
 }
 
 const escape = (text: unknown) =>
@@ -131,18 +169,36 @@ function picker(slot: SlotView): string {
 	</div>`;
 }
 
-function projectCard(slot: SlotView): string {
+/*
+	A project card. Folded, it is one row (light, name, port, start/stop);
+	open, the full card. `list` is the drag list it belongs to.
+*/
+function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): string {
 	const serving = slot.state === "running" || slot.state === "starting";
 	const busy = ui.busy.has(`slot:${slot.id}`);
-	const here = state?.here.includes(slot.id) ? `<span class="badge" title="This window's project">this window</span>` : "";
+	const here = state?.here.includes(slot.id) ? `<span class="badge icon-badge" title="This window's project">${icon("window")}</span>` : "";
 	const targetIcon = slot.target.kind === "worktree" ? "folder" : "git-branch";
 	const pickerOpen = ui.picker?.id === slot.id;
-	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}">
+	const key = `card:${slot.id}`;
+	if (ui.reveal === slot.id) ui.collapsed[key] = false;
+	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
+	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span></button>`;
+	const port = `<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}">:${slot.port}</button>`;
+	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
+	if (isFolded) {
+		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
+			<div class="row">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${here}<span class="grow"></span>${port}${
+				serving
+					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
+					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
+			}</div>
+		</article>`;
+	}
+	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
 		<div class="row">
-			${dot(slot)}
-			<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${here}
+			${grip(list, slot.id)}${toggle}${here}
 			<span class="grow"></span>
-			<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}">:${slot.port}</button>
+			${port}
 		</div>
 		<button class="target${pickerOpen ? " open" : ""}" data-action="picker" data-id="${escape(slot.id)}" title="Switch worktree or branch">
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
@@ -158,7 +214,6 @@ function projectCard(slot: SlotView): string {
 			}
 			<span class="grow"></span>
 			${iconButton("log", "output", "Show Rojo log", { id: slot.id })}
-			${iconButton("copy", "copy", `Copy localhost:${slot.port}`, { id: slot.id })}
 			${iconButton("remove", "trash", "Remove from Rojo-Hub", { id: slot.id })}
 		</div>
 	</article>`;
@@ -207,7 +262,7 @@ function portChip(slot: SlotView): string {
 	return `<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}">:${slot.port}</button>`;
 }
 
-/** Serving projects that "Only this" would stop for a group. */
+/** Serving projects that Singleton would stop for a group. */
 function wouldStop(group: GroupView): SlotView[] {
 	return (state?.slots ?? []).filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
 }
@@ -226,7 +281,7 @@ function groupCard(group: GroupView): string {
 	const head = renaming
 		? `<input class="rename" data-key="rename-${escape(group.id)}" data-input="rename" value="${escape(ui.renaming!.name)}" spellcheck="false">
 		   ${iconButton("rename-save", "check", "Save name", { id: group.id })}${iconButton("rename-cancel", "close", "Cancel")}`
-		: `<button class="group-toggle" data-action="toggle-group" data-id="${escape(group.id)}" title="${open ? "Collapse" : "Expand"}">${icon(open ? "chevron-down" : "chevron-right")}${icon("layers")}<span class="name">${escape(group.name)}</span></button>
+		: `${grip("groups", group.id)}<button class="group-toggle" data-action="toggle-group" data-id="${escape(group.id)}" title="${open ? "Collapse" : "Expand"}">${icon(open ? "chevron-down" : "chevron-right")}${icon("layers")}<span class="name">${escape(group.name)}</span></button>
 		   <span class="count${serving > 0 && serving === everyProject.length ? " all" : ""}" title="${serving} of ${everyProject.length} projects serving">${serving}/${everyProject.length}</span>${running}
 		   <span class="grow"></span>
 		   ${
@@ -234,7 +289,7 @@ function groupCard(group: GroupView): string {
 					? `<span class="confirm">Delete?</span>${button("delete-group", "Yes", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}`
 					: iconButton("rename", "edit", "Rename group", { id: group.id }) + iconButton("ask-delete", "trash", "Delete group (what's in it stays)", { id: group.id })
 			}`;
-	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}"><div class="row head">${head}</div></article>`;
+	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head">${head}</div></article>`;
 
 	const nestedRows = nested
 		.map((child) => {
@@ -307,13 +362,13 @@ function groupCard(group: GroupView): string {
 		ui.confirmOnly === group.id
 			? `<div class="notice warning confirm-only">${icon("warning")}<span class="grow">${
 					stopping.length === 0
-						? `Serve only ${escape(group.name)}? Nothing outside it is serving, so this just starts it.`
-						: `Serve only ${escape(group.name)}? This stops <strong>${stopping.map((slot) => escape(slot.projectName)).join(", ")}</strong>, and Studio places connected to them disconnect.`
+						? `Singleton: serve only ${escape(group.name)}? Nothing outside it is serving, so this just starts it.`
+						: `Singleton: serve only ${escape(group.name)}? This stops <strong>${stopping.map((slot) => escape(slot.projectName)).join(", ")}</strong>, and Studio places connected to them disconnect.`
 				}</span></div>
-				<div class="row">${button("solo-group-yes", "Yes, serve only this", { icon: "target", data: { id: group.id }, kind: "primary" })}${button("solo-group-no", "Cancel", { kind: "secondary" })}</div>`
+				<div class="row">${button("solo-group-yes", "Yes, singleton", { icon: "target", data: { id: group.id }, kind: "primary" })}${button("solo-group-no", "Cancel", { kind: "secondary" })}</div>`
 			: "";
 
-	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}">
+	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}>
 		<div class="row head">${head}</div>
 		<div class="members">
 			${nestedRows}${projectRows}
@@ -321,9 +376,12 @@ function groupCard(group: GroupView): string {
 		</div>
 		${adder}
 		<div class="row actions">
-			${button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: busy || everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })}
-			${button("solo-group", "Only this", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: busy || everyProject.length === 0, title: "Serve this group and stop every other project (asks first)" })}
-			${button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", disabled: busy || (serving === 0 && !group.active), title: "Stop this group's projects, except ones another running group uses" })}
+			${
+				group.active
+					? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", disabled: busy, title: "Stop this group's projects, except ones another running group uses" })
+					: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: busy || everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })
+			}
+			${button("solo-group", "Singleton", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: busy || everyProject.length === 0, title: "Serve only this group: stop every other project (asks first)" })}
 		</div>
 		${onlyConfirm}
 	</article>`;
@@ -364,11 +422,13 @@ function settingsBody(): string {
 	</div>`;
 }
 
+/** Top-level sections are open by default, except Port settings. */
 function section(key: string, title: string, iconName: string, count: string, extra: string, body: string): string {
-	const collapsed = !!ui.collapsed[key];
+	const byDefault = key === "settings";
+	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}">
 		<div class="section-head">
-			<button class="section-toggle" data-action="toggle-section" data-id="${key}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${escape(count)}</span>` : ""}</button>
+			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${escape(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
 		</div>
 		${collapsed ? "" : `<div class="section-body">${body}</div>`}
@@ -382,51 +442,84 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	also list it show a short row that jumps to its card.
 */
 function projectsList(slots: SlotView[]): string {
+	const order = state?.order?.projects ?? [];
 	const workspaces = state?.workspaces ?? [];
-	if (workspaces.length === 0) return slots.map(projectCard).join("");
+	ui.lists.clear();
+	if (workspaces.length === 0) {
+		const cards = arrange(slots, (slot) => slot.id, order);
+		remember("cards:root", cards.map((slot) => slot.id));
+		return cards.map((slot, index) => projectCard(slot, "cards:root", index > 0)).join("");
+	}
 	const home = new Map<string, string>();
 	for (const workspace of workspaces) for (const id of workspace.slotIds) if (!home.has(id)) home.set(id, workspace.file);
 	const byId = new Map(slots.map((slot) => [slot.id, slot]));
 
-	const blocks = workspaces.map((workspace) => {
+	interface Block {
+		key: string;
+		draw: (foldedByDefault: boolean) => string;
+		holds: string[];
+	}
+	const blocks: Block[] = workspaces.map((workspace) => {
 		const key = `ws:${workspace.file}`;
-		const collapsed = !!ui.collapsed[key];
-		const own = workspace.slotIds.filter((id) => home.get(id) === workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
-		const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
-		const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
-		const count = `${serving}/${workspace.slotIds.length}`;
-		const head = `<div class="row workspace-head">
-			<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
-			${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${count}</span>` : ""}
-			${workspace.isWindow ? `<span class="badge" title="The workspace this window has open">this window</span>` : ""}
-			<span class="grow"></span>
-			${workspace.slotIds.length ? button("group-workspace", "Group", { icon: "layers", kind: "ghost", data: { file: workspace.file }, title: `Make a group of this workspace's ${workspace.slotIds.length} project${workspace.slotIds.length === 1 ? "" : "s"}` }) : ""}
-		</div>`;
-		if (collapsed) return `<div class="workspace">${head}</div>`;
-		const elsewhereRows = elsewhere
-			.map(
-				(slot) => `<div class="member">${dot(slot)}<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">shown above</span></div>`,
-			)
-			.join("");
-		const addableRows = workspace.addable
-			.map(
-				(folder) => `<div class="member addable">${icon("folder")}<span class="grow ellipsis" title="${escape(folder.path)}">${escape(folder.label)}</span><span class="sub">not added</span>${button("add", "Add", { icon: "add", kind: "secondary", data: { path: folder.path }, title: `Add ${folder.label} to Rojo-Hub` })}</div>`,
-			)
-			.join("");
-		const addAll = workspace.addable.length > 1 ? `<div class="row">${button("add-workspace", `Add all ${workspace.addable.length}`, { icon: "add", kind: "secondary", data: { file: workspace.file } })}</div>` : "";
-		return `<div class="workspace">${head}<div class="workspace-body">${own.map(projectCard).join("")}${elsewhereRows}${addableRows}${addAll}</div></div>`;
+		const list = `cards:${key}`;
+		const own = arrange(
+			workspace.slotIds.filter((id) => home.get(id) === workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot),
+			(slot) => slot.id,
+			order,
+		);
+		remember(list, own.map((slot) => slot.id));
+		const draw = (foldedByDefault: boolean) => {
+			if (ui.reveal && own.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
+			const collapsed = folded(key, foldedByDefault);
+			const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
+			const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
+			const head = `<div class="row workspace-head">
+				${grip("blocks", key)}
+				<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
+				${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${serving}/${workspace.slotIds.length}</span>` : ""}
+				${workspace.isWindow ? `<span class="badge icon-badge" title="The workspace this window has open">${icon("window")}</span>` : ""}
+				<span class="grow"></span>
+				${workspace.slotIds.length ? button("group-workspace", "Group", { icon: "layers", kind: "ghost", data: { file: workspace.file }, title: `Make a group of this workspace's ${workspace.slotIds.length} project${workspace.slotIds.length === 1 ? "" : "s"}` }) : ""}
+			</div>`;
+			if (collapsed) return `<div class="workspace" ${dropAttributes("blocks", key)}>${head}</div>`;
+			const elsewhereRows = elsewhere
+				.map(
+					(slot) => `<div class="member">${dot(slot)}<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">shown above</span></div>`,
+				)
+				.join("");
+			const addableRows = workspace.addable
+				.map(
+					(folder) => `<div class="member addable">${icon("folder")}<span class="grow ellipsis" title="${escape(folder.path)}">${escape(folder.label)}</span><span class="sub">not added</span>${button("add", "Add", { icon: "add", kind: "secondary", data: { path: folder.path }, title: `Add ${folder.label} to Rojo-Hub` })}</div>`,
+				)
+				.join("");
+			const addAll = workspace.addable.length > 1 ? `<div class="row">${button("add-workspace", `Add all ${workspace.addable.length}`, { icon: "add", kind: "secondary", data: { file: workspace.file } })}</div>` : "";
+			return `<div class="workspace" ${dropAttributes("blocks", key)}>${head}<div class="workspace-body">${own.map((slot) => projectCard(slot, list, false)).join("")}${elsewhereRows}${addableRows}${addAll}</div></div>`;
+		};
+		return { key, draw, holds: own.map((slot) => slot.id) };
 	});
 
-	const loose = slots.filter((slot) => !home.has(slot.id));
+	const loose = arrange(slots.filter((slot) => !home.has(slot.id)), (slot) => slot.id, order);
 	if (loose.length > 0) {
 		const key = "ws:other";
-		const collapsed = !!ui.collapsed[key];
-		blocks.push(`<div class="workspace other">
-			<div class="row workspace-head"><button class="group-toggle" data-action="toggle-section" data-id="${key}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
-			${collapsed ? "" : `<div class="workspace-body">${loose.map(projectCard).join("")}</div>`}
-		</div>`);
+		const list = "cards:ws:other";
+		remember(list, loose.map((slot) => slot.id));
+		blocks.push({
+			key,
+			holds: loose.map((slot) => slot.id),
+			draw: (foldedByDefault) => {
+				if (ui.reveal && loose.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
+				const collapsed = folded(key, foldedByDefault);
+				return `<div class="workspace other" ${dropAttributes("blocks", key)}>
+					<div class="row workspace-head">${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
+					${collapsed ? "" : `<div class="workspace-body">${loose.map((slot) => projectCard(slot, list, false)).join("")}</div>`}
+				</div>`;
+			},
+		});
 	}
-	return blocks.join("");
+	const arranged = arrange(blocks, (block) => block.key, order);
+	remember("blocks", arranged.map((block) => block.key));
+	// Only the first block starts open; the rest are folded until opened.
+	return arranged.map((block, index) => block.draw(index > 0)).join("");
 }
 
 /*
@@ -453,7 +546,7 @@ function activePorts(serving: SlotView[]): string {
 
 function render(): void {
 	const app = document.getElementById("app")!;
-	if (!state) return;
+	if (!state || ui.drag) return;
 
 	const active = document.activeElement as HTMLInputElement | null;
 	const focusKey = active?.dataset?.key;
@@ -482,7 +575,11 @@ function render(): void {
 				<p class="muted small">Groups start and stop sets of projects together, like profiles.</p>
 				${button("open-new-group", "New group", { icon: "add", kind: "secondary" })}
 			</div>`
-			: state.groups.map(groupCard).join(""));
+			: (() => {
+					const groups = arrange(state.groups, (group) => group.id, state.order?.groups ?? []);
+					remember("groups", groups.map((group) => group.id));
+					return groups.map(groupCard).join("");
+				})());
 
 	const serving = slots.filter((slot) => slot.state === "running" || slot.state === "starting");
 	const footer = ui.confirmStopAll
@@ -518,6 +615,10 @@ function render(): void {
 	}
 	app.querySelectorAll<HTMLElement>(".list").forEach((list, index) => (list.scrollTop = scrolls[index] ?? 0));
 	if (document.scrollingElement) document.scrollingElement.scrollTop = pageScroll;
+	if (ui.reveal) {
+		ui.reveal = null;
+		persist();
+	}
 }
 
 /* ---------- events ---------- */
@@ -583,7 +684,7 @@ document.addEventListener("click", (event) => {
 	const { action, id = "", index, path } = target.dataset;
 	switch (action) {
 		case "toggle-section":
-			ui.collapsed[id] = !ui.collapsed[id];
+			ui.collapsed[id] = !folded(id, target.dataset.default === "1");
 			persist();
 			return render();
 		case "toggle-group":
@@ -794,6 +895,7 @@ document.addEventListener("keydown", (event) => {
 
 function flash(id: string): void {
 	ui.collapsed.projects = false;
+	ui.reveal = id;
 	ui.flash = id;
 	render();
 	document.getElementById(`slot-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -804,6 +906,75 @@ function flash(id: string): void {
 		}
 	}, 1600);
 }
+
+/*
+	Reordering by drag and drop. Only the grip starts a drag, and a drop only
+	counts inside the same list (groups, workspace blocks, or the cards of one
+	block). The drop sends the whole new order of that kind to the extension.
+*/
+let dropMark: { element: HTMLElement; after: boolean } | null = null;
+
+function clearDropMark(): void {
+	dropMark?.element.classList.remove("drop-before", "drop-after");
+	dropMark = null;
+}
+
+document.addEventListener("dragstart", (event) => {
+	const handle = (event.target as HTMLElement).closest<HTMLElement>("[data-drag-key]");
+	if (!handle) return;
+	ui.drag = { list: handle.dataset.dragList ?? "", key: handle.dataset.dragKey ?? "" };
+	event.dataTransfer?.setData("text/plain", ui.drag.key);
+	if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+	handle.closest("[data-drop-key]")?.classList.add("dragging");
+});
+
+document.addEventListener("dragover", (event) => {
+	if (!ui.drag) return;
+	const target = (event.target as HTMLElement).closest<HTMLElement>("[data-drop-key]");
+	if (!target || target.dataset.dropList !== ui.drag.list || target.dataset.dropKey === ui.drag.key) {
+		clearDropMark();
+		return;
+	}
+	event.preventDefault();
+	const box = target.getBoundingClientRect();
+	const after = event.clientY > box.top + box.height / 2;
+	if (dropMark?.element !== target || dropMark.after !== after) {
+		clearDropMark();
+		target.classList.add(after ? "drop-after" : "drop-before");
+		dropMark = { element: target, after };
+	}
+});
+
+document.addEventListener("drop", (event) => {
+	if (!ui.drag || !dropMark) return;
+	event.preventDefault();
+	const { list, key } = ui.drag;
+	const targetKey = dropMark.element.dataset.dropKey ?? "";
+	const keys = (ui.lists.get(list) ?? []).filter((entry) => entry !== key);
+	const at = keys.indexOf(targetKey);
+	if (at >= 0) {
+		keys.splice(dropMark.after ? at + 1 : at, 0, key);
+		ui.lists.set(list, keys);
+		if (list === "groups") send({ type: "reorder", groups: keys });
+		else {
+			// Projects' order holds workspace blocks and every block's cards together.
+			const projects = [...(ui.lists.get("blocks") ?? []), ...[...ui.lists.entries()].filter(([name]) => name.startsWith("cards:")).flatMap(([, entries]) => entries)];
+			send({ type: "reorder", projects });
+		}
+		if (state) {
+			if (list === "groups") state.order = { ...state.order, groups: keys };
+			else state.order = { ...state.order, projects: [...(ui.lists.get("blocks") ?? []), ...[...ui.lists.entries()].filter(([name]) => name.startsWith("cards:")).flatMap(([, entries]) => entries)] };
+		}
+	}
+	clearDropMark();
+});
+
+document.addEventListener("dragend", () => {
+	clearDropMark();
+	document.querySelectorAll(".dragging").forEach((element) => element.classList.remove("dragging"));
+	ui.drag = null;
+	render();
+});
 
 window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 	const message = event.data;

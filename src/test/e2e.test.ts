@@ -246,6 +246,13 @@ test("groups nest without loops, serve only, and stop without taking shared proj
 	const [one, two] = await Promise.all([makeRepo("GroupOne"), makeRepo("GroupTwo")]);
 	const a = await call<SlotView>("POST", "/slots", { path: one });
 	const b = await call<SlotView>("POST", "/slots", { path: two });
+	// reordering is display only: it is saved, and never moves a port
+	const portsBefore = (await call<SlotView[]>("GET", "/slots")).map((slot) => [slot.id, slot.port]);
+	await call("PUT", "/order", { projects: [b.id, a.id], groups: [] });
+	assert.deepEqual((await call<{ projects: string[] }>("GET", "/order")).projects, [b.id, a.id]);
+	await sleep(3500); // the service recomputes ports every 3 s
+	assert.deepEqual((await call<SlotView[]>("GET", "/slots")).map((slot) => [slot.id, slot.port]), portsBefore);
+
 	const state = async (id: string) => (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === id)!.state;
 
 	const both = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
@@ -266,7 +273,7 @@ test("groups nest without loops, serve only, and stop without taking shared proj
 	assert.equal(await state(b.id), "stopped");
 	assert.equal((await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId, sessionA, "same session kept");
 
-	// Just One is running (Only this), so stopping Both must keep A: another running group uses it
+	// Just One is running (Singleton), so stopping Both must keep A: another running group uses it
 	result = await call<GroupResult>("POST", `/groups/${both.id}/stop`);
 	assert.deepEqual(result.kept, [{ id: a.id, because: "Just One" }]);
 	assert.equal(await state(a.id), "running");

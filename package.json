@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -117,7 +117,7 @@
       },
       {
         "command": "rojoHub.soloGroup",
-        "title": "Serve Only This Group",
+        "title": "Singleton",
         "category": "Rojo-Hub",
         "icon": "$(target)"
       },
@@ -335,7 +335,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "Groups hold projects and other groups. Start runs them all; Only this runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups hold projects and other groups. Start runs them all; Singleton runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },

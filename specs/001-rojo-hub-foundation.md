@@ -31,6 +31,9 @@ to keep several projects served side by side without hand-managing ports.
 - [ ] Projects that belong to a VS Code workspace are grouped under it in the Projects list, purely
       visually; unadded folders in it can be added one by one or all, and a workspace can be turned
       into a group.
+- [ ] Sections start open except Port settings; in Projects only the first item starts open. Projects,
+      workspace blocks and groups can be reordered by dragging; the order is shared by all windows and
+      never changes a port (ports use registration order).
 - [ ] The background service is invisible: started automatically whenever needed, never started or
       stopped by the user. The panel offers *Stop all* (confirmed, naming what stops) instead.
 - [ ] Everything can be done visually in a custom sidebar panel (project cards with an in-card
@@ -232,8 +235,8 @@ stored in `registry.json`.
 - Adding group B to A is refused when A is reachable from B (`pathBetween`), with the chain in the
   message; the panel greys such choices out using the same function. Deleting a group removes it
   from every group holding it.
-- `active` marks a running group: set by Start and Only this, cleared by Stop and by another
-  group's Only this. Only this is confirmed in the UI, naming what it stops.
+- `active` marks a running group: set by Start and Singleton, cleared by Stop and by another
+  group's Singleton. Singleton is confirmed in the UI, naming what it stops.
 - Stop skips any project another active group expands to, and reports it as `kept`. Chosen over
   "all its projects are serving" so a group never started cannot hold a project alive.
 - Already-serving projects are never restarted by a group action, so their sessions survive.

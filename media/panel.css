@@ -659,3 +659,85 @@ button:focus-visible {
 .two-line .link {
 	max-width: 100%;
 }
+
+/* ---------- folding cards and reordering ---------- */
+
+.card.project.compact {
+	padding: 4px 8px;
+}
+
+.card.project.compact.has-error {
+	border-left: 3px solid var(--bad);
+}
+
+.card-toggle {
+	min-width: 0;
+}
+
+.card-toggle .name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.codicon.warn {
+	color: var(--warn);
+}
+
+.codicon.bad {
+	color: var(--bad);
+}
+
+.grip {
+	flex: none;
+	display: inline-flex;
+	cursor: grab;
+	color: var(--muted);
+	opacity: 0.45;
+}
+
+.grip:hover {
+	opacity: 1;
+}
+
+.dragging {
+	opacity: 0.45;
+}
+
+.drop-before {
+	box-shadow: 0 -2px 0 0 var(--vscode-focusBorder);
+}
+
+.drop-after {
+	box-shadow: 0 2px 0 0 var(--vscode-focusBorder);
+}
+
+/* Long names shorten with an ellipsis instead of running into the counts and badges beside them. */
+.group-toggle {
+	min-width: 0;
+	flex: 0 1 auto;
+	overflow: hidden;
+}
+
+.group-toggle .name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.group-toggle .codicon,
+.group-toggle .dot {
+	flex: none;
+}
+
+.row > .count,
+.row > .badge,
+.row > .port,
+.row > .btn {
+	flex: none;
+}
+
+.badge.icon-badge {
+	display: inline-flex;
+	padding: 0 3px;
+}

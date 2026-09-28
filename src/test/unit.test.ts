@@ -208,7 +208,7 @@ test("countConnections follows Rojo's websocket log lines", () => {
 
 test("savedState shows the registry's projects and groups while the service is stopped", () => {
 	const home = mkdtempSync(join(tmpdir(), "rojo-hub-saved-"));
-	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "no registry yet");
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [], order: { projects: [], groups: [] } }, "no registry yet");
 	writeFileSync(
 		join(home, "registry.json"),
 		JSON.stringify({
@@ -235,7 +235,7 @@ test("savedState shows the registry's projects and groups while the service is s
 		["TLS", ["tls", "ai"], false, []],
 	]);
 	writeFileSync(join(home, "registry.json"), "{ not json");
-	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "a broken file shows nothing rather than failing");
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [], order: { projects: [], groups: [] } }, "a broken file shows nothing rather than failing");
 });
 
 test("parseWorkspaceFile reads VS Code's commented, trailing-comma workspace files", () => {

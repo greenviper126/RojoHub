@@ -8,8 +8,7 @@ A group is a named set of projects and other groups, like a profile. Groups have
 
 Then, on the group's card:
 
-- **Start** serves every project in the group, including those in groups inside it.
-- **Only this** serves the group and stops every other project. It asks first and names what it will stop.
-- **Stop** stops the group's projects, but keeps any project that another running group also uses.
+- **Start** serves every project in the group, including those in groups inside it. While the group runs, the same button becomes **Stop**, which keeps any project another running group also uses.
+- **Singleton** serves the group and stops every other project. It asks first and names what it will stop.
 
 Projects that are already serving are left alone, so their Studio connections stay.
