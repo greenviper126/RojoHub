@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 
 import { decode } from "@msgpack/msgpack";
@@ -314,4 +314,79 @@ test("groups nest without loops, serve only, and stop without taking shared proj
 	await call("DELETE", `/groups/${onlyA.id}`);
 	await call("DELETE", `/slots/${a.id}`);
 	assert.deepEqual(await call("GET", "/groups"), []);
+});
+
+test("branch picker: cached list kept fresh, fetch, new branch, build, and a checkout in a served worktree", async () => {
+	const origin = await makeRepo("BranchyOrigin");
+	const dir = join(root, "Branchy");
+	gitIn(root, "clone", "-q", origin, dir);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const labels = async () => (await call<TargetOption[]>("GET", `/slots/${slot.id}/targets`)).map((option) => option.label);
+	assert.ok((await labels()).includes(basename(dir)), "the primary checkout is listed");
+
+	// the list is served from memory, and a branch made outside the Hub shows up by itself
+	const stamp = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.targetsAt;
+	const before = await stamp();
+	assert.ok(before > 0, "the list was read in the background after registering");
+	let started = Date.now();
+	await labels();
+	assert.ok(Date.now() - started < 200, `a cached list comes back at once (${Date.now() - started} ms)`);
+	gitIn(dir, "branch", "made-outside");
+	await until("the new branch in the picker", async () => (await labels()).includes("made-outside"), 5000);
+	assert.ok((await stamp()) > before, "targetsAt moves when a newer list is read");
+
+	// Fetch picks up a branch pushed to the remote since
+	gitIn(origin, "branch", "pushed-since");
+	assert.ok(!(await labels()).includes("origin/pushed-since"));
+	const fetched = await call<TargetOption[]>("POST", `/slots/${slot.id}/fetch`);
+	assert.ok(fetched.some((option) => option.label === "origin/pushed-since"), "fetch lists the new remote branch");
+
+	// New branch: git's rules and existing names are refused; a good one gets a worktree beside the repo and is served
+	await assert.rejects(call("POST", `/slots/${slot.id}/branch`, { name: "bad name", base: "main" }), /not a valid branch name/);
+	await assert.rejects(call("POST", `/slots/${slot.id}/branch`, { name: "made-outside", base: "main" }), /already exists/);
+	await assert.rejects(call("POST", `/slots/${slot.id}/branch`, { name: "fine", base: "no-such-base" }), /is not a branch or commit/);
+	const made = await call<{ slot: SlotView; path: string; branch: string; via: string }>("POST", `/slots/${slot.id}/branch`, { name: "feat/new-thing", base: "main" });
+	assert.equal(made.via, "git", "a repo Orca does not know gets a git worktree");
+	assert.equal(made.path.toLowerCase(), join(root, "Branchy-worktrees", "feat-new-thing").toLowerCase());
+	assert.equal(made.branch, "feat/new-thing");
+	assert.deepEqual(made.slot.target, { kind: "worktree", path: made.path });
+	assert.equal(gitIn(made.path, "branch", "--show-current").trim(), "feat/new-thing");
+
+	// Build a place file of what the slot serves, while stopped
+	const output = join(root, "out", "Branchy.rbxl");
+	const built = await call<{ output: string; bytes: number }>("POST", `/slots/${slot.id}/build`, { output });
+	assert.ok(built.bytes > 0 && readFileSync(output).length === built.bytes, "the place file was written");
+
+	// A checkout made in the served worktree is noticed and explained
+	await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	gitIn(made.path, "checkout", "-q", "-b", "swapped-in");
+	const noticed = await until("the checkout note", async () => {
+		const view = (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+		return view.warnings.some((warning) => /swapped-in was checked out in feat-new-thing/.test(warning)) && view;
+	});
+	assert.equal(noticed.state, "running", "a checkout that removes no folder leaves Rojo running");
+	await until("the label to follow the checkout", async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.targetLabel === "swapped-in");
+
+	// Sourcemaps (spec 003): never created where git would show it; written on request; then kept up to date, through a crash
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	const sourcemap = join(made.path, "sourcemap.json");
+	assert.equal((await view()).sourcemap.state, "off");
+	assert.match((await view()).sourcemap.detail, /not gitignored/);
+	assert.throws(() => readFileSync(sourcemap), "nothing was written");
+	await call("POST", `/slots/${slot.id}/sourcemap`);
+	assert.ok(readFileSync(sourcemap, "utf8").includes("Main.server.luau"), "Update sourcemap.json writes it once");
+	await call("PUT", "/settings", { sourcemaps: true });
+	await until("the watcher", async () => (await view()).sourcemap.state === "watching");
+	write(join(made.path, "src", "Later.server.luau"), "print(1)\n");
+	await until("a new file in the sourcemap", async () => readFileSync(sourcemap, "utf8").includes("Later.server.luau"));
+	write(join(made.path, "src", "Gone", "X.luau"), "return 1\n");
+	await until("the folder in the sourcemap", async () => readFileSync(sourcemap, "utf8").includes("X.luau"));
+	rmSync(join(made.path, "src", "Gone"), { recursive: true, force: true }); // rojo-rbx/rojo#1305 kills the watcher
+	await sleep(2500);
+	write(join(made.path, "src", "AfterCrash.server.luau"), "print(2)\n");
+	await until("the restarted watcher to see a new file", async () => readFileSync(sourcemap, "utf8").includes("AfterCrash.server.luau"));
+	await call("PUT", "/settings", { sourcemaps: false });
+	await until("the watcher to stop", async () => (await view()).sourcemap.state === "off");
+
+	await call("DELETE", `/slots/${slot.id}`);
 });

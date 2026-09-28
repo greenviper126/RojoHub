@@ -113,7 +113,7 @@ if (params.get("width")) document.body.style.width = params.get("width") + "px";
 const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
 	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", port, portSource: "hash",
 	state, connections: 0, target: { kind: "worktree", path: `C:\\Users\\dev\\${projectName}` }, targetLabel, branch: targetLabel,
-	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", ...extra,
+	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, ...extra,
 });
 const state = {
 	service: { running: true, version: "0.13.0", error: null },
@@ -121,7 +121,7 @@ const state = {
 		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1 }),
 		slot("b", "VluxyAI", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
 		slot("c", "vluxysf", 35813, "stopped", "main"),
-		slot("d", "Wonderland", 35344, "error", "main", { error: "Rojo stopped unexpectedly: called `Result::unwrap()` on an `Err` value: NotFound" }),
+		slot("d", "Wonderland", 35344, "error", "main", { error: ["Rojo did not come up on port 35344.", "[INFO  rojo] Rojo server listening on port 35344", "[ERROR rojo] Rojo crashed!", "[ERROR rojo] Details: called `Result::unwrap()` on an `Err` value: NotFound", "[ERROR rojo] at src/change_processor.rs:199"].join("\n") }),
 		slot("e", "Frameworks", 35120, "starting", "main"),
 	],
 	groups: [
@@ -153,6 +153,9 @@ window.acquireVsCodeApi = () => ({
 		const reply = (data) => setTimeout(() => window.postMessage(data, "*"), 0);
 		if (message.type === "ready") reply({ type: "state", state });
 		if (message.type === "targets") reply({ type: "targets", id: message.id, options });
+		if (message.type === "fetch") setTimeout(() => { reply({ type: "targets", id: message.id, options }); reply({ type: "fetched", id: message.id, ...(params.get("fetchfail") ? { error: "fatal: unable to access 'https://github.com/…': Could not resolve host" } : {}) }); }, 600);
+		if (message.type === "createBranch") setTimeout(() => reply({ type: "branchCreated", id: message.id, error: `A branch named ${message.name} already exists; pick it under Local branches.` }), 400);
+		if (message.type === "build") setTimeout(() => reply({ type: "busy", key: `build:${message.id}`, busy: false }), 1500);
 		if (message.type === "candidates") reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
 	},
 });

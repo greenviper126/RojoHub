@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { Target, TargetOption } from "../common/api";
 
@@ -8,9 +8,11 @@ import type { Target, TargetOption } from "../common/api";
 	Runs git and resolves with stdout. Failures carry git's own stderr, which is
 	usually the most readable explanation there is.
 */
-export function git(cwd: string, args: string[]): Promise<string> {
+export function git(cwd: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
 	return new Promise((done, fail) => {
-		execFile("git", args, { cwd, encoding: "utf8", maxBuffer: 1 << 26, windowsHide: true }, (error, stdout, stderr) => {
+		// GIT_TERMINAL_PROMPT=0: a fetch that needs credentials fails with git's message instead of waiting on a prompt nobody sees.
+		const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+		execFile("git", args, { cwd, encoding: "utf8", maxBuffer: 1 << 26, windowsHide: true, env, timeout: options.timeout ?? 0 }, (error, stdout, stderr) => {
 			if (error) fail(new Error(`git ${args.join(" ")}: ${(stderr || error.message).trim()}`));
 			else done(stdout);
 		});
@@ -180,4 +182,87 @@ export function sameTarget(a: Target, b: Target): boolean {
 	if (a.kind === "worktree" && b.kind === "worktree") return pathKey(a.path) === pathKey(b.path);
 	if (a.kind === "branch" && b.kind === "branch") return a.ref === b.ref;
 	return false;
+}
+
+function orca(args: string[], timeout: number): Promise<unknown> {
+	return new Promise((done, fail) => {
+		execFile("orca", args, { encoding: "utf8", windowsHide: true, timeout, maxBuffer: 1 << 24 }, (error, stdout, stderr) => {
+			let parsed: { ok?: boolean; result?: unknown; error?: { message?: string } } | null = null;
+			try {
+				parsed = JSON.parse(stdout);
+			} catch {
+				// not JSON: fall through to the error below
+			}
+			if (!error && parsed?.ok) return done(parsed.result);
+			fail(new Error(`orca ${args.slice(0, 2).join(" ")}: ${parsed?.error?.message ?? (stderr || error?.message || stdout).trim()}`));
+		});
+	});
+}
+
+/** Whether Orca is installed, running and has `repo` added. */
+export async function inOrca(repo: string): Promise<boolean> {
+	try {
+		const result = (await orca(["repo", "list", "--json"], 5000)) as { repos?: { path: string }[] };
+		return (result.repos ?? []).some((entry) => pathKey(entry.path) === pathKey(repo));
+	} catch {
+		return false;
+	}
+}
+
+/*
+	Makes an Orca worktree on a new branch. Measured (spec 002): about 1.6 s
+	with --setup skip, and Orca names the branch "<git user>/<name>", so the
+	branch is read back from its answer rather than assumed.
+*/
+export async function orcaCreateWorktree(repo: string, name: string, base: string): Promise<{ path: string; branch: string | null }> {
+	const result = (await orca(
+		["worktree", "create", "--repo", `path:${repo}`, "--name", name, "--base-branch", base, "--setup", "skip", "--no-parent", "--json"],
+		120000,
+	)) as { worktree?: { path?: string; branch?: string } };
+	const path = result.worktree?.path;
+	if (!path) throw new Error("orca worktree create did not say where it put the worktree");
+	return { path: resolve(path), branch: result.worktree?.branch?.replace(/^refs\/heads\//, "") ?? null };
+}
+
+/** git's own check of a new branch name; returns the name as git would store it, or throws git's reason. */
+export async function checkBranchName(repo: string, name: string): Promise<string> {
+	try {
+		return (await git(repo, ["check-ref-format", "--branch", name])).trim();
+	} catch {
+		throw new Error(`"${name}" is not a valid branch name (no spaces, "..", "~", "^", ":", "?", "*", "[" or a trailing "/" or ".lock").`);
+	}
+}
+
+export async function branchExists(repo: string, name: string): Promise<boolean> {
+	return git(repo, ["show-ref", "--verify", "--quiet", `refs/heads/${name}`]).then(
+		() => true,
+		() => false,
+	);
+}
+
+/*
+	The HEAD file of the worktree at `path`: .git/HEAD in the primary
+	checkout, .git/worktrees/<name>/HEAD in a linked worktree, whose .git is a
+	file pointing there. Reading it is how a checkout in a served worktree is
+	noticed.
+*/
+export function headFile(path: string): string | null {
+	const dotGit = join(path, ".git");
+	try {
+		if (statSync(dotGit).isDirectory()) return join(dotGit, "HEAD");
+		const pointer = readFileSync(dotGit, "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+		return pointer ? join(resolve(path, pointer), "HEAD") : null;
+	} catch {
+		return null;
+	}
+}
+
+/** What a HEAD file says: the branch name, or the short commit when detached. */
+export function readHead(file: string): string | null {
+	try {
+		const text = readFileSync(file, "utf8").trim();
+		return text.startsWith("ref: ") ? text.slice(5).replace(/^refs\/heads\//, "") : text.slice(0, 8);
+	} catch {
+		return null;
+	}
 }

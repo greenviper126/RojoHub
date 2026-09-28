@@ -3,14 +3,16 @@
 	from the state the extension sends and posts every click back to it
 	(src/common/panel.ts). All colours and icons come from VS Code's theme.
 
-	Rendering is one function from (state, ui) to HTML. It redraws on every
-	change, keeping the focused input, its caret and the scroll position, so
-	typing in a search box survives the 2-second status updates.
+	Rendering is one function from (state, ui) to HTML. Each change is applied
+	to the page by morph.ts, which updates only the elements that differ, so
+	an open picker, a focused box, hover and scroll positions all survive the
+	2-second status updates without flashing.
 */
 
 import { DEFAULT_PORT_RANGE, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
+import { morph } from "./morph";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromPanel): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -30,10 +32,30 @@ const loaded = vscode.getState() as Partial<Persisted> | undefined;
 const saved: Persisted = loaded?.v === 2 ? (loaded as Persisted) : { v: 2, collapsed: {}, closedGroups: [] };
 
 let state: PanelState | null = null;
+
+interface Picker {
+	id: string;
+	search: string;
+	options: TargetOption[] | null;
+	error: string | null;
+	/** The slot's targetsAt the list was asked for at; a newer one in the state means a newer list is ready. */
+	at: number;
+	fetching: boolean;
+	fetchError: string | null;
+	/** The New branch form, while it is open. */
+	create: null | { name: string; base: string; error: string | null; busy: boolean };
+}
 const ui = {
 	collapsed: saved.collapsed,
 	closedGroups: new Set(saved.closedGroups),
-	picker: null as null | { id: string; search: string; options: TargetOption[] | null; error: string | null },
+	picker: null as null | Picker,
+	/** Each project's last branch-picker list, so the picker opens with it drawn while a newer one is asked for. */
+	targets: new Map<string, TargetOption[]>(),
+	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
+	menu: null as string | null,
+	menuDown: false,
+	/** The Projects filter's text while the filter is open, else null. */
+	filter: null as string | null,
 	adding: null as null | { items: Candidate[] | null },
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
@@ -134,7 +156,15 @@ function statusPill(slot: SlotView): string {
 
 function notices(slot: SlotView): string {
 	const rows: string[] = [];
-	if (slot.error) rows.push(`<div class="notice error">${icon("error")}<span>${escape(slot.error.split("\n")[0])}</span></div>`);
+	if (slot.error) {
+		// The first line says what went wrong; the rest (Rojo's own log lines) show in a block, last five.
+		const [first, ...rest] = slot.error.split(/\r?\n/).filter((line) => line.trim());
+		const tail = rest.slice(-5);
+		rows.push(`<div class="notice error">${icon("error")}<div class="grow">
+			<span>${escape(first)}</span>
+			${tail.length ? `<pre class="log-tail">${escape(tail.join("\n"))}</pre><button class="link small" data-action="log" data-id="${escape(slot.id)}">Show full log</button>` : ""}
+		</div></div>`);
+	}
 	for (const warning of slot.warnings) rows.push(`<div class="notice warning">${icon("warning")}<span>${escape(warning)}</span></div>`);
 	return rows.join("");
 }
@@ -157,11 +187,36 @@ function ago(seconds: number): string {
 	return "just now";
 }
 
+/** Branch names to offer as a new branch's base: what the project serves first, then local, then remote. */
+function baseChoices(slot: SlotView, options: TargetOption[]): string[] {
+	const names = [
+		slot.branch,
+		...options.filter((option) => option.target.kind === "worktree" || !option.target.ref.startsWith("refs/remotes/")).map((option) => option.branch),
+		...options.filter((option) => option.target.kind === "branch" && option.target.ref.startsWith("refs/remotes/")).map((option) => option.branch),
+	];
+	return [...new Set(names.filter((name): name is string => !!name))];
+}
+
+function newBranchForm(slot: SlotView, open: Picker): string {
+	const form = open.create!;
+	const bases = baseChoices(slot, open.options ?? []);
+	return `<div class="create-branch">
+		<label>New branch<input data-key="branch-name-${escape(slot.id)}" data-input="branch-name" value="${escape(form.name)}" placeholder="feature/something" spellcheck="false"${form.busy ? " disabled" : ""}></label>
+		<label>From<select data-input="branch-base"${form.busy ? " disabled" : ""}>${bases
+			.map((name) => `<option value="${escape(name)}"${name === form.base ? " selected" : ""}>${escape(name)}</option>`)
+			.join("")}</select></label>
+		<p class="muted small">Makes a worktree for it (in Orca when the repo is in Orca, else a folder beside the repo) so you can edit it, and ${escape(slot.projectName)} serves it. Studio stays connected.</p>
+		${form.error ? `<div class="notice error">${icon("error")}<span>${escape(form.error)}</span></div>` : ""}
+		<div class="row">${button("create-branch", form.busy ? "Creating…" : "Create", { icon: form.busy ? "loading" : "git-branch-create", kind: "primary", disabled: form.busy || !form.name.trim() })}${button("cancel-branch", "Back", { kind: "secondary", disabled: form.busy })}</div>
+	</div>`;
+}
+
 function picker(slot: SlotView): string {
 	const open = ui.picker;
 	if (!open || open.id !== slot.id) return "";
 	let body: string;
-	if (open.error) body = `<div class="notice error">${icon("error")}<span>${escape(open.error)}</span></div>`;
+	if (open.create) body = newBranchForm(slot, open);
+	else if (open.error) body = `<div class="notice error">${icon("error")}<span>${escape(open.error)}</span></div>`;
 	else if (!open.options) body = `<div class="muted pad">${icon("loading", "codicon-modifier-spin")} Loading worktrees and branches…</div>`;
 	else {
 		const words = open.search.toLowerCase().split(/\s+/).filter(Boolean);
@@ -184,15 +239,25 @@ function picker(slot: SlotView): string {
 				})
 				.join("")}`;
 		};
+		// New branch is always last; with a search that names no existing branch, it offers that name.
+		const typed = open.search.trim();
+		const named = typed && !open.options.some((option) => option.branch === typed || option.label === typed) ? typed : "";
+		const create = `<button class="list-item create" data-action="new-branch" data-name="${escape(named)}">${icon("add")}<span class="grow"><span class="label">${named ? `New branch “${escape(named)}”` : "New branch…"}</span><span class="sub">In a worktree of its own, served here</span></span></button>`;
 		body =
-			matches.length === 0
+			(matches.length === 0
 				? `<div class="muted pad">Nothing matches “${escape(open.search)}”.</div>`
 				: list("worktree", "Worktrees", "folder", "Folders checked out on this repo; served in place") +
 					list("local", "Local branches", "git-branch", "Branches on this machine with no worktree; served from a Hub copy") +
-					list("remote", "Remote branches", "cloud", "Branches on the remote with no local branch of the same name; served from a Hub copy");
+					list("remote", "Remote branches", "cloud", "Branches on the remote with no local branch of the same name; served from a Hub copy")) + create;
 	}
+	const fetchButton = `<button class="btn ghost icon-only${open.fetching ? " spinning" : ""}" data-action="fetch" data-id="${escape(slot.id)}" title="${open.fetching ? "Fetching…" : "Fetch from remotes, for branches pushed since"}"${open.fetching ? " disabled" : ""}>${icon(open.fetching ? "loading" : "sync", open.fetching ? "codicon-modifier-spin" : "")}</button>`;
 	return `<div class="picker">
-		<div class="search">${icon("search")}<input data-key="search-${escape(slot.id)}" data-input="search" placeholder="Search worktrees and branches" value="${escape(open.search)}" spellcheck="false"></div>
+		${
+			open.create
+				? ""
+				: `<div class="search">${icon("search")}<input data-key="search-${escape(slot.id)}" data-input="search" placeholder="Search worktrees and branches" value="${escape(open.search)}" spellcheck="false">${fetchButton}</div>`
+		}
+		${open.fetchError ? `<div class="notice error picker-notice">${icon("error")}<span>Fetch failed: ${escape(open.fetchError)}</span></div>` : ""}
 		<div class="list">${body}</div>
 		<p class="hint">Studio stays connected when you switch.</p>
 	</div>`;
@@ -237,8 +302,8 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		<div class="row card-foot">
 			${statusPill(slot)}
 			<span class="grow"></span>
-			${iconButton("log", "output", "Show Rojo log", { id: slot.id })}
-			${iconButton("remove", "trash", "Remove from Rojo-Hub", { id: slot.id })}
+			${ui.busy.has(`build:${slot.id}`) ? `<span class="btn ghost icon-only" title="Building a place file…">${icon("loading", "codicon-modifier-spin")}</span>` : ""}
+			${cardMenu(slot)}
 			${
 				serving
 					? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary", disabled: busy })
@@ -284,6 +349,31 @@ function memberRow(group: GroupView, kind: "project" | "group", memberId: string
 		</div>`;
 	}
 	return `<div class="member">${body}${iconButton("remove-member", "close", `Take ${name} out of ${group.name} (asks first)`, { id: group.id, kind, member: memberId })}</div>`;
+}
+
+/** The card's ⋯ button and, while it is open, its menu of less frequent actions. */
+function cardMenu(slot: SlotView): string {
+	const open = ui.menu === slot.id;
+	const item = (action: string, iconName: string, label: string, extra = "") =>
+		`<button class="menu-item${extra}" role="menuitem" data-action="${action}" data-id="${escape(slot.id)}">${icon(iconName)}<span>${escape(label)}</span></button>`;
+	return `<span class="menu-anchor">
+		<button class="btn ghost icon-only${open ? " open" : ""}" data-action="menu" data-id="${escape(slot.id)}" title="More actions" aria-haspopup="menu" aria-expanded="${open}">${icon("ellipsis")}</button>
+		${
+			open
+				? `<div class="menu${ui.menuDown ? " down" : ""}" role="menu">
+					${
+						slot.target.kind === "worktree"
+							? `${item("sourcemap", "file-code", "Update sourcemap.json")}<div class="menu-note ${slot.sourcemap.state}" title="${escape(slot.sourcemap.detail)}">${icon(slot.sourcemap.state === "watching" ? "sync" : slot.sourcemap.state === "error" ? "warning" : "circle-slash")}<span>${escape(slot.sourcemap.state === "watching" ? "Sourcemap kept up to date" : slot.sourcemap.detail || "Sourcemap not kept")}</span></div><div class="menu-separator"></div>`
+							: ""
+					}
+					${item("build", "package", "Build place file…")}
+					${item("log", "output", "Show Rojo log")}
+					<div class="menu-separator"></div>
+					${item("remove", "trash", "Remove from Rojo-Hub…", " danger")}
+				</div>`
+				: ""
+		}
+	</span>`;
 }
 
 /** A port chip that copies localhost:<port>; it shows a tick for a moment after a copy. */
@@ -474,7 +564,7 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	that lists it (the window's own workspace first); other workspaces that
 	also list it show a short row that jumps to its card.
 */
-function projectsList(slots: SlotView[]): string {
+function projectsList(slots: SlotView[], filtering = false): string {
 	const order = state?.order?.projects ?? [];
 	const workspaces = state?.workspaces ?? [];
 	ui.lists.clear();
@@ -484,7 +574,8 @@ function projectsList(slots: SlotView[]): string {
 		return cards.map((slot, index) => projectCard(slot, "cards:root", index > 0)).join("");
 	}
 	const home = new Map<string, string>();
-	for (const workspace of workspaces) for (const id of workspace.slotIds) if (!home.has(id)) home.set(id, workspace.file);
+	const present = new Set(slots.map((slot) => slot.id));
+	for (const workspace of workspaces) for (const id of workspace.slotIds) if (!home.has(id) && present.has(id)) home.set(id, workspace.file);
 	const byId = new Map(slots.map((slot) => [slot.id, slot]));
 
 	interface Block {
@@ -503,8 +594,10 @@ function projectsList(slots: SlotView[]): string {
 		remember(list, own.map((slot) => slot.id));
 		const draw = (foldedByDefault: boolean) => {
 			if (ui.reveal && own.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
-			const collapsed = folded(key, foldedByDefault);
+			// While filtering, every workspace with a match is open and the rest are hidden.
+			const collapsed = !filtering && folded(key, foldedByDefault);
 			const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
+			if (filtering && own.length + elsewhere.length === 0) return "";
 			const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
 			const head = `<div class="row workspace-head">
 				${grip("blocks", key)}
@@ -520,12 +613,12 @@ function projectsList(slots: SlotView[]): string {
 					(slot) => `<div class="member">${dot(slot)}<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">shown above</span></div>`,
 				)
 				.join("");
-			const addableRows = workspace.addable
+			const addableRows = (filtering ? [] : workspace.addable)
 				.map(
 					(folder) => `<div class="member addable">${icon("folder")}<span class="grow ellipsis" title="${escape(folder.path)}">${escape(folder.label)}</span><span class="sub">not added</span>${button("add", "Add", { icon: "add", kind: "secondary", data: { path: folder.path }, title: `Add ${folder.label} to Rojo-Hub` })}</div>`,
 				)
 				.join("");
-			const addAll = workspace.addable.length > 1 ? `<div class="row">${button("add-workspace", `Add all ${workspace.addable.length}`, { icon: "add", kind: "secondary", data: { file: workspace.file } })}</div>` : "";
+			const addAll = !filtering && workspace.addable.length > 1 ? `<div class="row">${button("add-workspace", `Add all ${workspace.addable.length}`, { icon: "add", kind: "secondary", data: { file: workspace.file } })}</div>` : "";
 			return `<div class="workspace" ${dropAttributes("blocks", key)}>${head}<div class="workspace-body">${own.map((slot) => projectCard(slot, list, false)).join("")}${elsewhereRows}${addableRows}${addAll}</div></div>`;
 		};
 		return { key, draw, holds: own.map((slot) => slot.id) };
@@ -541,7 +634,7 @@ function projectsList(slots: SlotView[]): string {
 			holds: loose.map((slot) => slot.id),
 			draw: (foldedByDefault) => {
 				if (ui.reveal && loose.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
-				const collapsed = folded(key, foldedByDefault);
+				const collapsed = !filtering && folded(key, foldedByDefault);
 				return `<div class="workspace other" ${dropAttributes("blocks", key)}>
 					<div class="row workspace-head">${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
 					${collapsed ? "" : `<div class="workspace-body">${loose.map((slot) => projectCard(slot, list, false)).join("")}</div>`}
@@ -583,13 +676,18 @@ function render(): void {
 	const active = document.activeElement as HTMLInputElement | null;
 	const focusKey = active?.dataset?.key;
 	const selection = focusKey ? [active!.selectionStart, active!.selectionEnd] : null;
-	const scrolls = [...app.querySelectorAll<HTMLElement>(".list")].map((list) => list.scrollTop);
-	const pageScroll = document.scrollingElement?.scrollTop ?? 0;
 
 	const slots = [...state.slots].sort((a, b) => Number(state!.here.includes(b.id)) - Number(state!.here.includes(a.id)));
 	const servingCount = slots.filter((slot) => slot.state === "running").length;
 
+	const filterRow =
+		ui.filter === null
+			? ""
+			: `<div class="filter">${icon("search")}<input data-key="filter" data-input="filter" value="${escape(ui.filter)}" placeholder="Filter by name, branch or port" spellcheck="false">${iconButton("toggle-filter", "close", "Clear and close the filter")}</div>`;
+	const words = (ui.filter ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+	const shown = words.length ? slots.filter((slot) => words.every((word) => `${slot.projectName} ${slot.targetLabel} ${slot.branch ?? ""} ${slot.port}`.toLowerCase().includes(word))) : slots;
 	const projectsBody =
+		filterRow +
 		adder() +
 		(slots.length === 0
 			? `<div class="empty">
@@ -599,7 +697,9 @@ function render(): void {
 				${button("open-adder", "Add a project", { icon: "add", kind: "primary" })}
 				${button("walkthrough", "Getting started guide", { icon: "book", kind: "ghost" })}
 			</div>`
-			: projectsList(slots));
+			: shown.length === 0
+				? `<div class="empty compact">${icon("search", "empty-icon")}<p class="muted small">No project matches “${escape(ui.filter ?? "")}”.</p></div>`
+				: projectsList(shown, words.length > 0));
 
 	const groupsBody =
 		newGroupForm() +
@@ -632,23 +732,25 @@ function render(): void {
 		</div>`
 		: "";
 
-	app.innerHTML = `
+	morph(
+		app,
+		`
 		${banner}
-		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", iconButton("open-adder", "add", "Add a project"), projectsBody)}
+		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
-		<footer class="footer">${footer}</footer>`;
+		<footer class="footer">${footer}</footer>`,
+	);
 
-	if (focusKey) {
+	// morph keeps the focused box; this covers one that was drawn anew (a picker reopened in another place).
+	if (focusKey && document.activeElement !== active) {
 		const again = app.querySelector<HTMLInputElement>(`[data-key="${CSS.escape(focusKey)}"]`);
 		if (again) {
 			again.focus();
 			if (selection && selection[0] !== null) again.setSelectionRange(selection[0], selection[1]);
 		}
 	}
-	app.querySelectorAll<HTMLElement>(".list").forEach((list, index) => (list.scrollTop = scrolls[index] ?? 0));
-	if (document.scrollingElement) document.scrollingElement.scrollTop = pageScroll;
 	if (ui.reveal) {
 		ui.reveal = null;
 		persist();
@@ -671,7 +773,7 @@ function openPicker(id: string): void {
 	if (ui.picker?.id === id) {
 		ui.picker = null;
 	} else {
-		ui.picker = { id, search: "", options: null, error: null };
+		ui.picker = { id, search: "", options: ui.targets.get(id) ?? null, error: null, at: state?.slots.find((slot) => slot.id === id)?.targetsAt ?? 0, fetching: false, fetchError: null, create: null };
 		send({ type: "targets", id });
 	}
 	render();
@@ -684,6 +786,16 @@ function pick(index: number): void {
 	if (!open || !option) return;
 	send({ type: "switch", id: open.id, target: option.target, label: option.label });
 	ui.picker = null;
+	render();
+}
+
+function createBranch(): void {
+	const open = ui.picker;
+	const form = open?.create;
+	if (!open || !form || form.busy || !form.name.trim()) return;
+	form.busy = true;
+	form.error = null;
+	send({ type: "createBranch", id: open.id, name: form.name.trim(), base: form.base });
 	render();
 }
 
@@ -714,6 +826,12 @@ function saveSettings(): void {
 
 document.addEventListener("click", (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLElement>("[data-action]");
+	// Any click closes an open ⋯ menu (a menu item still runs its action).
+	if (ui.menu && target?.dataset.action !== "menu") {
+		ui.menu = null;
+		render();
+		if (!target) return;
+	}
 	if (!target || target.tagName === "SELECT") return;
 	const { action, id = "", index, path } = target.dataset;
 	switch (action) {
@@ -730,6 +848,48 @@ document.addEventListener("click", (event) => {
 			return openPicker(id);
 		case "pick":
 			return pick(Number(index));
+		case "menu":
+			ui.menu = ui.menu === id ? null : id;
+			ui.menuDown = target.getBoundingClientRect().top < window.innerHeight / 2;
+			render();
+			document.querySelector<HTMLElement>(".menu .menu-item")?.focus();
+			return;
+		case "fetch":
+			if (!ui.picker) return;
+			ui.picker.fetching = true;
+			ui.picker.fetchError = null;
+			send({ type: "fetch", id });
+			return render();
+		case "new-branch": {
+			const open = ui.picker;
+			const slot = state?.slots.find((entry) => entry.id === open?.id);
+			if (!open || !slot) return;
+			open.create = { name: target.dataset.name ?? "", base: baseChoices(slot, open.options ?? [])[0] ?? "", error: null, busy: false };
+			render();
+			document.querySelector<HTMLInputElement>(`[data-key="branch-name-${CSS.escape(slot.id)}"]`)?.focus();
+			return;
+		}
+		case "cancel-branch":
+			if (ui.picker) ui.picker.create = null;
+			render();
+			document.querySelector<HTMLInputElement>(".picker .search input")?.focus();
+			return;
+		case "create-branch":
+			return createBranch();
+		case "sourcemap":
+			ui.busy.add(`slot:${id}`);
+			send({ type: "sourcemap", id });
+			return render();
+		case "build":
+			ui.busy.add(`build:${id}`);
+			send({ type: "build", id });
+			return render();
+		case "toggle-filter":
+			ui.filter = ui.filter === null ? "" : null;
+			ui.collapsed.projects = false;
+			render();
+			document.querySelector<HTMLInputElement>('[data-key="filter"]')?.focus();
+			return;
 		case "start":
 		case "stop":
 			ui.busy.add(`slot:${id}`);
@@ -901,6 +1061,18 @@ document.addEventListener("input", (event) => {
 		case "new-group":
 			if (ui.newGroup) ui.newGroup.name = input.value;
 			return render();
+		case "branch-name":
+			if (ui.picker?.create) {
+				ui.picker.create.name = input.value;
+				ui.picker.create.error = null;
+			}
+			return render();
+		case "branch-base":
+			if (ui.picker?.create) ui.picker.create.base = input.value;
+			return;
+		case "filter":
+			ui.filter = input.value;
+			return render();
 		case "rename":
 			if (ui.renaming) ui.renaming.name = input.value;
 			return;
@@ -919,7 +1091,10 @@ document.addEventListener("keydown", (event) => {
 	const input = event.target as HTMLInputElement;
 	const kind = input.dataset?.input;
 	if (event.key === "Escape") {
-		if (kind === "search") ui.picker = null;
+		if (ui.menu) ui.menu = null;
+		else if (kind === "search") ui.picker = null;
+		else if (kind === "branch-name" && ui.picker) ui.picker.create = null;
+		else if (kind === "filter") ui.filter = null;
 		else if (kind === "new-group") ui.newGroup = null;
 		else if (kind === "rename") ui.renaming = null;
 		else if (ui.adding) ui.adding = null;
@@ -928,10 +1103,9 @@ document.addEventListener("keydown", (event) => {
 		return render();
 	}
 	if (event.key !== "Enter") return;
-	if (kind === "search") {
-		const first = document.querySelector<HTMLElement>(".picker .list-item");
-		if (first) pick(Number(first.dataset.index));
-	} else if (kind === "new-group") createGroup();
+	if (kind === "search") document.querySelector<HTMLElement>(".picker .list-item")?.click();
+	else if (kind === "branch-name") createBranch();
+	else if (kind === "new-group") createGroup();
 	else if (kind === "rename") document.querySelector<HTMLElement>('[data-action="rename-save"]')?.click();
 	else if (kind === "port-range" || kind === "excluded") saveSettings();
 });
@@ -1052,11 +1226,36 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 		case "state":
 			state = message.state;
 			if (ui.picker && !state.slots.some((slot) => slot.id === ui.picker!.id)) ui.picker = null;
+			if (ui.picker) {
+				// The service read a newer list (a branch, a fetch, a new worktree): ask for it quietly.
+				const stamp = state.slots.find((slot) => slot.id === ui.picker!.id)?.targetsAt ?? 0;
+				if (stamp !== ui.picker.at) {
+					ui.picker.at = stamp;
+					send({ type: "targets", id: ui.picker.id });
+				}
+			}
 			return render();
 		case "targets":
+			if (message.options) ui.targets.set(message.id, message.options);
 			if (ui.picker?.id === message.id) {
-				ui.picker.options = message.options;
-				ui.picker.error = message.error ?? null;
+				ui.picker.options = message.options ?? ui.picker.options;
+				ui.picker.error = message.options || ui.picker.options ? null : (message.error ?? null);
+				render();
+			}
+			return;
+		case "fetched":
+			if (ui.picker?.id === message.id) {
+				ui.picker.fetching = false;
+				ui.picker.fetchError = message.error ?? null;
+				render();
+			}
+			return;
+		case "branchCreated":
+			if (ui.picker?.id === message.id && ui.picker.create) {
+				if (message.error) {
+					ui.picker.create.busy = false;
+					ui.picker.create.error = message.error;
+				} else ui.picker = null;
 				render();
 			}
 			return;

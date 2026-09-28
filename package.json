@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.14.2",
+  "version": "0.15.1",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -288,6 +288,18 @@
             "patternErrorMessage": "Write a port (35000) or a range (\"35000-35010\")."
           },
           "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
+        },
+        "rojoHub.sourcemaps": {
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "markdownDescription": "Keep `sourcemap.json` up to date in the worktree each serving project serves, with its pinned `rojo sourcemap --watch`, whether or not luau-lsp or VS Code is open. It writes the same file luau-lsp's extension does, and only where `sourcemap.json` is gitignored or already exists."
+        },
+        "rojoHub.notifyOnStudioDisconnect": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Show a message when Studio disconnects from a serving project. It appears in the window that has the project open, or else in the focused window."
         },
         "rojoHub.portRange": {
           "type": "string",

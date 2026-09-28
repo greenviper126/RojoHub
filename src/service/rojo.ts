@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { createServer } from "node:net";
 
@@ -189,4 +189,17 @@ export class LogFollower {
 			closeSync(fd);
 		}
 	}
+}
+
+/*
+	`rojo build` of a slot file into a place file, with the same pinned binary
+	and verbatim path as serving. Failures carry Rojo's own message.
+*/
+export function buildPlace(binary: string, slotFile: string, output: string, cwd: string): Promise<void> {
+	return new Promise((done, fail) => {
+		execFile(binary, ["build", verbatim(slotFile), "--output", output, "--color", "never"], { cwd, windowsHide: true, timeout: 300000, maxBuffer: 1 << 24 }, (error, stdout, stderr) => {
+			if (error) fail(new Error(`rojo build failed: ${(stderr || stdout || error.message).trim().split(/\r?\n/).slice(-6).join("\n")}`));
+			else done();
+		});
+	});
 }

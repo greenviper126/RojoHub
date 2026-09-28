@@ -56,7 +56,11 @@ export type ToPanel =
 	| { type: "focus"; id: string }
 	/** The title bar's Collapse All: fold everything but Projects, Groups and what is running. */
 	| { type: "collapse" }
-	| { type: "busy"; key: string; busy: boolean };
+	| { type: "busy"; key: string; busy: boolean }
+	/** A picker's Fetch finished; `error` when it failed (the list is unchanged then). */
+	| { type: "fetched"; id: string; error?: string }
+	/** A picker's New branch finished; `error` keeps the form open with the reason. */
+	| { type: "branchCreated"; id: string; error?: string };
 
 export type FromPanel =
 	| { type: "ready" }
@@ -65,6 +69,10 @@ export type FromPanel =
 	| { type: "stop"; id: string }
 	| { type: "targets"; id: string }
 	| { type: "switch"; id: string; target: Target; label: string }
+	| { type: "fetch"; id: string }
+	| { type: "createBranch"; id: string; name: string; base: string }
+	| { type: "build"; id: string }
+	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
 	| { type: "remove"; id: string }

@@ -128,6 +128,7 @@ async function refresh(): Promise<void> {
 		lastGroups = [];
 	}
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
+	noticeDisconnects(health ? lastSlots : []);
 	await refreshWorkspaces();
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
@@ -140,6 +141,31 @@ async function refresh(): Promise<void> {
 		order: lastOrder,
 	});
 	updateStatus();
+}
+
+/** Each serving project's Studio connections at the last poll, to notice a drop to none. */
+let lastConnections = new Map<string, number>();
+
+/*
+	rojoHub.notifyOnStudioDisconnect (off by default): says when a serving
+	project's Studio connections drop to none. Every window polls, so only a
+	window with the project open, or else the focused window, says it.
+*/
+function noticeDisconnects(slots: SlotView[]): void {
+	const before = lastConnections;
+	lastConnections = new Map(slots.filter((slot) => slot.state === "running").map((slot) => [slot.id, slot.connections]));
+	if (!vscode.workspace.getConfiguration("rojoHub").get<boolean>("notifyOnStudioDisconnect", false)) return;
+	for (const slot of slots) {
+		if (!((before.get(slot.id) ?? 0) > 0 && lastConnections.get(slot.id) === 0)) continue;
+		const here = workspaceRepos.includes(pathKey(slot.repoPath));
+		const openElsewhere = !here && vscode.window.state.focused;
+		if (!here && !openElsewhere) continue;
+		void vscode.window
+			.showInformationMessage(`Rojo-Hub: Studio disconnected from ${slot.projectName} (:${slot.port}). Rojo is still serving.`, "Show Project")
+			.then((choice) => {
+				if (choice) void panel.focus(slot.id);
+			});
+	}
 }
 
 /*
@@ -547,7 +573,11 @@ async function addProject(): Promise<void> {
 async function pushSettings(): Promise<void> {
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	await client
-		.putSettings({ portRange: config.get<string>("portRange", ""), excludedPorts: config.get<(number | string)[]>("excludedPorts", []) })
+		.putSettings({
+			portRange: config.get<string>("portRange", ""),
+			excludedPorts: config.get<(number | string)[]>("excludedPorts", []),
+			sourcemaps: config.get<boolean>("sourcemaps", true),
+		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
 
@@ -582,6 +612,55 @@ async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefine
 		panel.post({ type: "busy", key, busy: false });
 		await refresh();
 	}
+}
+
+/*
+	New branch from the picker. Errors go back to the picker's form, where the
+	name was typed; success shows the project's card and offers to open the
+	new worktree in a window of its own.
+*/
+async function createBranch(id: string, name: string, base: string): Promise<void> {
+	try {
+		const result = await panel.progress(async () => {
+			await ensureRunning();
+			return client.createBranch(id, name, base);
+		});
+		panel.post({ type: "branchCreated", id });
+		await refresh();
+		void panel.focus(id);
+		const where = result.via === "orca" ? "an Orca worktree" : result.path;
+		const choice = await vscode.window.showInformationMessage(
+			`Rojo-Hub: made ${result.branch} from ${base} in ${where}; ${result.slot.projectName} now serves it.`,
+			"Open in New Window",
+		);
+		if (choice) await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.path), { forceNewWindow: true });
+	} catch (error) {
+		panel.post({ type: "branchCreated", id, error: error instanceof Error ? error.message : String(error) });
+		await refresh();
+	}
+}
+
+/*
+	Build place file: a save dialog prefilled with build/<project>-<branch>.rbxl
+	in the repo, then rojo build of exactly what the project serves.
+*/
+async function buildPlace(slot: SlotView): Promise<void> {
+	const label = (slot.branch ?? slot.targetLabel ?? "build").replace(/[\\/:*?"<>|]+/g, "-");
+	const target = await vscode.window.showSaveDialog({
+		title: `Build a place file of ${slot.projectName} (${slot.targetLabel})`,
+		defaultUri: vscode.Uri.file(join(slot.repoPath, "build", `${slot.projectName}-${label}.rbxl`)),
+		filters: { "Roblox place": ["rbxl", "rbxlx"] },
+		saveLabel: "Build",
+	});
+	if (!target) {
+		panel.post({ type: "busy", key: `build:${slot.id}`, busy: false });
+		return;
+	}
+	const built = await act(`build:${slot.id}`, () => client.build(slot.id, target.fsPath));
+	if (!built) return;
+	const size = built.bytes >= 1 << 20 ? `${(built.bytes / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(built.bytes / 1024))} KB`;
+	const choice = await vscode.window.showInformationMessage(`Rojo-Hub: built ${slot.projectName} (${slot.targetLabel}) into ${target.fsPath} (${size}).`, "Reveal in File Explorer");
+	if (choice) await vscode.commands.executeCommand("revealFileInOS", target);
 }
 
 async function confirmRemove(slot: SlotView): Promise<boolean> {
@@ -643,6 +722,25 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "switch":
 			await act(`slot:${message.id}`, () => client.switch(message.id, message.target));
 			return;
+		case "fetch":
+			try {
+				await ensureRunning();
+				panel.post({ type: "targets", id: message.id, options: await client.fetch(message.id) });
+				panel.post({ type: "fetched", id: message.id });
+			} catch (error) {
+				panel.post({ type: "fetched", id: message.id, error: error instanceof Error ? error.message : String(error) });
+			}
+			return;
+		case "createBranch":
+			return createBranch(message.id, message.name, message.base);
+		case "build":
+			if (slot) await buildPlace(slot);
+			return;
+		case "sourcemap": {
+			const written = await act(`slot:${message.id}`, () => client.sourcemap(message.id));
+			if (written) void vscode.window.setStatusBarMessage(`$(check) Rojo-Hub wrote ${written.path}`, 4000);
+			return;
+		}
 		case "copy":
 			if (!slot) return;
 			await vscode.env.clipboard.writeText(`localhost:${slot.port}`);

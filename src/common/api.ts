@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.14.2";
+export const SERVICE_VERSION = "0.15.1";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -43,6 +43,19 @@ export interface SlotView {
 	error: string | null;
 	sessionId: string | null;
 	logFile: string;
+	/** When the service last read this repo's branch-picker list (ms, 0 if never); a change means a newer list is ready. */
+	targetsAt: number;
+	/** Whether the service keeps the served worktree's sourcemap.json current, and why not (spec 003). */
+	sourcemap: { state: "watching" | "off" | "error"; detail: string };
+}
+
+/** What POST /slots/:id/branch made. */
+export interface BranchResult {
+	slot: SlotView;
+	path: string;
+	branch: string;
+	/** "orca" when Orca made the worktree, "git" for a git worktree beside the repo. */
+	via: "orca" | "git";
 }
 
 export interface TargetOption {
@@ -83,9 +96,12 @@ export interface DisplayOrder {
 	groups: string[];
 }
 
+/** The service's settings, sent from VS Code's rojoHub.* user settings. */
 export interface PortSettings {
 	portRange?: string;
 	excludedPorts?: (number | string)[];
+	/** rojoHub.sourcemaps; missing means on. */
+	sourcemaps?: boolean;
 }
 
 /*
