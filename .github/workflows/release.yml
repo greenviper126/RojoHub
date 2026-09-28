@@ -1,0 +1,47 @@
+# Pushing a tag vX.Y.Z packages the extension and attaches the .vsix to a
+# GitHub release. When the VSCE_PAT (VS Code Marketplace) or OVSX_PAT (Open VSX)
+# secret is set, it is published there too. The tag must match package.json.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the tag matches package.json
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match package.json version $version" }
+      - run: npm run package
+      - name: GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $vsix = Get-ChildItem rojo-hub-*.vsix | Select-Object -First 1
+          $notes = "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md). Install: Extensions view → ⋯ → Install from VSIX…, or ``code --install-extension $($vsix.Name)``."
+          gh release create "${{ github.ref_name }}" $vsix.FullName --title "Rojo-Hub ${{ github.ref_name }}" --notes $notes
+      - name: Publish to the VS Code Marketplace
+        if: ${{ env.VSCE_PAT != '' }}
+        shell: pwsh
+        run: npx vsce publish --packagePath (Get-ChildItem rojo-hub-*.vsix | Select-Object -First 1).FullName
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_PAT != '' }}
+        shell: pwsh
+        run: npx --yes ovsx publish (Get-ChildItem rojo-hub-*.vsix | Select-Object -First 1).FullName -p $env:OVSX_PAT

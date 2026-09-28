@@ -707,6 +707,9 @@ export class Hub {
 		try {
 			const assigned = this.assignments.get(slot.id);
 			if (assigned?.error) throw new Conflict(assigned.error);
+			// Checked first: a missing Rojo is the commonest reason a start fails, and says so without waiting on anything.
+			const rojo = resolveRojo(slot.repoPath);
+			if (!rojo.ok) throw new Conflict(rojo.error);
 			const tree = await this.prepareTree(slot, slot.target);
 			const plan = this.writeFiles(slot, tree);
 			runtime.mode = plan.mode;
@@ -716,8 +719,6 @@ export class Hub {
 			await this.collectViews(slot);
 			if (existsSync(this.logFile(slot.id))) renameSync(this.logFile(slot.id), this.logFile(slot.id).replace(/\.log$/, ".previous.log"));
 			runtime.log = new LogFollower(this.logFile(slot.id));
-			const rojo = resolveRojo(slot.repoPath);
-			if (!rojo.ok) throw new Conflict(rojo.error);
 			runtime.toolWarnings = [];
 			if (olderThan77(rojo.version)) {
 				runtime.toolWarnings = [

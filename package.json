@@ -5,6 +5,10 @@
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1b1f27",
+    "theme": "dark"
+  },
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
   "license": "MIT",
   "categories": [

@@ -1,0 +1,39 @@
+# Typecheck, build, smoke-test the bundles, and run the unit and end-to-end
+# tests against a real Rojo 7.7 installed by Rokit, as a user would have it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Rokit and Rojo 7.7
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $release = gh release view --repo rojo-rbx/rokit --json assets | ConvertFrom-Json
+          $asset = $release.assets | Where-Object { $_.name -like '*windows-x86_64.zip' } | Select-Object -First 1
+          gh release download --repo rojo-rbx/rokit --pattern $asset.name --dir $env:RUNNER_TEMP
+          Expand-Archive (Join-Path $env:RUNNER_TEMP $asset.name) -DestinationPath (Join-Path $env:RUNNER_TEMP rokit)
+          & (Join-Path $env:RUNNER_TEMP rokit\rokit.exe) self-install
+          "$env:USERPROFILE\.rokit\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          $pin = Join-Path $env:RUNNER_TEMP pin
+          New-Item -ItemType Directory $pin | Out-Null
+          Set-Content (Join-Path $pin rokit.toml) "[tools]`nrojo = `"rojo-rbx/rojo@7.7.0`""
+          Push-Location $pin
+          & "$env:USERPROFILE\.rokit\bin\rokit.exe" install --no-trust-check
+          Pop-Location
+      - run: npm run typecheck
+      - run: npm test

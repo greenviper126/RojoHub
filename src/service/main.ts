@@ -79,7 +79,15 @@ async function main(): Promise<void> {
 	await hub.restore();
 }
 
-main().catch((error) => {
+main().catch((error: NodeJS.ErrnoException) => {
+	/*
+		Two windows that open at the same moment can both start a service; the
+		second finds the port taken by the first, which is what both wanted.
+	*/
+	if (error?.code === "EADDRINUSE") {
+		log(`service ${process.pid} not started: port ${port} is already in use (another service started first)`);
+		process.exit(0);
+	}
 	log(`fatal: ${error instanceof Error ? error.stack : error}`);
 	console.error(error);
 	process.exit(1);
