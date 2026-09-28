@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 
+import { compareVersions } from "../common/version";
 import { SERVICE_PORT, SERVICE_VERSION, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
@@ -35,13 +36,15 @@ async function health(): Promise<Health | null> {
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 /*
-	Makes sure a service of this extension's version is running. An older one
-	(left from before an update) is asked to exit, leaving its rojo processes
-	serving for the new one to adopt.
+	Makes sure a service at least as new as this extension is running. An older
+	one (left from before an update) is asked to exit, leaving its rojo
+	processes serving for the new one to adopt. A newer one is kept: every
+	VS Code window runs its own copy of the extension, and a window that has
+	not been reloaded since an update must not put the old service back.
 */
 export async function ensureService(serviceScript: string): Promise<Health> {
 	let current = await health();
-	if (current && current.version === SERVICE_VERSION) return current;
+	if (current && compareVersions(current.version, SERVICE_VERSION) >= 0) return current;
 	if (current) {
 		await call("POST", "/shutdown", { stopServing: false }).catch(() => undefined);
 		for (let i = 0; i < 40 && (await health()); i++) await sleep(100);

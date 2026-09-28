@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import { expandGroup, pathBetween } from "../common/groups";
+import { compareVersions } from "../common/version";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { parseWorktrees } from "../service/git";
@@ -316,4 +317,10 @@ test("resolveRojo finds the pinned binary the way Rokit does, or says what to in
 	writeFileSync(join(project, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
 	const preferred = resolveRojo(project, rokit);
 	assert.ok(preferred.ok && preferred.manifest === join(project, "rokit.toml"), "rokit.toml before aftman.toml in the same folder");
+});
+
+test("compareVersions orders versions numerically, so an old window never downgrades the service", () => {
+	assert.ok(compareVersions("0.10.2", "0.9.0") > 0, "0.10 is newer than 0.9, which a string compare gets wrong");
+	assert.ok(compareVersions("0.11.0", "0.11.1") < 0);
+	assert.equal(compareVersions("1.0", "1.0.0"), 0);
 });

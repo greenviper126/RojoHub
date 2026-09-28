@@ -4,8 +4,9 @@ import { dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import { SERVICE_VERSION, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
 import { client, ensureService } from "./client";
 import { savedState } from "./saved";
@@ -93,6 +94,23 @@ async function ensureRunning(): Promise<void> {
 	await starting;
 }
 
+let toldToReload = false;
+
+/*
+	A newer service than this window's extension means Rojo-Hub was updated and
+	this window has not been reloaded. It keeps working against the newer
+	service, but its panel code is old, so it asks once to reload.
+*/
+function checkOutdated(serviceVersion: string | undefined): void {
+	if (toldToReload || !serviceVersion || compareVersions(serviceVersion, SERVICE_VERSION) <= 0) return;
+	toldToReload = true;
+	void vscode.window
+		.showInformationMessage(`Rojo-Hub was updated to ${serviceVersion}; this window still runs ${SERVICE_VERSION}. Reload it to use the new version.`, "Reload Window")
+		.then((choice) => {
+			if (choice) void vscode.commands.executeCommand("workbench.action.reloadWindow");
+		});
+}
+
 async function refresh(): Promise<void> {
 	let health = await client.health();
 	if (!health && !serviceHealth.error) {
@@ -100,6 +118,7 @@ async function refresh(): Promise<void> {
 		health = await client.health();
 	}
 	serviceHealth = { running: !!health, version: health?.version ?? null, error: health ? null : serviceHealth.error };
+	checkOutdated(health?.version);
 	if (health?.home) hubHome = health.home;
 	try {
 		[lastSlots, lastGroups] = health ? await Promise.all([client.slots(), client.groups()]) : [[], []];

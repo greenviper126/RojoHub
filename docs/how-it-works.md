@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.11.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.11.1, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -79,7 +79,10 @@ code --install-extension rojo-hub-<version>.vsix --force --profile "Roblox"
 Then **reload the window** (`Ctrl+Shift+P` → *Developer: Reload Window*). A window that was open
 during the install does not load the new version until it reloads.
 
-**Update**: install the newer `.vsix` the same way and reload. The new extension notices that the
+**Update**: install the newer `.vsix` the same way and reload **every** window that has Rojo-Hub
+(each window runs its own copy of the extension). A window only ever replaces the service with a
+newer one, never an older one; a window still on the old version keeps using the newer service and
+asks once to be reloaded. The new extension notices that the
 running service is an older version, asks it to exit, and starts its own. Rojo processes keep
 running through this, so Studio stays connected, and the new service adopts them.
 
