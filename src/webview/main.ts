@@ -3,14 +3,16 @@
 	from the state the extension sends and posts every click back to it
 	(src/common/panel.ts). All colours and icons come from VS Code's theme.
 
-	Rendering is one function from (state, ui) to HTML. It redraws on every
-	change, keeping the focused input, its caret and the scroll position, so
-	typing in a search box survives the 2-second status updates.
+	Rendering is one function from (state, ui) to HTML. Each change is applied
+	to the page by morph.ts, which updates only the elements that differ, so
+	an open picker, a focused box, hover and scroll positions all survive the
+	2-second status updates without flashing.
 */
 
 import { DEFAULT_PORT_RANGE, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
+import { morph } from "./morph";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromPanel): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -668,8 +670,6 @@ function render(): void {
 	const active = document.activeElement as HTMLInputElement | null;
 	const focusKey = active?.dataset?.key;
 	const selection = focusKey ? [active!.selectionStart, active!.selectionEnd] : null;
-	const scrolls = [...app.querySelectorAll<HTMLElement>(".list")].map((list) => list.scrollTop);
-	const pageScroll = document.scrollingElement?.scrollTop ?? 0;
 
 	const slots = [...state.slots].sort((a, b) => Number(state!.here.includes(b.id)) - Number(state!.here.includes(a.id)));
 	const servingCount = slots.filter((slot) => slot.state === "running").length;
@@ -726,23 +726,25 @@ function render(): void {
 		</div>`
 		: "";
 
-	app.innerHTML = `
+	morph(
+		app,
+		`
 		${banner}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
-		<footer class="footer">${footer}</footer>`;
+		<footer class="footer">${footer}</footer>`,
+	);
 
-	if (focusKey) {
+	// morph keeps the focused box; this covers one that was drawn anew (a picker reopened in another place).
+	if (focusKey && document.activeElement !== active) {
 		const again = app.querySelector<HTMLInputElement>(`[data-key="${CSS.escape(focusKey)}"]`);
 		if (again) {
 			again.focus();
 			if (selection && selection[0] !== null) again.setSelectionRange(selection[0], selection[1]);
 		}
 	}
-	app.querySelectorAll<HTMLElement>(".list").forEach((list, index) => (list.scrollTop = scrolls[index] ?? 0));
-	if (document.scrollingElement) document.scrollingElement.scrollTop = pageScroll;
 	if (ui.reveal) {
 		ui.reveal = null;
 		persist();
