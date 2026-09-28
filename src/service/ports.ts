@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { PortSettings } from "../common/api";
+import { DEFAULT_PORT_RANGE, type PortSettings } from "../common/api";
 import { git } from "./git";
 
 /*
@@ -23,7 +23,8 @@ import { git } from "./git";
 	with no window open.
 */
 
-export const DEFAULT_RANGE = { first: 34873, last: 35872 };
+const [defaultFirst, defaultLast] = DEFAULT_PORT_RANGE.split("-").map(Number);
+export const DEFAULT_RANGE = { first: defaultFirst, last: defaultLast };
 /** Rojo's default port (plain `rojo serve`, and /JumpTo); excluded whatever the settings say. */
 export const ALWAYS_EXCLUDED = [34872];
 

@@ -684,6 +684,10 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "stopGroup":
 			reportGroup(await act(`group:${message.id}`, () => client.stopGroup(message.id)));
 			return;
+		case "resetPortRange":
+			// Removing the key from settings.json brings back the built-in default range.
+			await vscode.workspace.getConfiguration("rojoHub").update("portRange", undefined, vscode.ConfigurationTarget.Global);
+			return;
 		case "saveSettings": {
 			const config = vscode.workspace.getConfiguration("rojoHub");
 			await config.update("portRange", message.portRange, vscode.ConfigurationTarget.Global);

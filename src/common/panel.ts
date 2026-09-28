@@ -74,6 +74,7 @@ export type FromPanel =
 	| { type: "removeFromGroup"; id: string; member: GroupMember }
 	| { type: "startGroup"; id: string; only: boolean }
 	| { type: "stopGroup"; id: string }
+	| { type: "resetPortRange" }
 	| { type: "saveSettings"; portRange: string; excludedPorts: (number | string)[] }
 	| { type: "stopAll" }
 	| { type: "addWorkspace"; file: string }

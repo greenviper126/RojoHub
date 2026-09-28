@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
+import { DEFAULT_PORT_RANGE } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import { savedState } from "../extension/saved";
@@ -323,4 +324,12 @@ test("compareVersions orders versions numerically, so an old window never downgr
 	assert.ok(compareVersions("0.10.2", "0.9.0") > 0, "0.10 is newer than 0.9, which a string compare gets wrong");
 	assert.ok(compareVersions("0.11.0", "0.11.1") < 0);
 	assert.equal(compareVersions("1.0", "1.0.0"), 0);
+});
+
+test("the port range default is the same in package.json and the code", () => {
+	const manifest = JSON.parse(readFileSync(join(__dirname, "..", "..", "package.json"), "utf8")) as {
+		contributes: { configuration: { properties: Record<string, { default: unknown }> } };
+	};
+	assert.equal(manifest.contributes.configuration.properties["rojoHub.portRange"].default, DEFAULT_PORT_RANGE);
+	assert.deepEqual([parsePortSettings({}).first, parsePortSettings({}).last], DEFAULT_PORT_RANGE.split("-").map(Number));
 });

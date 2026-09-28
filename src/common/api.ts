@@ -5,7 +5,9 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.11.1";
+/** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
+export const DEFAULT_PORT_RANGE = "34873-35872";
+export const SERVICE_VERSION = "0.11.2";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made

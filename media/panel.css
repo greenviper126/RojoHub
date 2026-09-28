@@ -626,3 +626,11 @@ button:focus-visible {
 .member.addable .codicon-folder {
 	opacity: 0.7;
 }
+
+.settings .label-row label {
+	flex-direction: row;
+}
+
+.settings > input {
+	margin-bottom: 2px;
+}

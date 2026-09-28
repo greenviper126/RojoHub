@@ -8,7 +8,7 @@
 	typing in a search box survives the 2-second status updates.
 */
 
-import type { GroupView, SlotView, TargetOption } from "../common/api";
+import { DEFAULT_PORT_RANGE, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 
@@ -35,6 +35,8 @@ const ui = {
 	confirmOnly: null as string | null,
 	/** "Stop all" is waiting for Yes/No. */
 	confirmStopAll: false,
+	/** Resetting the port range is waiting for Yes/No. */
+	confirmResetRange: false,
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
@@ -310,9 +312,21 @@ function settingsBody(): string {
 	const current = state!.settings;
 	const draft = ui.settings ?? { portRange: current.portRange, excluded: current.excludedPorts.join(", "), error: null };
 	const changed = draft.portRange !== current.portRange || draft.excluded !== current.excludedPorts.join(", ");
+	const isDefault = current.portRange.replace(/\s+/g, "") === DEFAULT_PORT_RANGE;
+	const fromRange = (state?.slots ?? []).filter((slot) => slot.portSource === "hash").length;
+	const resetConfirm = ui.confirmResetRange
+		? `<div class="notice warning">${icon("warning")}<span class="grow">Reset the port range to <strong>${DEFAULT_PORT_RANGE}</strong>? ${
+				fromRange === 0
+					? "No project gets its port from the range right now, so no port changes."
+					: `${fromRange} project${fromRange === 1 ? " gets its" : "s get their"} port from the range, so ${fromRange === 1 ? "its port" : "their ports"} may change; any that are serving restart on the new port and Studio must reconnect.`
+			}</span></div>
+			<div class="row">${button("reset-range-yes", "Yes, reset", { icon: "discard", kind: "primary" })}${button("reset-range-no", "Cancel", { kind: "secondary" })}</div>`
+		: "";
 	return `<div class="card settings">
-		<label>Port range<input data-key="port-range" data-input="port-range" value="${escape(draft.portRange)}" placeholder="34873-35872" spellcheck="false"></label>
-		<p class="muted small">Projects get a port in this range, worked out from their repo's first commit, unless their project file sets <code>servePort</code>.</p>
+		<div class="row label-row"><label for="port-range">Port range</label><span class="grow"></span>${button("reset-range", "Reset", { icon: "discard", kind: "ghost", disabled: isDefault || ui.confirmResetRange, title: isDefault ? `Already the default, ${DEFAULT_PORT_RANGE}` : `Back to the default range, ${DEFAULT_PORT_RANGE} (asks first)` })}</div>
+		<input id="port-range" data-key="port-range" data-input="port-range" value="${escape(draft.portRange)}" placeholder="${DEFAULT_PORT_RANGE}" spellcheck="false">
+		${resetConfirm}
+		<p class="muted small">Projects get a port in this range, worked out from their repo's first commit, unless their project file sets <code>servePort</code>.${isDefault ? " This is the default." : ` The default is ${DEFAULT_PORT_RANGE}.`}</p>
 		<label>Excluded ports<input data-key="excluded" data-input="excluded" value="${escape(draft.excluded)}" placeholder="35000, 35100-35110" spellcheck="false"></label>
 		<p class="muted small">Never given to any project. 34872 (Rojo's default) is always excluded.</p>
 		${draft.error ? `<div class="notice error">${icon("error")}<span>${escape(draft.error)}</span></div>` : ""}
@@ -626,6 +640,17 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "save-settings":
 			return saveSettings();
+		case "reset-range":
+			ui.confirmResetRange = true;
+			return render();
+		case "reset-range-no":
+			ui.confirmResetRange = false;
+			return render();
+		case "reset-range-yes":
+			ui.confirmResetRange = false;
+			ui.settings = null;
+			send({ type: "resetPortRange" });
+			return render();
 		case "reset-settings":
 			ui.settings = null;
 			return render();

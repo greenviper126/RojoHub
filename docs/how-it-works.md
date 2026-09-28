@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.11.1, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.11.2, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -155,8 +155,11 @@ projects are serving (green when all are). Inside:
   place; the projects stay).
 
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
-*Save* and *Undo*. Mistakes are pointed out before saving. These edit the VS Code user settings
-described in [Settings](#12-settings).
+*Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
+puts back the default range (34873–35872) after asking: it says how many projects get their port from
+the range, since their ports may change and serving ones restart. Reset is greyed out when the range
+is already the default; excluded ports have no reset. These edit the VS Code user settings described
+in [Settings](#12-settings).
 
 **Footer**: how many projects are serving, **Stop all**, and Refresh. *Stop all* stops every
 serving project and marks every group not running; it asks first, on the panel, naming what it will
@@ -469,6 +472,12 @@ Both are **user settings that apply to every project and window**; a workspace c
 
 The panel's **Port settings** section edits them, as does *Open Menu → Port Settings*. Changes apply
 within a few seconds.
+
+**Where they are saved.** Both are VS Code user settings, written for you when you press *Save* or
+*Reset*. They are marked as applying to every VS Code profile, so VS Code keeps them in the main
+user `settings.json` (`%APPDATA%\Code\User\settings.json`) and every profile shares them. *Reset*
+removes `rojoHub.portRange` from that file, so the default applies again. The service keeps a copy of
+the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projects with no window open.
 
 ## 13. Commands
 
