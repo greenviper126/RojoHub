@@ -35,9 +35,27 @@ export function agentWishes(): AgentWishes {
 	return wishes;
 }
 
-/** Ticks or unticks one box, keeping the others as they are. */
-export async function setAgentBox(id: AgentId | "vscode", on: boolean): Promise<void> {
+/*
+	Whether this window knows rojoHub.agents. VS Code can restart an updated
+	extension's code in a window that is not in focus without registering its
+	new settings, and writing an unregistered setting fails.
+*/
+function settingKnown(): boolean {
+	return vscode.workspace.getConfiguration(SECTION).inspect(KEY)?.defaultValue !== undefined;
+}
+
+/** Ticks or unticks one box, keeping the others as they are. False when this window must be reloaded first (it says so). */
+export async function setAgentBox(id: AgentId | "vscode", on: boolean): Promise<boolean> {
+	if (!settingKnown()) {
+		const choice = await vscode.window.showWarningMessage(
+			"Rojo-Hub was updated, but this window has not loaded its new settings yet. Reload the window, then tick the box again.",
+			"Reload Window",
+		);
+		if (choice) void vscode.commands.executeCommand("workbench.action.reloadWindow");
+		return false;
+	}
 	await vscode.workspace.getConfiguration(SECTION).update(KEY, { ...chosen(), [id]: on }, vscode.ConfigurationTarget.Global);
+	return true;
 }
 
 /*
@@ -69,7 +87,7 @@ export function registerVsCodeAgents(context: vscode.ExtensionContext, ensureRun
 	next time.
 */
 export async function askOnce(context: vscode.ExtensionContext, statuses: AgentStatus[]): Promise<void> {
-	if (context.globalState.get<boolean>(ASKED)) return;
+	if (context.globalState.get<boolean>(ASKED) || !settingKnown()) return;
 	const boxes = chosen();
 	const candidates = statuses.filter((agent) => agent.installed && agent.state === "absent" && typeof boxes[agent.id] !== "boolean");
 	if (candidates.length === 0) return;

@@ -809,8 +809,7 @@ async function onPanel(message: FromPanel): Promise<void> {
 			return;
 		case "setAgent":
 			await act(`agent:${message.id}`, async () => {
-				await setAgentBox(message.id, message.on);
-				if (message.id !== "vscode") lastAgents = await client.putAgents(agentWishes());
+				if ((await setAgentBox(message.id, message.on)) && message.id !== "vscode") lastAgents = await client.putAgents(agentWishes());
 			});
 			return;
 		case "copyAgentSetup":
