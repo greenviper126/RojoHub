@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEFAULT_PORT_RANGE, type PortSettings } from "../common/api";
+import { DEFAULT_PORT_RANGE, SERVICE_PORT, type PortSettings } from "../common/api";
 import { git } from "./git";
 
 /*
@@ -25,8 +25,8 @@ import { git } from "./git";
 
 const [defaultFirst, defaultLast] = DEFAULT_PORT_RANGE.split("-").map(Number);
 export const DEFAULT_RANGE = { first: defaultFirst, last: defaultLast };
-/** Rojo's default port (plain `rojo serve`, and /JumpTo); excluded whatever the settings say. */
-export const ALWAYS_EXCLUDED = [34872];
+/** Rojo's default port (plain `rojo serve`) and Rojo-Hub's own service port; excluded whatever the settings say. */
+export const ALWAYS_EXCLUDED = [34872, SERVICE_PORT];
 
 export interface PortConfig {
 	first: number;
@@ -56,7 +56,7 @@ export function parsePortSettings(settings: PortSettings): PortConfig {
 	};
 	if (settings.portRange !== undefined && settings.portRange !== "") {
 		const range = span(settings.portRange);
-		if (range && range[0] < range[1]) [config.first, config.last] = range;
+		if (range) [config.first, config.last] = range;
 		else config.problems.push(`rojoHub.portRange "${settings.portRange}" is not "first-last"; using ${DEFAULT_RANGE.first}-${DEFAULT_RANGE.last}.`);
 	}
 	for (const entry of settings.excludedPorts ?? []) {

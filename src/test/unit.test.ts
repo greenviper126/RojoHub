@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { DEFAULT_PORT_RANGE, MCP_URL } from "../common/api";
+import type { IncomingMessage } from "node:http";
+
+import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
@@ -12,13 +14,14 @@ import { hideAgentNudge, showAgentNudge } from "../extension/nudge";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
-import { headFile, parseWorktrees, readHead } from "../service/git";
+import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead } from "../service/git";
 import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
-import { slugify } from "../service/registry";
+import { Registry, slugify } from "../service/registry";
+import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo } from "../service/rojo";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
@@ -117,11 +120,54 @@ test("port settings: defaults, ranges, 34872 always excluded, bad input reported
 	assert.ok(empty.exclude.has(34872));
 	const custom = parsePortSettings({ portRange: "40000-40009", excludedPorts: [40001, "40003-40005", "40007"] });
 	assert.deepEqual([custom.first, custom.last], [40000, 40009]);
-	assert.deepEqual([...custom.exclude].sort(), [34872, 40001, 40003, 40004, 40005, 40007]);
+	assert.deepEqual([...custom.exclude].sort(), [34870, 34872, 40001, 40003, 40004, 40005, 40007]);
 	assert.deepEqual(custom.problems, []);
 	assert.equal(parsePortSettings({ excludedPorts: [] }).exclude.has(34872), true, "cannot be un-excluded");
 	assert.match(parsePortSettings({ portRange: "5-1" }).problems[0], /portRange/);
 	assert.match(parsePortSettings({ excludedPorts: ["nope"] }).problems[0], /excludedPorts/);
+	assert.ok(parsePortSettings({ portRange: "34800-34900" }).exclude.has(SERVICE_PORT), "the service's own port is never a project's");
+	const single = parsePortSettings({ portRange: "35000-35000" });
+	assert.deepEqual([single.first, single.last, single.problems.length], [35000, 35000, 0], "a one-port range is a range");
+});
+
+test("git version check", () => {
+	assert.deepEqual(gitVersion("git version 2.45.1.windows.1\n"), [2, 45]);
+	assert.deepEqual(gitVersion("git version 2.30.0"), [2, 30]);
+	assert.equal(gitVersion("nonsense"), null);
+	assert.deepEqual(MIN_GIT, [2, 31]);
+});
+
+test("the service answers only local programs, never web pages", () => {
+	const request = (headers: Record<string, string>) => ({ headers }) as unknown as IncomingMessage;
+	assert.ok(allowedRequest(request({ host: "127.0.0.1:34870" }), 34870), "the extension, agents");
+	assert.ok(allowedRequest(request({ host: "localhost:34870" }), 34870));
+	assert.ok(allowedRequest(request({ host: "127.0.0.1:34870", origin: "vscode-file://vscode-app" }), 34870), "VS Code's own windows");
+	assert.equal(allowedRequest(request({ host: "evil.example:34870" }), 34870), false, "DNS rebinding: a foreign Host");
+	assert.equal(allowedRequest(request({ host: "127.0.0.1:34870", origin: "http://localhost:5173" }), 34870), false, "a localhost web page");
+	assert.equal(allowedRequest(request({ host: "127.0.0.1:34870", origin: "null" }), 34870), false, "a file:// page");
+	assert.equal(allowedRequest(request({ host: "127.0.0.1:9999" }), 34870), false, "another port");
+	assert.equal(allowedRequest(request({}), 34870), false, "no Host");
+});
+
+test("a damaged registry.json is set aside and the last good save restored", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojohub-registry-"));
+	const first = new Registry(home);
+	first.groups.push({ id: "g", name: "G", slotIds: [] });
+	first.save();
+	first.groups.push({ id: "h", name: "H", slotIds: [] });
+	first.save();
+	writeFileSync(join(home, "registry.json"), '{"version": 1, "slots": [');
+	const second = new Registry(home);
+	assert.match(second.recovered ?? "", /registry\.json\.bak/);
+	assert.deepEqual(second.groups.map((group) => group.id), ["g"], "the save before the last one");
+	assert.ok(readdirSync(home).some((name) => name.startsWith("registry.corrupt-")), "the damaged file is kept");
+	assert.equal(new Registry(home).recovered, null, "and the next start reads fine");
+
+	const bare = mkdtempSync(join(tmpdir(), "rojohub-registry-"));
+	writeFileSync(join(bare, "registry.json"), "not json");
+	const empty = new Registry(bare);
+	assert.match(empty.recovered ?? "", /no projects/);
+	assert.deepEqual(empty.slots, []);
 });
 
 const request = (id: string, seed: string, servePort: number | null = null): PortRequest => ({ id, name: id, seed, servePort });
@@ -194,7 +240,7 @@ test("pathBetween finds the chain that would loop", () => {
 });
 
 test("slugify", () => {
-	assert.equal(slugify("TheLaundryShift"), "thelaundryshift");
+	assert.equal(slugify("SkyIslands"), "skyislands");
 	assert.equal(slugify("My Game!"), "my-game");
 	assert.equal(slugify("!!!"), "project");
 });
@@ -219,8 +265,8 @@ test("savedState shows the registry's projects and groups while the service is s
 		JSON.stringify({
 			version: 1,
 			slots: [
-				{ id: "tls", projectName: "TheLaundryShift", repoPath: "C:\r\TLS", projectFile: "default.project.json", seed: "commit:x", port: 35045, target: { kind: "worktree", path: "C:\r\TLS" }, wantRunning: true, activeView: null },
-				{ id: "ai", projectName: "VluxyAI", repoPath: "C:\r\AI", projectFile: "default.project.json", seed: "commit:y", port: 35761, target: { kind: "branch", ref: "refs/heads/feature/fsm" }, wantRunning: false, activeView: "abc" },
+				{ id: "tls", projectName: "SkyIslands", repoPath: "C:\r\TLS", projectFile: "default.project.json", seed: "commit:x", port: 35045, target: { kind: "worktree", path: "C:\r\TLS" }, wantRunning: true, activeView: null },
+				{ id: "ai", projectName: "NpcBrain", repoPath: "C:\r\AI", projectFile: "default.project.json", seed: "commit:y", port: 35761, target: { kind: "branch", ref: "refs/heads/feature/fsm" }, wantRunning: false, activeView: "abc" },
 			],
 			groups: [
 				{ id: "outer", name: "Outer", slotIds: [], groupIds: ["tls-group"], active: true },
@@ -248,14 +294,14 @@ test("parseWorkspaceFile reads VS Code's commented, trailing-comma workspace fil
 		// the main game and its libraries
 		"folders": [
 			{ "path": "." },
-			{ "path": "../VluxyAI" }, /* shared AI */
+			{ "path": "../NpcBrain" }, /* shared AI */
 			{ "uri": "vscode-remote://ssh/elsewhere" },
 			{ "path": "C:/abs/Thing", "name": "Thing" },
 		],
 		"settings": {},
 	}`;
 	const file = join("C:/r/TLS", "TLS.code-workspace");
-	assert.deepEqual(parseWorkspaceFile(text, file), [resolve("C:/r/TLS"), resolve("C:/r/VluxyAI"), resolve("C:/abs/Thing")]);
+	assert.deepEqual(parseWorkspaceFile(text, file), [resolve("C:/r/TLS"), resolve("C:/r/NpcBrain"), resolve("C:/abs/Thing")]);
 });
 
 test("findWorkspaces groups registered projects and lists addable folders", async () => {
@@ -340,8 +386,8 @@ test("the port range default is the same in package.json and the code", () => {
 });
 
 test("decodeInfo reads Rojo 7.7's MessagePack and older Rojo's JSON", () => {
-	const json = new TextEncoder().encode('{"sessionId":"s1","serverVersion":"7.3.0","projectName":"vluxysf"}');
-	assert.equal(decodeInfo(json, "application/json").projectName, "vluxysf");
+	const json = new TextEncoder().encode('{"sessionId":"s1","serverVersion":"7.3.0","projectName":"combatlib"}');
+	assert.equal(decodeInfo(json, "application/json").projectName, "combatlib");
 	// {"sessionId":"s2","projectName":"TLS"} in MessagePack
 	const packed = new Uint8Array([0x82, 0xa9, ...new TextEncoder().encode("sessionId"), 0xa2, 0x73, 0x32, 0xab, ...new TextEncoder().encode("projectName"), 0xa3, 0x54, 0x4c, 0x53]);
 	assert.deepEqual(decodeInfo(packed, "application/msgpack"), { sessionId: "s2", projectName: "TLS" });

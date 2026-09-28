@@ -65,6 +65,16 @@ export interface SlotView {
 	claim: { label: string; until: number } | null;
 }
 
+/*
+	Everything the panel draws from the service, as GET /events sends it: once
+	when a window subscribes, then each time any of it changes.
+*/
+export interface Snapshot {
+	slots: SlotView[];
+	groups: GroupView[];
+	order: DisplayOrder;
+}
+
 /** What POST /slots/:id/branch made. */
 export interface BranchResult {
 	slot: SlotView;

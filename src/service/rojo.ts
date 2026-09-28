@@ -1,4 +1,4 @@
-import { execFile, spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { createServer } from "node:net";
 
@@ -56,8 +56,17 @@ export function portFree(port: number): Promise<boolean> {
 
 	-v turns on Rojo's debug log, which is where it records each plugin websocket
 	opening and closing; --color never keeps those lines plain in the file.
+
+	The answer knows whether the process has exited, from the child's own exit
+	event. While it has not, its id is still that rojo's and nobody else's, so
+	it can be checked and stopped at once, without looking it up by command line.
 */
-export function startRojo(binary: string, slotFile: string, port: number, cwd: string, logFile: string): Promise<number> {
+export interface StartedRojo {
+	pid: number;
+	alive(): boolean;
+}
+
+export function startRojo(binary: string, slotFile: string, port: number, cwd: string, logFile: string): Promise<StartedRojo> {
 	return new Promise((done, fail) => {
 		const log = openSync(logFile, "w");
 		const child = spawn(binary, ["serve", verbatim(slotFile), "--port", String(port), "-v", "--color", "never"], {
@@ -68,45 +77,79 @@ export function startRojo(binary: string, slotFile: string, port: number, cwd: s
 		});
 		closeSync(log);
 		child.once("error", (error) => fail(new Error(`${binary} could not be started: ${error.message}`)));
+		let exited = false;
+		child.once("exit", () => (exited = true));
 		child.once("spawn", () => {
 			child.unref();
-			done(child.pid ?? 0);
+			done({ pid: child.pid ?? 0, alive: () => !exited });
 		});
 	});
 }
 
 /*
-	Stops every rojo.exe whose command line names this slot file, and only
-	those. Rokit's shim and the real binary are both rojo.exe with the same
-	command line, so the pair goes together (as in ServeWorktree.mjs); another
-	project's serve is left alone because its slot file differs.
+	The ids of every rojo process whose command line contains `needle` (a slot
+	file, or a sourcemap output path), and only those, so another project's
+	rojo or one started by hand is never touched. Asynchronous: Get-CimInstance
+	takes around half a second, and blocking the service's event loop that long
+	made other slots' status checks time out.
+
+	The match is a lower-cased Contains rather than [StringComparison] or -like,
+	which also runs under PowerShell's Constrained Language Mode and is not
+	confused by the [ ] a path can contain.
 */
-export function stopRojo(slotFile: string): void {
-	if (process.platform === "win32") {
-		const needle = slotFile.replace(/'/g, "''");
+export function findRojo(needle: string, extra = ""): Promise<number[]> {
+	return new Promise((done) => {
+		if (process.platform !== "win32") {
+			execFile("pgrep", ["-f", needle], { encoding: "utf8" }, (_error, stdout) => done(pids(stdout)));
+			return;
+		}
 		const script =
-			`$needle = '${needle}'\n` +
+			`$needle = '${needle.toLowerCase().replace(/'/g, "''")}'\n` +
 			"Get-CimInstance Win32_Process -Filter \"Name='rojo.exe'\" | " +
-			"Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | " +
-			"ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
-		spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore", windowsHide: true });
-	} else {
-		spawnSync("pkill", ["-f", slotFile], { stdio: "ignore" });
+			`Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle)${extra} } | ` +
+			"ForEach-Object { $_.ProcessId }";
+		execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20000 }, (_error, stdout) => done(pids(stdout)));
+	});
+}
+
+function pids(stdout: string | undefined): number[] {
+	return (stdout ?? "")
+		.split(/\s+/)
+		.map((part) => Number(part))
+		.filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+/** Whether a process with this id exists. Cheap: no PowerShell. */
+export function pidAlive(pid: number | null): boolean {
+	if (!pid) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
 	}
 }
 
-/** True when a rojo.exe serving this slot file is alive. */
-export function rojoAlive(slotFile: string): boolean {
-	if (process.platform !== "win32") {
-		return spawnSync("pgrep", ["-f", slotFile]).status === 0;
+export function kill(pid: number): void {
+	try {
+		process.kill(pid);
+	} catch {
+		// already gone
 	}
-	const needle = slotFile.replace(/'/g, "''");
-	const script =
-		`$needle = '${needle}'\n` +
-		"@(Get-CimInstance Win32_Process -Filter \"Name='rojo.exe'\" | " +
-		"Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count";
-	const out = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true });
-	return Number(out.stdout.trim()) > 0;
+}
+
+/*
+	Stops every rojo serving this slot file, found by command line rather than
+	by a remembered id, so a process id Windows has since given to another
+	program is never killed.
+*/
+export async function stopRojo(slotFile: string): Promise<void> {
+	for (const pid of await findRojo(slotFile)) kill(pid);
+}
+
+/** True when a rojo serving this slot file is alive. */
+export async function rojoAlive(slotFile: string): Promise<boolean> {
+	return (await findRojo(slotFile)).length > 0;
 }
 
 /*
@@ -144,6 +187,14 @@ export class LogFollower {
 	constructor(readonly file: string) {}
 
 	poll(): void {
+		try {
+			this.read();
+		} catch {
+			// The file was renamed or removed between looking and reading (a restart); the next poll starts over.
+		}
+	}
+
+	private read(): void {
 		if (!existsSync(this.file)) return;
 		const size = statSync(this.file).size;
 		if (size < this.offset) {
@@ -177,6 +228,14 @@ export class LogFollower {
 	}
 
 	tail(count: number): string {
+		try {
+			return this.readTail(count);
+		} catch {
+			return "";
+		}
+	}
+
+	private readTail(count: number): string {
 		if (!existsSync(this.file)) return "";
 		const fd = openSync(this.file, "r");
 		try {

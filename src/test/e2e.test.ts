@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 
 import { decode } from "@msgpack/msgpack";
 
-import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import type { GroupResult, GroupView, SlotView, Snapshot, TargetOption } from "../common/api";
 import { parsePortSettings, preferredPort } from "../service/ports";
 
 /*
@@ -542,4 +543,82 @@ test("removing a project that pushed another off its port says so first, then mo
 
 	await call("POST", `/slots/${a.id}/stop`);
 	await call("DELETE", `/slots/${a.id}`);
+});
+
+test("robustness: events stream, racing adds, work after a remove, a deleted served worktree, foreign Hosts", async () => {
+	const dir = await makeRepo("Sturdy");
+
+	// the panel's stream: a snapshot at once, then one on every change
+	const snapshots: Snapshot[] = [];
+	const stream = new AbortController();
+	const reading = (async () => {
+		const response = await fetch(api + "/events", { signal: stream.signal });
+		const reader = response.body!.getReader();
+		let buffer = "";
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) return;
+			buffer += new TextDecoder().decode(value);
+			let end: number;
+			while ((end = buffer.indexOf("\n\n")) >= 0) {
+				const event = buffer.slice(0, end);
+				buffer = buffer.slice(end + 2);
+				if (event.startsWith("data: ")) snapshots.push(JSON.parse(event.slice(6)) as Snapshot);
+			}
+		}
+	})().catch(() => undefined);
+	await until("first snapshot", async () => snapshots.length > 0);
+
+	// two adds of one repo at once register it once
+	const results = await Promise.allSettled([call<SlotView>("POST", "/slots", { path: dir }), call<SlotView>("POST", "/slots", { path: dir })]);
+	assert.equal(results.filter((result) => result.status === "fulfilled").length, 1, "one add wins");
+	assert.match(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason), /already registered/);
+	const slot = (results.find((result) => result.status === "fulfilled") as PromiseFulfilledResult<SlotView>).value;
+	assert.equal((await call<SlotView[]>("GET", "/slots")).filter((view) => view.repoPath === slot.repoPath).length, 1);
+	await until("the add reaches the stream", async () => snapshots.at(-1)!.slots.some((view) => view.id === slot.id));
+
+	// a start pushes starting, then running, without anyone asking
+	await call("POST", `/slots/${slot.id}/start`);
+	await until("running in the stream", async () => snapshots.at(-1)!.slots.find((view) => view.id === slot.id)?.state === "running");
+
+	// a worktree with no Packages is served borrowed; deleting it must not take the service down
+	gitIn(dir, "branch", "doomed");
+	const doomed = join(root, "wt-doomed");
+	gitIn(dir, "worktree", "add", "-q", doomed, "doomed");
+	write(join(dir, "Packages", "Dep.luau"), "return 1\n");
+	const project = JSON.parse(readFileSync(join(dir, "default.project.json"), "utf8"));
+	project.tree.ReplicatedStorage = { $className: "ReplicatedStorage", Packages: { $path: "Packages" } };
+	for (const tree of [dir, doomed]) writeFileSync(join(tree, "default.project.json"), JSON.stringify(project));
+	await call("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: doomed } });
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((view) => view.id === slot.id)!.mode, "borrowed");
+	rmSync(doomed, { recursive: true, force: true });
+	await sleep(3000);
+	assert.ok((await fetch(api + "/health")).ok, "the service is still up");
+	await call("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: dir } });
+	await call("POST", `/slots/${slot.id}/stop`);
+	await until("stopped in the stream", async () => snapshots.at(-1)!.slots.find((view) => view.id === slot.id)?.state === "stopped");
+
+	// a Start queued behind a Remove is refused rather than serving a removed project
+	const removing = call("DELETE", `/slots/${slot.id}`);
+	const starting = call("POST", `/slots/${slot.id}/start`);
+	await removing;
+	await assert.rejects(starting, /removed|No project/);
+	assert.equal((await call<SlotView[]>("GET", "/slots")).some((view) => view.id === slot.id), false);
+
+	// only programs on this machine: a DNS-rebinding Host or a web page's Origin is refused
+	const status = (headers: Record<string, string>) =>
+		new Promise<number>((done, fail) => {
+			const request = httpRequest({ host: "127.0.0.1", port: API_PORT, path: "/slots", headers }, (response) => {
+				response.resume();
+				done(response.statusCode ?? 0);
+			});
+			request.on("error", fail);
+			request.end();
+		});
+	assert.equal(await status({ host: `attacker.example:${API_PORT}` }), 403);
+	assert.equal(await status({ origin: "http://localhost:5173" }), 403);
+	assert.equal(await status({}), 200);
+
+	stream.abort();
+	await reading;
 });

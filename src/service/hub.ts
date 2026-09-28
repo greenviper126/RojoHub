@@ -1,13 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { PortMove, PortSettings, SlotView, Target, TargetOption } from "../common/api";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
-import { branchExists, checkBranchName, git, headFile, inOrca, listWorktrees, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, readHead, sameTarget } from "./git";
+import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
-import { buildPlace, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
+import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
@@ -18,6 +18,12 @@ const PORT_FREE_TIMEOUT_MS = 5000;
 const CHECKOUT_CRASH_MS = 120000;
 /** How long a project's list of *.project.json files is reused before its folder is read again. */
 const PROJECT_FILES_MS = 2000;
+/*
+	Status checks in a row that must go unanswered before a serving rojo is
+	looked for as crashed. One slow answer (a big switch, a busy machine) is not
+	a crash, and restarting a healthy rojo would disconnect Studio.
+*/
+const CRASH_MISSES = 3;
 
 interface Runtime {
 	state: SlotView["state"];
@@ -45,6 +51,12 @@ interface Runtime {
 	sourcemap: SourcemapWatcher | null;
 	/** Why there is no sourcemap watcher, for the panel. */
 	sourcemapOff: string;
+	/** The rojo this service started, while it runs; null for one adopted from an earlier service. */
+	rojo: StartedRojo | null;
+	/** Status checks in a row that went unanswered (see CRASH_MISSES). */
+	misses: number;
+	/** A status check is in flight, so the next tick does not start another. */
+	probing: boolean;
 }
 
 /*
@@ -78,6 +90,12 @@ export class Hub {
 	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
 	private readonly claims = new Map<string, Claim>();
 
+	/** The servePort last read from each slot's project file, kept while the file cannot be read (see portRequests). */
+	private readonly servePorts = new Map<string, number | null>();
+
+	/** Serializes add(), which checks the registry, awaits git, then adds to it. */
+	private adding: Promise<unknown> = Promise.resolve();
+
 	/** Each repo's *.project.json files and when they were read, so every status has them without a read each time (spec 005). */
 	private readonly projectFiles = new Map<string, { at: number; files: string[] }>();
 
@@ -86,6 +104,8 @@ export class Hub {
 
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
+		mkdirSync(join(home, "views"), { recursive: true });
+		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));
 	}
 
@@ -108,7 +128,9 @@ export class Hub {
 	private viewsDir(id: string): string {
 		return join(this.home, "views", id);
 	}
-	isHubView = (path: string): boolean => pathKey(path).startsWith(pathKey(join(this.home, "views")) + "/");
+	/** The views folder, by its own path and its real one (see sameFolders). */
+	private viewRoots: string[] = [];
+	isHubView = (path: string): boolean => this.viewRoots.some((root) => pathKey(path).startsWith(root + "/"));
 
 	private runtime(id: string): Runtime {
 		let runtime = this.runtimes.get(id);
@@ -131,15 +153,27 @@ export class Hub {
 				checkout: null,
 				sourcemap: null,
 				sourcemapOff: "Kept up to date while the project is serving",
+				rojo: null,
+				misses: 0,
+				probing: false,
 			};
 			this.runtimes.set(id, runtime);
 		}
 		return runtime;
 	}
 
-	private enqueue<T>(id: string, work: () => Promise<T>): Promise<T> {
-		const runtime = this.runtime(id);
-		const next = runtime.queue.then(work, work);
+	/*
+		Runs work on a slot after the work already queued for it. Work that was
+		queued behind a Remove finds the slot gone and is refused, so it never
+		starts a rojo or writes files for a project that no longer exists.
+	*/
+	private enqueue<T>(slot: SlotRecord, work: () => Promise<T>): Promise<T> {
+		const runtime = this.runtime(slot.id);
+		const guarded = () => {
+			if (!this.registry.slots.includes(slot)) throw new NotFound(`${slot.projectName} was removed from Rojo-Hub`);
+			return work();
+		};
+		const next = runtime.queue.then(guarded, guarded);
 		runtime.queue = next.catch(() => undefined);
 		return next;
 	}
@@ -158,12 +192,12 @@ export class Hub {
 		this.trackRepos();
 		await Promise.all(
 			this.registry.slots.map((slot) =>
-				this.enqueue(slot.id, async () => {
+				this.enqueue(slot, async () => {
 					const runtime = this.runtime(slot.id);
 					await this.describeTarget(slot);
 					if (!slot.wantRunning) return;
 					const info = await rojoInfo(slot.port);
-					if (info && info.projectName === slot.projectName && rojoAlive(this.slotFile(slot.id))) {
+					if (info && info.projectName === slot.projectName && (await rojoAlive(this.slotFile(slot.id)))) {
 						runtime.state = "running";
 						runtime.sessionId = info.sessionId;
 						runtime.log.poll();
@@ -193,16 +227,37 @@ export class Hub {
 			runtime.log.poll();
 			const problems = runtime.log.takeProblems();
 			if (problems.length > 0) runtime.error = problems.slice(-6).join("\n");
-			void rojoInfo(slot.port).then((info) => {
-				if (runtime.state !== "running" || (info && info.sessionId === runtime.sessionId)) return;
-				if (info) {
-					runtime.state = "error";
-					runtime.error = `Port ${slot.port} now answers with a different Rojo session ("${info.projectName}").`;
-					return;
-				}
-				this.restartAfterCrash(slot);
-			});
+			if (runtime.probing) continue;
+			runtime.probing = true;
+			void this.probe(slot, runtime).finally(() => (runtime.probing = false));
 		}
+	}
+
+	/*
+		Asks the slot's rojo whether it is still the session the Hub started. Only
+		after CRASH_MISSES unanswered checks in a row, and only when no rojo for
+		the slot is running any more, is it treated as a crash.
+	*/
+	private async probe(slot: SlotRecord, runtime: Runtime): Promise<void> {
+		const session = runtime.sessionId;
+		const info = await rojoInfo(slot.port);
+		if (runtime.state !== "running" || runtime.sessionId !== session) return;
+		if (info && info.sessionId === session) {
+			runtime.misses = 0;
+			return;
+		}
+		if (info) {
+			runtime.state = "error";
+			runtime.error = `Port ${slot.port} now answers with a different Rojo session ("${info.projectName}").`;
+			return;
+		}
+		// A rojo this service started reports its own exit, so its crash needs no waiting and no lookup.
+		const own = runtime.rojo;
+		if (own ? own.alive() : ++runtime.misses < CRASH_MISSES) return;
+		if (!own && (await rojoAlive(this.slotFile(slot.id)))) return;
+		if (runtime.state !== "running" || runtime.sessionId !== session) return;
+		runtime.misses = 0;
+		this.restartAfterCrash(slot);
 	}
 
 	/*
@@ -217,7 +272,7 @@ export class Hub {
 		const reason = runtime.log.tail(40).split(/\r?\n/).find((line) => line.includes("Details:"))?.replace(/^\[ERROR rojo\]\s*/, "");
 		runtime.state = "error";
 		runtime.error = `Rojo stopped unexpectedly${reason ? `: ${reason}` : ""}`;
-		void this.enqueue(slot.id, async () => {
+		void this.enqueue(slot, async () => {
 			if (runtime.state !== "error" || !slot.wantRunning) return;
 			const checkout = runtime.checkout && Date.now() - runtime.checkout.at < CHECKOUT_CRASH_MS ? runtime.checkout : null;
 			runtime.notes = [
@@ -249,7 +304,7 @@ export class Hub {
 			}
 			if (this.moving.has(slot.id)) continue;
 			this.moving.add(slot.id);
-			void this.enqueue(slot.id, async () => {
+			void this.enqueue(slot, async () => {
 				const now = this.assignments.get(slot.id);
 				if (!now?.port || now.port === slot.port) return;
 				const from = slot.port;
@@ -268,12 +323,15 @@ export class Hub {
 
 	private portRequests(slots: SlotRecord[]): PortRequest[] {
 		return slots.map((slot) => {
-			let servePort: number | null = null;
+			let servePort: number | null;
 			try {
 				const value = readProject(join(slot.repoPath, slot.projectFile)).servePort;
-				if (Number.isInteger(value)) servePort = value as number;
+				servePort = Number.isInteger(value) ? (value as number) : null;
+				this.servePorts.set(slot.id, servePort);
 			} catch {
-				// an unreadable project file shows up when the slot starts
+				// Mid-edit (an auto-save of half-typed JSON) or briefly locked: keep the servePort last read,
+				// or the port would move to the hashed one and back, restarting rojo twice.
+				servePort = this.servePorts.get(slot.id) ?? null;
 			}
 			return { id: slot.id, name: slot.projectName, seed: slot.seed ?? `name:${slot.projectName}`, servePort };
 		});
@@ -303,7 +361,7 @@ export class Hub {
 	setPortSettings(settings: PortSettings): void {
 		savePortSettings(this.home, settings);
 		this.refreshPorts();
-		for (const slot of this.registry.slots) void this.enqueue(slot.id, () => this.syncSourcemap(slot)).catch(() => undefined);
+		for (const slot of this.registry.slots) void this.enqueue(slot, () => this.syncSourcemap(slot)).catch(() => undefined);
 	}
 
 	/** The slot's claim, or null when there is none or it ran out. */
@@ -365,8 +423,18 @@ export class Hub {
 		};
 	}
 
+	/** Nothing serving and nothing meant to be (see IDLE_EXIT_MS in main.ts). */
+	idle(): boolean {
+		return this.registry.slots.every((slot) => !slot.wantRunning && this.runtime(slot.id).state === "stopped");
+	}
+
 	list(): SlotView[] {
 		this.refreshPorts();
+		return this.snapshot();
+	}
+
+	/** Every slot's view as it stands, without re-reading ports (they are re-read every few seconds anyway); for GET /events. */
+	snapshot(): SlotView[] {
 		return this.registry.slots.map((slot) => this.view(slot));
 	}
 
@@ -376,7 +444,17 @@ export class Hub {
 		server reporting the name it saved. Without a `projectFile`, the folder's
 		default.project.json, or its only *.project.json (spec 005).
 	*/
-	async add(path: string, projectFile?: string): Promise<SlotView> {
+	add(path: string, projectFile?: string): Promise<SlotView> {
+		// Two adds at once (two windows, a double click) must not both pass the checks below before either is saved.
+		const run = () => this.addLocked(path, projectFile);
+		const next = this.adding.then(run, run);
+		this.adding = next.catch(() => undefined);
+		return next;
+	}
+
+	private async addLocked(path: string, projectFile?: string): Promise<SlotView> {
+		const problem = await gitProblem();
+		if (problem) throw new Conflict(problem);
 		const repoPath = await primaryCheckout(resolve(path));
 		if (projectFile === undefined) {
 			const files = listProjectFiles(repoPath);
@@ -444,7 +522,7 @@ export class Hub {
 	setProjectFile(id: string, projectFile: string): Promise<SlotView> {
 		const slot = this.registry.get(id);
 		if (!isProjectFileName(projectFile)) throw new Conflict(`${projectFile} is not a *.project.json file name`);
-		return this.enqueue(id, async () => {
+		return this.enqueue(slot, async () => {
 			if (slot.projectFile === projectFile) return this.view(slot);
 			if (this.registry.slots.some((other) => other.id !== id && pathKey(other.repoPath) === pathKey(slot.repoPath) && other.projectFile === projectFile)) {
 				throw new Conflict(`Another project already serves ${projectFile} from ${slot.repoPath}`);
@@ -469,7 +547,7 @@ export class Hub {
 
 	remove(id: string): Promise<void> {
 		const slot = this.registry.get(id);
-		return this.enqueue(id, async () => {
+		return this.enqueue(slot, async () => {
 			await this.stopLocked(slot);
 			slot.activeView = null;
 			await this.collectViews(slot);
@@ -479,6 +557,7 @@ export class Hub {
 			this.registry.save();
 			this.runtimes.delete(id);
 			this.claims.delete(id);
+			this.servePorts.delete(id);
 			this.trackRepos();
 			this.refreshPorts();
 		});
@@ -549,9 +628,10 @@ export class Hub {
 	*/
 	async build(id: string, output: string): Promise<{ output: string; bytes: number }> {
 		const slot = this.registry.get(id);
+		if (!isAbsolute(output) || !/\.rbxlx?$/i.test(output)) throw new Conflict("output must be an absolute path ending in .rbxl or .rbxlx");
 		const rojo = resolveRojo(slot.repoPath);
 		if (!rojo.ok) throw new Conflict(rojo.error);
-		await this.enqueue(id, async () => {
+		await this.enqueue(slot, async () => {
 			if (this.runtime(id).state !== "running") this.writeFiles(slot, await this.prepareTree(slot, slot.target));
 		});
 		mkdirSync(dirname(output), { recursive: true });
@@ -561,7 +641,7 @@ export class Hub {
 
 	start(id: string): Promise<SlotView> {
 		const slot = this.registry.get(id);
-		return this.enqueue(id, async () => {
+		return this.enqueue(slot, async () => {
 			this.runtime(id).notes = [];
 			await this.startLocked(slot);
 			return this.view(slot);
@@ -570,7 +650,7 @@ export class Hub {
 
 	stop(id: string): Promise<SlotView> {
 		const slot = this.registry.get(id);
-		return this.enqueue(id, async () => {
+		return this.enqueue(slot, async () => {
 			slot.wantRunning = false;
 			this.registry.save();
 			this.runtime(id).notes = [];
@@ -586,7 +666,7 @@ export class Hub {
 	*/
 	switch(id: string, target: Target): Promise<SlotView> {
 		const slot = this.registry.get(id);
-		return this.enqueue(id, async () => {
+		return this.enqueue(slot, async () => {
 			const runtime = this.runtime(slot.id);
 			const tree = await this.prepareTree(slot, target);
 			const plan = this.writeFiles(slot, tree);
@@ -631,7 +711,7 @@ export class Hub {
 			const plan = this.writeFiles(slot, tree);
 			runtime.mode = plan.mode;
 			runtime.warnings = plan.warnings;
-			stopRojo(this.slotFile(slot.id));
+			await stopRojo(this.slotFile(slot.id));
 			await this.waitForPortFree(slot.port);
 			await this.collectViews(slot);
 			if (existsSync(this.logFile(slot.id))) renameSync(this.logFile(slot.id), this.logFile(slot.id).replace(/\.log$/, ".previous.log"));
@@ -644,8 +724,9 @@ export class Hub {
 					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}), which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it. The Studio-connected light also needs Rojo 7.7.`,
 				];
 			}
-			await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
+			runtime.rojo = await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
 			runtime.sessionId = await this.waitForRojo(slot);
+			runtime.misses = 0;
 			runtime.state = "running";
 			slot.wantRunning = true;
 			this.registry.save();
@@ -669,10 +750,24 @@ export class Hub {
 		runtime.state = "stopped";
 		runtime.sessionId = null;
 		runtime.error = null;
-		stopRojo(this.slotFile(slot.id));
+		await this.stopProcess(slot);
 		await this.syncSourcemap(slot);
 		await this.waitForPortFree(slot.port).catch(() => undefined);
 		await this.collectViews(slot);
+	}
+
+	/*
+		Stops the slot's rojo. One this service started and that is still running
+		is killed by its id straight away; otherwise (adopted from an earlier
+		service, or already gone) every rojo for the slot file is looked up by
+		command line, which takes PowerShell about half a second.
+	*/
+	private async stopProcess(slot: SlotRecord): Promise<void> {
+		const runtime = this.runtime(slot.id);
+		const own = runtime.rojo;
+		runtime.rojo = null;
+		if (own?.alive()) kill(own.pid);
+		else await stopRojo(this.slotFile(slot.id));
 	}
 
 	private async waitForPortFree(port: number): Promise<void> {
@@ -699,10 +794,10 @@ export class Hub {
 		while (Date.now() < deadline) {
 			const info = await rojoInfo(slot.port);
 			if (info && info.projectName === slot.projectName) return info.sessionId;
-			if (!rojoAlive(this.slotFile(slot.id))) break;
+			if (!runtime.rojo?.alive()) break;
 			await new Promise((done) => setTimeout(done, 250));
 		}
-		stopRojo(this.slotFile(slot.id));
+		await this.stopProcess(slot);
 		throw new Error(`Rojo did not come up on port ${slot.port}.\n${runtime.log.tail(12)}`);
 	}
 
@@ -734,13 +829,14 @@ export class Hub {
 		for (let n = 2; existsSync(join(this.viewsDir(slot.id), name)); n++) name = `${commit.slice(0, 12)}-${n}`;
 		const dir = join(this.viewsDir(slot.id), name);
 		mkdirSync(this.viewsDir(slot.id), { recursive: true });
-		await git(slot.repoPath, ["worktree", "add", "--detach", dir, commit]);
+		// NO_HOOKS: a view is Rojo-Hub's own copy, so the repo's post-checkout hook (husky and the like) is not run for it.
+		await git(slot.repoPath, [...NO_HOOKS, "worktree", "add", "--detach", dir, commit]);
 		slot.activeView = name;
 		return dir;
 	}
 
 	private isViewOf(slot: SlotRecord, path: string): boolean {
-		return pathKey(path).startsWith(pathKey(this.viewsDir(slot.id)) + "/");
+		return this.viewRoots.some((root) => pathKey(path).startsWith(`${root}/${slot.id.toLowerCase()}/`));
 	}
 
 	/*
@@ -773,8 +869,8 @@ export class Hub {
 		const source = join(tree, slot.projectFile);
 		if (!existsSync(source)) return;
 		const watched = slot.target;
-		runtime.watcher = watch(source, () => {
-			void this.enqueue(slot.id, async () => {
+		const watcher = watch(source, () => {
+			void this.enqueue(slot, async () => {
 				if (!sameTarget(slot.target, watched) || runtime.state !== "running") return;
 				try {
 					const plan = this.writeFiles(slot, tree);
@@ -784,8 +880,14 @@ export class Hub {
 				} catch (error) {
 					runtime.error = error instanceof Error ? error.message : String(error);
 				}
-			});
+			}).catch(() => undefined);
 		});
+		// Deleting the served worktree makes Windows report EPERM on this watch; without a listener that would end the service.
+		watcher.on("error", () => {
+			watcher.close();
+			if (runtime.watcher === watcher) runtime.watcher = null;
+		});
+		runtime.watcher = watcher;
 	}
 
 	private treeOfCurrent(slot: SlotRecord): string | null {
@@ -811,7 +913,8 @@ export class Hub {
 				runtime.warnings = [...runtime.warnings, `Could not remove view ${dir}: ${error instanceof Error ? error.message : error}`];
 			}
 		}
-		await git(slot.repoPath, ["worktree", "prune"]).catch(() => undefined);
+		// Only the Hub's own views: a repo-wide `git worktree prune` would also drop the user's worktrees on a drive that is not plugged in.
+		await pruneMissingWorktreesUnder(slot.repoPath, root).catch(() => undefined);
 	}
 
 	/*
@@ -838,7 +941,8 @@ export class Hub {
 		runtime.sourcemap = null;
 		const rojo = resolveRojo(slot.repoPath);
 		if (!rojo.ok) return off(rojo.error);
-		stopStrayWatchers(tree);
+		await stopStrayWatchers(tree);
+		if (runtime.state !== "running" || runtime.sourcemap) return;
 		runtime.sourcemap = new SourcemapWatcher(rojo.binary, tree, slot.projectFile);
 	}
 

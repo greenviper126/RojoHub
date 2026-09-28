@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -55,12 +55,26 @@ function entryUrl(servers: unknown): string | null {
 	return typeof entry.url === "string" ? entry.url : "";
 }
 
+/*
+	Claude Code's user config: with CLAUDE_CONFIG_DIR set it keeps .claude.json
+	there instead of in the home folder. Checked on every read, since a Claude
+	Code run with the variable set may only just have made that file.
+*/
+function claudeConfigFile(): string {
+	const dir = process.env.CLAUDE_CONFIG_DIR;
+	if (dir) {
+		const file = join(dir, ".claude.json");
+		if (existsSync(file)) return file;
+	}
+	return join(homedir(), ".claude.json");
+}
+
 export const AGENTS: Agent[] = [
 	{
 		id: "claudeCode",
 		...AGENT_CLIS.claudeCode,
-		// User-scope servers are the top-level mcpServers of ~/.claude.json.
-		readUrl: () => entryUrl((readCached(join(homedir(), ".claude.json"), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
+		// User-scope servers are the top-level mcpServers of ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json).
+		readUrl: () => entryUrl((readCached(claudeConfigFile(), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
 	},
 	{
 		id: "codex",
