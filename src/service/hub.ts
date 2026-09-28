@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { PortMove, PortSettings, SlotView, Target, TargetOption } from "../common/api";
+import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
@@ -851,7 +852,8 @@ export class Hub {
 		if (target.kind === "worktree") {
 			if (!existsSync(target.path)) throw new NotFound(`${target.path} does not exist`);
 			slot.activeView = null;
-			return resolve(target.path);
+			// Long form: the tree's paths go into the slot and borrowed files Rojo watches (see verbatim).
+			return longPath(target.path);
 		}
 		const commit = (await git(slot.repoPath, ["rev-parse", "--verify", `${target.ref}^{commit}`])).trim();
 		const worktrees = await listWorktrees(slot.repoPath);

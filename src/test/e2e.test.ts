@@ -9,6 +9,7 @@ import { after, before, test } from "node:test";
 import { decode } from "@msgpack/msgpack";
 
 import type { GroupResult, GroupView, SlotView, Snapshot, TargetOption } from "../common/api";
+import { pathKey } from "../common/paths";
 import { parsePortSettings, preferredPort } from "../service/ports";
 
 /*
@@ -112,7 +113,7 @@ interface Packet {
 
 test("one port, live switches, one session", async () => {
 	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
-	assert.equal(slot.repoPath.toLowerCase(), repo.toLowerCase(), "registering from a worktree registers the primary");
+	assert.equal(pathKey(slot.repoPath), pathKey(repo), "registering from a worktree registers the primary");
 	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
 	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
 	assert.equal(slot.portSource, "hash");
@@ -348,7 +349,7 @@ test("branch picker: cached list kept fresh, fetch, new branch, build, and a che
 	await assert.rejects(call("POST", `/slots/${slot.id}/branch`, { name: "fine", base: "no-such-base" }), /is not a branch or commit/);
 	const made = await call<{ slot: SlotView; path: string; branch: string; via: string }>("POST", `/slots/${slot.id}/branch`, { name: "feat/new-thing", base: "main" });
 	assert.equal(made.via, "git", "a repo Orca does not know gets a git worktree");
-	assert.equal(made.path.toLowerCase(), join(root, "Branchy-worktrees", "feat-new-thing").toLowerCase());
+	assert.equal(pathKey(made.path), pathKey(join(root, "Branchy-worktrees", "feat-new-thing")));
 	assert.equal(made.branch, "feat/new-thing");
 	assert.deepEqual(made.slot.target, { kind: "worktree", path: made.path });
 	assert.equal(gitIn(made.path, "branch", "--show-current").trim(), "feat/new-thing");
@@ -421,7 +422,7 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.ok(!first.isError, first.text);
 	assert.match(first.text, /now serves .*Agenty-alpha.*Rojo is serving/s);
 	let now = await view();
-	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "any folder inside the worktree serves its root");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha), "any folder inside the worktree serves its root");
 	assert.equal(now.sessionId, sessionId, "switched live, not restarted");
 	assert.equal(now.claim?.label, "Agenty-alpha");
 
@@ -441,7 +442,7 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	const switched = await tool("switch", { project: slot.projectName, target: "alpha" });
 	assert.ok(!switched.isError, switched.text);
 	now = await view();
-	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "a branch checked out in a worktree is served from it");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha), "a branch checked out in a worktree is served from it");
 	assert.ok(now.claim);
 
 	await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: dir } });

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { SERVICE_PORT } from "../common/api";
+import { longPath } from "../common/paths";
 import { gitProblem } from "./git";
 import { Hub } from "./hub";
 import { eventSubscribers, serve } from "./server";
@@ -17,9 +18,11 @@ import { eventSubscribers, serve } from "./server";
 	both for tests.
 */
 
-const home = process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
+const configuredHome = process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
 const port = Number(process.env.ROJO_HUB_PORT ?? SERVICE_PORT);
-mkdirSync(home, { recursive: true });
+mkdirSync(configuredHome, { recursive: true });
+// Long form (no 8.3 short names): slot files under it are what Rojo watches (see verbatim in project.ts).
+const home = longPath(configuredHome);
 const serviceLog = join(home, "service.log");
 
 /*
