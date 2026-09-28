@@ -49,6 +49,8 @@ export interface PanelState {
 	order: DisplayOrder;
 	/** Agent access (spec 004): VS Code's own agents' box, and Claude Code's and Codex's state read from their config. */
 	agents: { url: string; vscode: boolean; list: AgentStatus[] };
+	/** Show the "let agents use Studio" notice above Projects (see agentNudge in the extension). */
+	agentNudge: boolean;
 }
 
 export type ToPanel =
@@ -96,4 +98,6 @@ export type FromPanel =
 	| { type: "groupWorkspace"; file: string }
 	| { type: "walkthrough" }
 	| { type: "setAgent"; id: AgentId | "vscode"; on: boolean }
-	| { type: "copyAgentSetup"; what: "commands" | "prompt" };
+	| { type: "copyAgentSetup"; what: "commands" | "prompt" }
+	/** The notice above Projects: Later hides it for a while, never for good. */
+	| { type: "agentNudge"; action: "later" | "never" };

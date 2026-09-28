@@ -9,6 +9,7 @@ import { pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
 import { agentWishes, askOnce, copySetup, registerVsCodeAgents, setAgentBox, vscodeAgentsOn } from "./agents";
+import { hideAgentNudge, showAgentNudge } from "./nudge";
 import { client, ensureService } from "./client";
 import { savedState } from "./saved";
 import { findWorkspaces } from "./workspaces";
@@ -143,6 +144,7 @@ async function refresh(): Promise<void> {
 		workspaces: lastWorkspaces,
 		order: lastOrder,
 		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
+		agentNudge: !!health && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 	});
 	updateStatus();
 }
@@ -814,6 +816,9 @@ async function onPanel(message: FromPanel): Promise<void> {
 			return;
 		case "copyAgentSetup":
 			return copySetup(message.what);
+		case "agentNudge":
+			hideAgentNudge(hubHome, message.action);
+			return refresh();
 	}
 }
 
@@ -914,7 +919,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	);
 	registerVsCodeAgents(context, ensureRunning);
 	await refresh();
-	void askOnce(context, lastAgents);
+	void askOnce(context, hubHome, lastAgents);
 
 	/*
 		The first time Rojo-Hub runs in a VS Code profile, open its sidebar so a

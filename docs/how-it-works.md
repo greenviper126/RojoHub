@@ -203,8 +203,15 @@ port first, with its status light, name and branch, its address `localhost:<port
 which copies it when clicked. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
 serving* when nothing is.
 
-**Agent access** (folded by default): which AI agents can use Rojo-Hub's tools, and buttons to copy
-setup commands or a setup prompt for others. See [Agents](#10-agents).
+**Agent access** (folded by default): a switch per AI agent, with a chip saying where it stands
+(*Connected*, *Off*, *Not installed*, *Set up by you*), and a folded *Other agents and manual setup*
+part with the server's address and buttons to copy setup commands or a setup prompt. See
+[Agents](#10-agents).
+
+**Agent notice** (above Projects): *Let Claude Code … use Studio*, with *Set up* (opens Agent access),
+*Later* and ✕. It shows only while at least one project is registered and Claude Code or Codex is
+installed but neither is connected. *Later* hides it for 14 days, ✕ for good; every window and profile
+agrees (it is kept in `agent-notice.json`).
 
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
 *Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
@@ -512,23 +519,23 @@ switch a project to a branch, build a place file, write `sourcemap.json`. They g
 server that the background service runs at `http://127.0.0.1:34870/mcp`, so the agent needs no
 extra files, scripts or instructions: the server tells the agent what it is for when it connects.
 
-**Turning it on.** The panel's **Agent access** section (folded by default) and the
-`rojoHub.agents` setting have one box per agent. Both change the same setting.
+**Turning it on.** The panel's **Agent access** section (folded by default) has a switch per agent,
+and the `rojoHub.agents` setting a checkbox per agent. Both change the same setting.
 
-| Box | Default | What ticking it does |
+| Agent | Default | What turning it on does |
 |---|---|---|
 | VS Code agents | on | Registers the server with VS Code itself. Nothing is written to disk; it goes with the extension. |
 | Claude Code | off | Runs `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
 | Codex | off | Runs `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
 
-Unticking runs the matching `mcp remove`. The boxes show what each agent's own config says
-(`~/.claude.json`, `~/.codex/config.toml`), so an entry removed by hand shows unticked. An agent
+Turning it off runs the matching `mcp remove`. The switches show what each agent's own config says
+(`~/.claude.json`, `~/.codex/config.toml`), so an entry removed by hand shows as off. An agent
 that is not installed is greyed out. If an agent's config already has an entry named `rojohub` with
 another URL, Rojo-Hub never changes or removes it, and says so. The first time Rojo-Hub finds Claude
-Code or Codex installed, it asks once: *Let … use Rojo-Hub's tools?* Yes ticks their boxes, No
-unticks them.
+Code or Codex installed, it asks once: *Let … use Rojo-Hub's tools?* Yes turns them on; No turns them
+off and hides the agent notice above Projects for 14 days.
 
-**Another agent?** *Copy commands* (also **Rojo-Hub: Copy Agent Setup Commands**) copies the two
+**Another agent?** Under *Other agents and manual setup*: *Copy commands* (also **Rojo-Hub: Copy Agent Setup Commands**) copies the two
 commands and a JSON entry for agents that read a JSON MCP config. *Copy prompt* (**Rojo-Hub: Copy
 Agent Setup Prompt**) copies a paragraph to paste into any agent's chat; the agent then adds Rojo-Hub
 to its own config.
@@ -624,6 +631,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 |---|---|
 | `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), and the panel's display order |
 | `settings.json` | The port settings last sent by VS Code |
+| `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
 | `service.log` | Service start, stop and fatal errors |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
 | `slots\<id>\borrowed.project.json` | The generated copy used in borrowed mode |

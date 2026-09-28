@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { DEFAULT_PORT_RANGE, MCP_URL } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
+import { hideAgentNudge, showAgentNudge } from "../extension/nudge";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
@@ -417,4 +418,20 @@ test("every bundle package.json runs is packaged (the uninstall hook once was no
 	for (const file of [manifest.main, manifest.scripts["vscode:uninstall"].replace(/^node\s+/, "")]) {
 		assert.ok(packaged.includes(`!${file.replace(/^\.\//, "")}`), `${file} is in .vscodeignore's allowlist`);
 	}
+});
+
+test("the agent notice: only with projects and an installed agent that is not set up, and Later/never hide it", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-nudge-"));
+	const agent = (installed: boolean, state: "connected" | "absent" | "other") => ({ id: "claudeCode" as const, label: "Claude Code", installed, state, error: null });
+	assert.equal(showAgentNudge(home, 1, [agent(true, "absent")]), true);
+	assert.equal(showAgentNudge(home, 0, [agent(true, "absent")]), false, "not before the first project");
+	assert.equal(showAgentNudge(home, 1, [agent(false, "absent")]), false, "not when no agent is installed");
+	assert.equal(showAgentNudge(home, 1, [agent(true, "connected"), { ...agent(true, "absent"), id: "codex" as const }]), false, "not once one is set up");
+	assert.equal(showAgentNudge(home, 1, [agent(true, "other")]), false, "not when the user set one up by hand");
+	hideAgentNudge(home, "later");
+	assert.equal(showAgentNudge(home, 1, [agent(true, "absent")]), false, "Later hides it");
+	const until = JSON.parse(readFileSync(join(home, "agent-notice.json"), "utf8")).until as number;
+	assert.ok(Math.abs(until - Date.now() - 14 * 86400000) < 60000, "for 14 days");
+	hideAgentNudge(home, "never");
+	assert.equal(JSON.parse(readFileSync(join(home, "agent-notice.json"), "utf8")).until, Number.MAX_SAFE_INTEGER);
 });

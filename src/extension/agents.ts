@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { AGENT_CLIS, SETUP_COMMANDS, SETUP_PROMPT } from "../common/agents";
 import { MCP_URL, SERVICE_VERSION, type AgentId, type AgentStatus, type AgentWishes } from "../common/api";
+import { hideAgentNudge } from "./nudge";
 
 /*
 	Agent access (spec 004), the VS Code side. rojoHub.agents holds one box per
@@ -83,10 +84,10 @@ export function registerVsCodeAgents(context: vscode.ExtensionContext, ensureRun
 
 /*
 	Asks once, the first time an agent is installed that has no Rojo-Hub entry
-	and no box set. The answer sets the boxes; closing the message asks again
-	next time.
+	and no box set. The answer sets the boxes, and No also hides the notice
+	above Projects for a while; closing the message asks again next time.
 */
-export async function askOnce(context: vscode.ExtensionContext, statuses: AgentStatus[]): Promise<void> {
+export async function askOnce(context: vscode.ExtensionContext, home: string, statuses: AgentStatus[]): Promise<void> {
 	if (context.globalState.get<boolean>(ASKED) || !settingKnown()) return;
 	const boxes = chosen();
 	const candidates = statuses.filter((agent) => agent.installed && agent.state === "absent" && typeof boxes[agent.id] !== "boolean");
@@ -99,6 +100,7 @@ export async function askOnce(context: vscode.ExtensionContext, statuses: AgentS
 	);
 	if (!answer) return;
 	await context.globalState.update(ASKED, true);
+	if (answer === "No") hideAgentNudge(home, "later");
 	await vscode.workspace.getConfiguration(SECTION).update(KEY, { ...chosen(), ...Object.fromEntries(candidates.map((agent) => [agent.id, answer === "Yes"])) }, vscode.ConfigurationTarget.Global);
 }
 
@@ -109,3 +111,4 @@ export async function copySetup(what: "commands" | "prompt"): Promise<void> {
 		4000,
 	);
 }
+

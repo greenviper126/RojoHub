@@ -41,6 +41,15 @@ playtest shows, without either of them knowing.
   - First run: one notification, *Let Claude Code and Codex use Rojo-Hub's tools?* (only the agents
     installed), with Yes / No. It sets the setting; it is never asked again once answered.
   - *Copy setup commands* and *Copy setup prompt* (panel and command palette) cover any other agent.
+  - The panel shows each agent as a row with a switch and a status chip; the address and copy buttons
+    are folded under *Other agents and manual setup*. Asked for by Viper: "make the agents tab look
+    nicer its kinda confusing".
+  - **Notice above Projects** ("lets have a popup above projects saying you can connect to agents ...
+    just occasionally if you have no agents connected"): shown while at least one project is
+    registered and Claude Code or Codex is installed but neither is connected (VS Code's agents do not
+    count: they are on by default, so it would never show). *Set up* opens Agent access; *Later* hides
+    it for 14 days; ✕ for good; *No* on the first-run question counts as *Later*. Kept in
+    `%LOCALAPPDATA%\RojoHub\agent-notice.json`, so windows and profiles agree.
 - **Uninstall**: `vscode:uninstall` runs `dist/uninstall.js`, which removes the Claude Code and
   Codex entries if, and only if, their URL is Rojo-Hub's.
 - The service refuses requests that carry a browser `Origin` other than localhost, on every route
@@ -60,6 +69,10 @@ playtest shows, without either of them knowing.
       panel shows the state read back from `~/.claude.json`. Same for Codex.
 - [x] Claude Code connects to the endpoint and lists the tools (`claude mcp get rojohub`: Connected).
 - [x] Uninstalling the extension removes the entries (hook measured, below).
+- [x] The notice shows and hides as described. Unit-tested.
+- [x] A window that runs the new code before VS Code has registered its settings asks to be reloaded
+      instead of failing with "not a registered configuration" (seen once after a CLI install), and a
+      refused switch flips back.
 
 ## Measurements (2026-09-27)
 

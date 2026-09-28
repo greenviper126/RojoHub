@@ -64,6 +64,8 @@ const ui = {
 	confirmOnly: null as string | null,
 	/** "Stop all" is waiting for Yes/No. */
 	confirmStopAll: false,
+	/** Agent access's "Other agents and manual setup" is open. */
+	agentsManual: false,
 	/** Resetting the port range is waiting for Yes/No. */
 	confirmResetRange: false,
 	/** A group member whose ✕ is waiting for Yes/No: "groupId|kind|memberId". */
@@ -559,37 +561,58 @@ function settingsBody(): string {
 }
 
 /*
-	Agent access (spec 004). Each box does what ticking it in rojoHub.agents
-	does; Claude Code's and Codex's show what their own config says, read back
-	by the service, so an entry removed by hand shows unticked.
+	Agent access (spec 004): one row per agent with a switch and a chip saying
+	where it stands. Claude Code's and Codex's switches show what their own
+	config says, read back by the service, so an entry removed by hand shows
+	off. The address and copy buttons for other agents stay folded away.
 */
 function agentsBody(): string {
 	const agents = state!.agents;
-	const row = (id: string, label: string, on: boolean, detail: string, disabled: boolean, error: string | null) => {
+	const row = (id: string, label: string, on: boolean, chip: { text: string; tone: string; title: string }, disabled: boolean, error: string | null) => {
 		const busy = ui.busy.has(`agent:${id}`);
-		return `<label class="agent-row${disabled ? " disabled" : ""}">
-			<input type="checkbox" data-agent="${escape(id)}"${on ? " checked" : ""}${disabled || busy ? " disabled" : ""}>
-			<span class="grow"><span class="label">${escape(label)}</span><span class="sub">${escape(detail)}</span></span>
-			${busy ? icon("loading", "codicon-modifier-spin") : ""}
-		</label>${error ? `<div class="notice error">${icon("error")}<span>${escape(error)}</span></div>` : ""}`;
+		return `<div class="agent-row${disabled ? " disabled" : ""}" title="${escape(chip.title)}">
+			<span class="agent-name grow ellipsis">${escape(label)}</span>
+			${busy ? `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span>Working…</span></span>` : `<span class="pill dense ${chip.tone}">${escape(chip.text)}</span>`}
+			<label class="switch"><input type="checkbox" role="switch" aria-label="${escape(label)}" data-agent="${escape(id)}"${on ? " checked" : ""}${disabled || busy ? " disabled" : ""}><span class="track"></span></label>
+		</div>${error ? `<div class="notice error">${icon("error")}<span>${escape(error)}</span></div>` : ""}`;
 	};
-	const detail = (agent: AgentStatus) =>
+	const chip = (agent: AgentStatus) =>
 		agent.state === "connected"
-			? "Added to its user config"
+			? { text: "Connected", tone: "ok", title: `Rojo-Hub is in ${agent.label}'s user config. Turn off to take it out.` }
 			: agent.state === "other"
-				? "Its config already has a rojohub entry with another URL; Rojo-Hub leaves it alone"
+				? { text: "Set up by you", tone: "info", title: `${agent.label}'s config already has a rojohub entry pointing elsewhere; Rojo-Hub leaves it alone.` }
 				: agent.installed
-					? "Not added"
-					: "Not installed";
+					? { text: "Off", tone: "", title: `Turn on to add Rojo-Hub to ${agent.label}'s user config.` }
+					: { text: "Not installed", tone: "", title: `${agent.label} was not found on PATH.` };
 	const rows = [
-		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? "Copilot and other agents in VS Code; nothing is written to disk" : "Off", false, null),
-		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", detail(agent), agent.state === "other" || (!agent.installed && agent.state !== "connected"), agent.error)),
+		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? { text: "Connected", tone: "ok", title: "Copilot and other agents in VS Code. Nothing is written to disk." } : { text: "Off", tone: "", title: "Turn on to let Copilot and other agents in VS Code use Rojo-Hub." }, false, null),
+		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || (!agent.installed && agent.state !== "connected"), agent.error)),
 	].join("");
-	return `<div class="card settings agents">
-		<p class="muted small">Agents can serve their own worktree to Studio, live, without restarting Rojo. Rojo-Hub's MCP server: <code>${escape(agents.url)}</code>${state!.service.running ? "" : " (not running)"}</p>
-		${rows}
-		<p class="muted small">Another agent? Copy the commands, or a prompt to paste into its chat.</p>
-		<div class="row">${button("copy-agent-commands", "Copy commands", { icon: "terminal", kind: "secondary", title: "Shell commands for Claude Code and Codex, and a JSON entry for other agents" })}${button("copy-agent-prompt", "Copy prompt", { icon: "comment", kind: "secondary", title: "A paragraph for any agent's chat; the agent adds Rojo-Hub to its own config" })}</div>
+	const manual = ui.agentsManual
+		? `<div class="agents-manual">
+			<p class="muted small">Rojo-Hub's MCP server is <code>${escape(agents.url)}</code>${state!.service.running ? "" : " (not running)"}. Copy the setup commands, or a prompt for the agent to set itself up.</p>
+			<div class="row">${button("copy-agent-commands", "Copy commands", { icon: "terminal", kind: "secondary", title: "Shell commands for Claude Code and Codex, and a JSON entry for other agents" })}${button("copy-agent-prompt", "Copy prompt", { icon: "comment", kind: "secondary", title: "A paragraph for any agent's chat; the agent adds Rojo-Hub to its own config" })}</div>
+		</div>`
+		: "";
+	return `<div class="card agents">
+		<p class="muted small">Let AI agents put their own worktree into Studio, live, while they work.</p>
+		<div class="agent-list">${rows}</div>
+		<button class="link small agents-more" data-action="toggle-agents-manual" aria-expanded="${ui.agentsManual}">${icon(ui.agentsManual ? "chevron-down" : "chevron-right")}Other agents and manual setup</button>
+		${manual}
+	</div>`;
+}
+
+/*
+	The notice above Projects: shown by the extension's say-so (state.agentNudge)
+	while Claude Code or Codex is installed but neither can use Rojo-Hub.
+*/
+function agentNudge(): string {
+	if (!state!.agentNudge) return "";
+	const names = state!.agents.list.filter((agent) => agent.installed && agent.state !== "connected").map((agent) => agent.label);
+	return `<div class="card nudge">
+		<div class="row">${icon("robot", "nudge-icon")}<strong class="grow">Let ${escape(names.join(" or ") || "AI agents")} use Studio</strong>${iconButton("nudge-never", "close", "Don't show this again")}</div>
+		<p class="muted small">Agents can put the worktree they are working in into Studio themselves, without restarting Rojo.</p>
+		<div class="row">${button("nudge-setup", "Set up", { icon: "robot", kind: "primary" })}${button("nudge-later", "Later", { kind: "secondary", title: "Remind me in 14 days" })}</div>
 	</div>`;
 }
 
@@ -597,7 +620,7 @@ function agentsBody(): string {
 function section(key: string, title: string, iconName: string, count: string, extra: string, body: string): string {
 	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
-	return `<section class="section${collapsed ? " collapsed" : ""}">
+	return `<section class="section${collapsed ? " collapsed" : ""}" id="section-${key}">
 		<div class="section-head">
 			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${escape(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
@@ -785,6 +808,7 @@ function render(): void {
 		app,
 		`
 		${banner}
+		${agentNudge()}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
@@ -1088,6 +1112,20 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "walkthrough":
 			return send({ type: "walkthrough" });
+		case "toggle-agents-manual":
+			ui.agentsManual = !ui.agentsManual;
+			return render();
+		case "nudge-setup":
+			ui.collapsed.agents = false;
+			persist();
+			render();
+			document.getElementById("section-agents")?.scrollIntoView({ behavior: "smooth", block: "start" });
+			return;
+		case "nudge-later":
+		case "nudge-never":
+			send({ type: "agentNudge", action: action === "nudge-later" ? "later" : "never" });
+			if (state) state.agentNudge = false;
+			return render();
 		case "copy-agent-commands":
 			return send({ type: "copyAgentSetup", what: "commands" });
 		case "copy-agent-prompt":

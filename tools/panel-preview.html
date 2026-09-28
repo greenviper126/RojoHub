@@ -138,10 +138,12 @@ const state = {
 		url: "http://127.0.0.1:34870/mcp",
 		vscode: true,
 		list: [
-			{ id: "claudeCode", label: "Claude Code", installed: true, state: "connected", error: null },
-			{ id: "codex", label: "Codex", installed: true, state: "absent", error: params.get("agenterror") ? "codex mcp: could not write config.toml" : null },
+			{ id: "claudeCode", label: "Claude Code", installed: true, state: params.get("nudge") === "1" ? "absent" : "connected", error: null },
+			{ id: "codex", label: "Codex", installed: params.get("nocodex") !== "1", state: "absent", error: params.get("agenterror") ? "codex mcp: could not write config.toml" : null },
 		],
 	},
+	// ?nudge=1 shows the "let agents use Studio" notice above Projects.
+	agentNudge: params.get("nudge") === "1",
 };
 if (params.get("empty") === "1") { state.slots = []; state.groups = []; }
 
