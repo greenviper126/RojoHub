@@ -88,6 +88,40 @@ function folded(key: string, byDefault: boolean): boolean {
 	return key in ui.collapsed ? ui.collapsed[key] : byDefault;
 }
 
+/*
+	Marks a foldable header for its right-click menu (webview/context in
+	package.json): Expand or Collapse, Collapse Others, Expand All, instead of
+	Cut/Copy/Paste. `list` is the header's siblings for the last two. Group keys
+	are "group:<id>", as groups keep their fold in closedGroups.
+*/
+function foldable(key: string, list: string, isFolded: boolean): string {
+	const context = { rojoHubFold: isFolded ? "folded" : "open", rojoHubFoldKey: key, rojoHubFoldList: list, preventDefaultContextMenuItems: true };
+	return `data-fold-key="${escape(key)}" data-fold-list="${escape(list)}" data-vscode-context="${escape(JSON.stringify(context))}"`;
+}
+
+function setFold(key: string, fold: boolean): void {
+	if (key.startsWith("group:")) {
+		const id = key.slice("group:".length);
+		if (fold) ui.closedGroups.add(id);
+		else ui.closedGroups.delete(id);
+		return;
+	}
+	ui.collapsed[key] = fold;
+	// An open branch picker keeps its card open, so folding the card closes it.
+	if (fold && ui.picker && key === `card:${ui.picker.id}`) ui.picker = null;
+}
+
+function foldFromMenu(key: string, list: string, how: "expand" | "collapse" | "others" | "all"): void {
+	if (how === "expand" || how === "collapse") setFold(key, how === "collapse");
+	else
+		for (const element of document.querySelectorAll<HTMLElement>(`[data-fold-list="${CSS.escape(list)}"]`)) {
+			const other = element.dataset.foldKey ?? "";
+			setFold(other, how === "others" && other !== key);
+		}
+	persist();
+	render();
+}
+
 /** Sorts items by the user's saved order; anything not in it keeps its default place after those that are. */
 function arrange<T>(items: T[], keyOf: (item: T) => string, order: string[]): T[] {
 	const position = new Map(order.map((key, index) => [key, index]));
@@ -295,7 +329,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
 		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-			<div class="row card-head">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${
+			<div class="row card-head" ${foldable(key, list, true)}>${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${
 				serving
 					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
 					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
@@ -303,7 +337,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		</article>`;
 	}
 	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-		<div class="row card-head">
+		<div class="row card-head" ${foldable(key, list, false)}>
 			${grip(list, slot.id)}${toggle}${here}
 			<span class="grow"></span>
 			${port}
@@ -426,7 +460,8 @@ function groupCard(group: GroupView): string {
 		ui.confirmDelete === group.id
 			? `<div class="member confirm-row">${icon("warning")}<span class="grow">Delete <strong>${escape(group.name)}</strong>? What's in it stays.</span>${button("delete-group", "Delete", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}</div>`
 			: "";
-	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head">${head}</div>${deleteConfirm}</article>`;
+	const headAttributes = renaming ? "" : foldable(`group:${group.id}`, "groups", !open);
+	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head" ${headAttributes}>${head}</div>${deleteConfirm}</article>`;
 
 	const nestedRows = nested
 		.map((child) => {
@@ -506,7 +541,7 @@ function groupCard(group: GroupView): string {
 			: "";
 
 	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}>
-		<div class="row head">${head}</div>
+		<div class="row head" ${headAttributes}>${head}</div>
 		${deleteConfirm}
 		<div class="members">
 			${nestedRows}${projectRows}
@@ -621,7 +656,7 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}" id="section-${key}">
-		<div class="section-head">
+		<div class="section-head" ${foldable(key, "sections", collapsed)}>
 			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${escape(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
 		</div>
@@ -670,7 +705,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 			const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
 			if (filtering && own.length + elsewhere.length === 0) return "";
 			const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
-			const head = `<div class="row workspace-head">
+			const head = `<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>
 				${grip("blocks", key)}
 				<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
 				${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${serving}/${workspace.slotIds.length}</span>` : ""}
@@ -707,7 +742,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 				if (ui.reveal && loose.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
 				const collapsed = !filtering && folded(key, foldedByDefault);
 				return `<div class="workspace other" ${dropAttributes("blocks", key)}>
-					<div class="row workspace-head">${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
+					<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
 					${collapsed ? "" : `<div class="workspace-body">${loose.map((slot) => projectCard(slot, list, false)).join("")}</div>`}
 				</div>`;
 			},
@@ -1368,6 +1403,8 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			return flash(message.id);
 		case "collapse":
 			return collapseAll();
+		case "fold":
+			return foldFromMenu(message.key, message.list, message.how);
 		case "busy":
 			if (message.busy) ui.busy.add(message.key);
 			else ui.busy.delete(message.key);

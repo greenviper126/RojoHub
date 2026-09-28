@@ -122,6 +122,13 @@ everything except what is running: Projects and Groups stay open, and inside the
 serving or starting projects, the workspaces that hold them, and running groups stay open. Every
 other card and group folds, and Active ports and Port settings fold.
 
+**Right-clicking a header** that folds (a section, a workspace, a project card or a group) opens a
+menu in place of Cut/Copy/Paste: **Expand** or **Collapse** for that header, **Collapse Others**
+(folds its neighbours and opens it) and **Expand All** (opens it and its neighbours). Neighbours are
+the headers in the same list: the sections, the workspaces, the cards in one workspace, or the
+groups. Right-clicking anywhere else in the panel still shows Copy. Workspace headers have no menu
+while the Projects filter is open, since every matching workspace is open then.
+
 The section headers stay at the top while their section scrolls under them, and the footer stays at
 the bottom of the panel.
 

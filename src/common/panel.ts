@@ -60,6 +60,11 @@ export type ToPanel =
 	| { type: "focus"; id: string }
 	/** The title bar's Collapse All: fold everything but Projects, Groups and what is running. */
 	| { type: "collapse" }
+	/**
+	 * A foldable header's right-click menu: fold or unfold `key`, fold the rest of
+	 * its `list` and unfold it ("others"), or unfold its whole `list` ("all").
+	 */
+	| { type: "fold"; key: string; list: string; how: "expand" | "collapse" | "others" | "all" }
 	| { type: "busy"; key: string; busy: boolean }
 	/** A picker's Fetch finished; `error` when it failed (the list is unchanged then). */
 	| { type: "fetched"; id: string; error?: string }
