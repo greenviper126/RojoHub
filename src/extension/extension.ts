@@ -759,6 +759,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await pushSettings();
 			});
 		},
+		"rojoHub.collapseAll": () => panel.post({ type: "collapse" }),
 		"rojoHub.stopAll": async () => {
 			await refresh();
 			const serving = lastSlots.filter((slot) => slot.state === "running" || slot.state === "starting");

@@ -54,6 +54,8 @@ export type ToPanel =
 	| { type: "targets"; id: string; options: TargetOption[] | null; error?: string }
 	| { type: "candidates"; items: Candidate[] }
 	| { type: "focus"; id: string }
+	/** The title bar's Collapse All: fold everything but Projects, Groups and what is running. */
+	| { type: "collapse" }
 	| { type: "busy"; key: string; busy: boolean };
 
 export type FromPanel =

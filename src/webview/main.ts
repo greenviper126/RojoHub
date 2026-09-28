@@ -936,6 +936,33 @@ document.addEventListener("keydown", (event) => {
 	else if (kind === "port-range" || kind === "excluded") saveSettings();
 });
 
+/*
+	Collapse All, from the panel's title bar. Projects and Groups stay open;
+	inside them only what is running stays open: serving projects (and the
+	workspace blocks that hold them) and running groups. Every other section
+	folds.
+*/
+function collapseAll(): void {
+	if (!state) return;
+	const live = new Set(state.slots.filter((slot) => slot.state === "running" || slot.state === "starting").map((slot) => slot.id));
+	ui.collapsed.projects = false;
+	ui.collapsed.groups = false;
+	ui.collapsed.ports = true;
+	ui.collapsed.settings = true;
+	for (const slot of state.slots) ui.collapsed[`card:${slot.id}`] = !live.has(slot.id);
+	const inWorkspace = new Set<string>();
+	for (const workspace of state.workspaces) {
+		workspace.slotIds.forEach((id) => inWorkspace.add(id));
+		ui.collapsed[`ws:${workspace.file}`] = !workspace.slotIds.some((id) => live.has(id));
+	}
+	ui.collapsed["ws:other"] = !state.slots.some((slot) => live.has(slot.id) && !inWorkspace.has(slot.id));
+	ui.closedGroups = new Set(state.groups.filter((group) => !group.active).map((group) => group.id));
+	ui.picker = null;
+	persist();
+	render();
+	document.scrollingElement?.scrollTo({ top: 0 });
+}
+
 function flash(id: string): void {
 	ui.collapsed.projects = false;
 	ui.reveal = id;
@@ -1041,6 +1068,8 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			return;
 		case "focus":
 			return flash(message.id);
+		case "collapse":
+			return collapseAll();
 		case "busy":
 			if (message.busy) ui.busy.add(message.key);
 			else ui.busy.delete(message.key);

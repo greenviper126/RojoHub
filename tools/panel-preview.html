@@ -4,7 +4,7 @@
 	dist/webview.js and media/panel.css with a stub VS Code API, sample state and
 	VS Code's Dark Modern (or ?theme=light Light Modern) colours. `npm run build` first.
 	?picker=1 opens the branch picker on the first project; ?width=NNN sets the sidebar width;
-	?workspaces=1, ?empty=1 and ?settings=1 change the sample; ?click= is described below.
+	?workspaces=1, ?empty=1 and ?settings=1 change the sample; ?collapse= and ?click= are below.
 -->
 <html lang="en">
 <head>
@@ -160,6 +160,8 @@ window.acquireVsCodeApi = () => ({
 <script src="../dist/webview.js"></script>
 <script>
 if (params.get("picker") === "1") setTimeout(() => document.querySelector('[data-action="picker"]')?.click(), 50);
+// ?collapse=1 presses the title bar's Collapse All.
+if (params.get("collapse") === "1") setTimeout(() => window.postMessage({ type: "collapse" }, "*"), 60);
 // ?click=a,b clicks the first element with each data-action in turn, e.g. ?click=solo-group,remove-member
 for (const [index, action] of (params.get("click") ?? "").split(",").filter(Boolean).entries())
 	setTimeout(() => document.querySelector(`[data-action="${action}"]`)?.click(), 80 + index * 40);
