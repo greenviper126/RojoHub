@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { SERVICE_VERSION, type AgentId, type AgentWishes, type Health, type Target } from "../common/api";
+import { isProjectFileName } from "../common/projectFiles";
 import { AGENTS, AgentRegistrar } from "./agentConfig";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
@@ -13,6 +14,7 @@ import { Conflict, NotFound } from "./registry";
 	GET    /health
 	GET    /slots
 	POST   /slots                 { path, projectFile? }
+	PUT    /slots/:id/project-file { projectFile }    serve another *.project.json (restarts a serving rojo)
 	DELETE /slots/:id
 	POST   /slots/:id/start
 	POST   /slots/:id/stop
@@ -179,7 +181,8 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (method === "POST") {
 					const input = await body(request);
 					if (typeof input.path !== "string") return send(response, 400, { error: "path is required" });
-					const projectFile = typeof input.projectFile === "string" ? input.projectFile : undefined;
+					if (input.projectFile !== undefined && !isProjectFileName(input.projectFile)) return send(response, 400, { error: "projectFile must be a *.project.json file name" });
+					const projectFile = input.projectFile as string | undefined;
 					return send(response, 200, await hub.add(input.path, projectFile));
 				}
 			}
@@ -200,6 +203,11 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return send(response, 200, await hub.createBranch(id, input.name, input.base));
 				}
 				if (method === "POST" && action === "sourcemap") return send(response, 200, await hub.writeSourcemap(id));
+				if (method === "PUT" && action === "project-file") {
+					const input = await body(request);
+					if (!isProjectFileName(input.projectFile)) return send(response, 400, { error: "projectFile must be a *.project.json file name" });
+					return send(response, 200, await hub.setProjectFile(id, input.projectFile));
+				}
 				if (method === "POST" && action === "build") {
 					const input = await body(request);
 					if (typeof input.output !== "string") return send(response, 400, { error: "output is required" });

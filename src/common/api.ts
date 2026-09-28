@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.16.2";
+export const SERVICE_VERSION = "0.17.1";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -29,6 +29,8 @@ export interface SlotView {
 	projectName: string;
 	repoPath: string;
 	projectFile: string;
+	/** The *.project.json files directly in the project's folder, default first; kept current by the service (spec 005). */
+	projectFiles: string[];
 	port: number;
 	/** "servePort" when the project file sets it, otherwise "hash" (spec 001, "Ports"). */
 	portSource: "servePort" | "hash";

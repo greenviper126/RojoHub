@@ -62,7 +62,7 @@ export type ToPanel =
 	| { type: "collapse" }
 	/**
 	 * A foldable header's right-click menu: fold or unfold `key`, fold the rest of
-	 * its `list` and unfold it ("others"), or unfold its whole `list` ("all").
+	 * its `list` and unfold it ("others"), or unfold it and everything inside it ("all").
 	 */
 	| { type: "fold"; key: string; list: string; how: "expand" | "collapse" | "others" | "all" }
 	| { type: "busy"; key: string; busy: boolean }
@@ -84,6 +84,9 @@ export type FromPanel =
 	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
+	/** The card's project file list (spec 005): one of its files picked, or Browse…. */
+	| { type: "setProjectFile"; id: string; file: string }
+	| { type: "browseProjectFile"; id: string }
 	| { type: "remove"; id: string }
 	| { type: "candidates" }
 	| { type: "addProject"; path: string }

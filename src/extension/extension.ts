@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
 import { agentWishes, askOnce, copySetup, registerVsCodeAgents, setAgentBox, vscodeAgentsOn } from "./agents";
@@ -288,6 +289,9 @@ async function projectMenu(id: string): Promise<void> {
 			? { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) }
 			: { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) },
 		{ label: "$(copy) Copy Address", description: `localhost:${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
+		fileLocked(slot)
+			? { label: "$(lock) Project File", description: `${slot.projectFile} · stop the project to change it` }
+			: { label: "$(file-code) Project File…", description: `now ${slot.projectFile}`, run: () => changeProjectFile(slot, null) },
 		{ label: "$(output) Show Rojo Log", run: () => vscode.commands.executeCommand("rojoHub.showLog", slot.id) },
 		{ label: "$(trash) Remove Project", run: () => vscode.commands.executeCommand("rojoHub.removeProject", slot.id) },
 		{ label: "", kind: vscode.QuickPickItemKind.Separator },
@@ -549,8 +553,85 @@ async function candidates(): Promise<Candidate[]> {
 }
 
 async function browseForProject(): Promise<string | undefined> {
-	const chosen = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: "Add Project", title: "Pick a folder with a default.project.json" });
+	const chosen = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: "Add Project", title: "Pick a folder with a Rojo project file" });
 	return chosen?.[0]?.fsPath;
+}
+
+/*
+	The project file to add a folder with (spec 005): default.project.json
+	without asking, else the folder's only *.project.json, else the user picks.
+	Undefined when there is none or the user cancels.
+*/
+async function projectFileFor(path: string): Promise<string | undefined> {
+	const files = listProjectFiles(path);
+	const chosen = defaultProjectFile(files);
+	if (chosen) return chosen;
+	if (files.length === 0) {
+		void vscode.window.showErrorMessage(`Rojo-Hub: ${path} has no ${DEFAULT_PROJECT_FILE} or other *.project.json.`);
+		return undefined;
+	}
+	const picked = await vscode.window.showQuickPick(files, { title: "Which project file should Rojo serve?", placeHolder: "You can change it later with Project file… in the project's ⋯ menu" });
+	return picked;
+}
+
+/* The project's quick pick: Project File… lists the folder's *.project.json files. */
+async function changeProjectFile(slot: SlotView, busyKey: string | null): Promise<void> {
+	const files = listProjectFiles(slot.repoPath);
+	if (files.length === 0) {
+		void vscode.window.showErrorMessage(`Rojo-Hub: ${slot.repoPath} has no *.project.json files.`);
+		return;
+	}
+	const items = files.map((file) => ({
+		label: file === slot.projectFile ? `$(check) ${file}` : `$(blank) ${file}`,
+		description: file === slot.projectFile ? "serving now" : file === DEFAULT_PROJECT_FILE ? "default" : undefined,
+		file,
+	}));
+	const picked = await vscode.window.showQuickPick(items, { title: `${slot.projectName}: project file`, placeHolder: "Which project file should Rojo serve?" });
+	if (picked) await useProjectFile(slot, picked.file, busyKey);
+}
+
+/*
+	Browse… in the card's project file list: a file dialog that starts in the
+	project's folder. Only a *.project.json directly in that folder is taken,
+	since that is where the project's file must be on every branch.
+*/
+async function browseProjectFile(slot: SlotView): Promise<void> {
+	const chosen = await vscode.window.showOpenDialog({
+		defaultUri: vscode.Uri.file(slot.repoPath),
+		canSelectFiles: true,
+		canSelectFolders: false,
+		canSelectMany: false,
+		filters: { "Rojo project files": ["json"] },
+		openLabel: "Serve This File",
+		title: `${slot.projectName}: pick a *.project.json in its folder`,
+	});
+	const path = chosen?.[0]?.fsPath;
+	if (!path) return;
+	const file = basename(path);
+	if (pathKey(dirname(path)) !== pathKey(slot.repoPath) || !isProjectFileName(file)) {
+		void vscode.window.showErrorMessage(`Rojo-Hub: pick a *.project.json directly in ${slot.repoPath}. A project serves a project file from its own folder, so every branch has it in the same place.`);
+		return;
+	}
+	await useProjectFile(slot, file, `slot:${slot.id}`);
+}
+
+/*
+	A running or starting project's project file is shown, not changed: stop it
+	first (spec 005). An erroring one can change it, e.g. to a file the branch has.
+*/
+function fileLocked(slot: SlotView): boolean {
+	return slot.state === "running" || slot.state === "starting";
+}
+
+/* Switches a project to `file`. */
+async function useProjectFile(slot: SlotView, file: string, busyKey: string | null): Promise<void> {
+	if (file === slot.projectFile) return;
+	if (fileLocked(slot)) {
+		void vscode.window.showInformationMessage(`Stop ${slot.projectName} to change its project file; it is serving ${slot.projectFile}.`);
+		return;
+	}
+	if (busyKey) await act(busyKey, () => client.setProjectFile(slot.id, file));
+	else await run(`Switching ${slot.projectName} to ${file}`, () => client.setProjectFile(slot.id, file));
 }
 
 async function addProject(): Promise<void> {
@@ -564,7 +645,9 @@ async function addProject(): Promise<void> {
 	if (!picked) return;
 	const path = picked.path ?? (await browseForProject());
 	if (!path) return;
-	const added = await run("Adding project", () => client.add(path!));
+	const file = await projectFileFor(path);
+	if (!file) return;
+	const added = await run("Adding project", () => client.add(path!, file));
 	if (!added) return;
 	const start = await vscode.window.showInformationMessage(
 		`${added.projectName} has port ${added.port}. Connect its Studio places to localhost:${added.port} once; with the plugin's Auto Reconnect on, they reconnect by themselves.`,
@@ -694,7 +777,10 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "addWorkspace": {
 			const workspace = lastWorkspaces.find((entry) => entry.file === message.file);
 			if (!workspace) return;
-			for (const folder of workspace.addable) await act("add", () => client.add(folder.path));
+			for (const folder of workspace.addable) {
+				const file = await projectFileFor(folder.path);
+				if (file) await act("add", () => client.add(folder.path, file));
+			}
 			workspaceSignature = "";
 			await refresh();
 			return;
@@ -758,6 +844,12 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "log":
 			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 			return;
+		case "setProjectFile":
+			if (slot) await useProjectFile(slot, message.file, `slot:${slot.id}`);
+			return;
+		case "browseProjectFile":
+			if (slot) await browseProjectFile(slot);
+			return;
 		case "remove":
 			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));
 			return;
@@ -767,8 +859,9 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "addProject":
 		case "browse": {
 			const path = message.type === "addProject" ? message.path : await browseForProject();
-			if (!path) return;
-			const added = await act("add", () => client.add(path));
+			const file = path ? await projectFileFor(path) : undefined;
+			if (!path || !file) return;
+			const added = await act("add", () => client.add(path, file));
 			workspaceSignature = "";
 			if (added) await panel.focus(added.id);
 			return;

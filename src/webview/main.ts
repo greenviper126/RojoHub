@@ -51,6 +51,8 @@ const ui = {
 	picker: null as null | Picker,
 	/** Each project's last branch-picker list, so the picker opens with it drawn while a newer one is asked for. */
 	targets: new Map<string, TargetOption[]>(),
+	/** The project whose project file list is open; the files come with its status (spec 005). */
+	filePicker: null as null | { id: string },
 	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
 	menuDown: false,
@@ -90,12 +92,13 @@ function folded(key: string, byDefault: boolean): boolean {
 
 /*
 	Marks a foldable header for its right-click menu (webview/context in
-	package.json): Expand or Collapse, Collapse Others, Expand All, instead of
-	Cut/Copy/Paste. `list` is the header's siblings for the last two. Group keys
-	are "group:<id>", as groups keep their fold in closedGroups.
+	package.json) instead of Cut/Copy/Paste: Expand or Collapse, Collapse
+	Others (its siblings in `list`), and Expand All for a header that `nests`
+	other foldable headers. Group keys are "group:<id>", as groups keep their
+	fold in closedGroups.
 */
-function foldable(key: string, list: string, isFolded: boolean): string {
-	const context = { rojoHubFold: isFolded ? "folded" : "open", rojoHubFoldKey: key, rojoHubFoldList: list, preventDefaultContextMenuItems: true };
+function foldable(key: string, list: string, isFolded: boolean, nests = false): string {
+	const context = { rojoHubFold: isFolded ? "folded" : "open", rojoHubFoldNests: nests, rojoHubFoldKey: key, rojoHubFoldList: list, preventDefaultContextMenuItems: true };
 	return `data-fold-key="${escape(key)}" data-fold-list="${escape(list)}" data-vscode-context="${escape(JSON.stringify(context))}"`;
 }
 
@@ -112,16 +115,16 @@ function setFold(key: string, fold: boolean): void {
 }
 
 /*
-	Expand and Expand All open everything inside too (workspaces, project
-	cards), not just the header. What is inside a folded header is not drawn,
-	so this opens one level, draws, and looks again until nothing is left.
+	Expand opens just the header. Expand All opens everything inside it too
+	(workspaces, project cards, groups); what is inside a folded header is not
+	drawn, so it opens one level, draws, and looks again until nothing is left.
 */
 function foldFromMenu(key: string, list: string, how: "expand" | "collapse" | "others" | "all"): void {
 	const siblings = [...document.querySelectorAll<HTMLElement>(`[data-fold-list="${CSS.escape(list)}"]`)].map((element) => element.dataset.foldKey ?? "");
-	if (how === "collapse") setFold(key, true);
+	if (how === "collapse" || how === "expand") setFold(key, how === "collapse");
 	else if (how === "others") for (const other of siblings) setFold(other, other !== key);
 	else {
-		let opening = how === "all" ? siblings : [key];
+		let opening = [key];
 		const seen = new Set<string>();
 		while (opening.length > 0) {
 			for (const each of opening) {
@@ -329,6 +332,33 @@ function picker(slot: SlotView): string {
 }
 
 /*
+	The project file list under a card's project file row (spec 005): the
+	*.project.json files in the project's folder, the current one ticked, and
+	Browse… for a file dialog that starts in that folder.
+*/
+function filePicker(slot: SlotView): string {
+	const open = ui.filePicker;
+	if (!open || open.id !== slot.id) return "";
+	// A service older than 0.17.1 sends no list; show the current file rather than nothing.
+	const files = slot.projectFiles ?? [slot.projectFile];
+	const rows =
+		files.length === 0
+			? `<div class="muted pad">No *.project.json directly in the project's folder.</div>`
+			: files
+					.map((file) => {
+						const current = file === slot.projectFile;
+						const sub = current ? "Current" : file === "default.project.json" ? "The default" : "";
+						return `<button class="list-item${current ? " current" : ""}" data-action="pick-file" data-id="${escape(slot.id)}" data-file="${escape(file)}">${icon("file-code")}<span class="grow"><span class="label">${escape(file)}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</span>${current ? icon("check") : ""}</button>`;
+					})
+					.join("");
+	const browse = `<button class="list-item create" data-action="browse-file" data-id="${escape(slot.id)}">${icon("folder-opened")}<span class="grow"><span class="label">Browse…</span><span class="sub">Pick a *.project.json in the project's folder</span></span></button>`;
+	return `<div class="picker file-picker">
+		<div class="list">${rows}${browse}</div>
+		<p class="hint">Saved for this project; used when it next starts.</p>
+	</div>`;
+}
+
+/*
 	A project card. Folded, it is one row (light, name, port, start/stop);
 	open, the full card. `list` is the drag list it belongs to.
 */
@@ -340,8 +370,12 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const pickerOpen = ui.picker?.id === slot.id;
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
-	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
-	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span></button>`;
+	// A running project's file is shown, not changed: stop it first (spec 005). An erroring one can change it.
+	const fileLocked = serving;
+	if (fileLocked && ui.filePicker?.id === slot.id) ui.filePicker = null;
+	const filesOpen = ui.filePicker?.id === slot.id;
+	const isFolded = folded(key, foldedByDefault) && !pickerOpen && !filesOpen;
+	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${isFolded ? fileTag(slot) : ""}</button>`;
 	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
@@ -363,6 +397,16 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
+		${
+			fileLocked
+				? `<button class="target project-file" disabled title="Serving ${escape(slot.projectFile)}. Stop the project to change its project file">
+			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon("lock-small")}
+		</button>`
+				: `<button class="target project-file${filesOpen ? " open" : ""}" data-action="project-files" data-id="${escape(slot.id)}" title="The project file Rojo serves. Click to pick another *.project.json in the folder">
+			${icon("file-code")}<span class="grow ellipsis">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}<span class="wide-only">.project.json</span></span><span class="target-kind">project file</span>${icon(filesOpen ? "chevron-up" : "chevron-down")}
+		</button>`
+		}
+		${filePicker(slot)}
 		${claimNote(slot)}
 		${notices(slot)}
 		<div class="row card-foot">
@@ -395,7 +439,7 @@ function adder(): string {
 						.join("");
 	return `<div class="card adder">
 		<div class="row"><strong>Add a project</strong><span class="grow"></span>${iconButton("close-adder", "close", "Cancel")}</div>
-		<p class="muted small">Any folder with a <code>default.project.json</code>. It gets its own port.</p>
+		<p class="muted small">Any folder with a <code>default.project.json</code> or another <code>*.project.json</code>. It gets its own port.</p>
 		<div class="list">${rows}</div>
 		<div class="row">${button("browse", "Browse…", { icon: "folder-opened", kind: "secondary" })}</div>
 	</div>`;
@@ -440,6 +484,12 @@ function cardMenu(slot: SlotView): string {
 				: ""
 		}
 	</span>`;
+}
+
+/** On a folded card, names a project file other than default.project.json beside the project's name: "test" for test.project.json (spec 005). */
+function fileTag(slot: SlotView): string {
+	if (slot.projectFile === "default.project.json") return "";
+	return `<span class="file-tag" title="Serves ${escape(slot.projectFile)}">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}</span>`;
 }
 
 /** A port chip that copies localhost:<port>; it shows a tick for a moment after a copy. */
@@ -679,7 +729,7 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}" id="section-${key}">
-		<div class="section-head" ${foldable(key, "sections", collapsed)}>
+		<div class="section-head" ${foldable(key, "sections", collapsed, key === "projects" || key === "groups")}>
 			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${countText(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
 		</div>
@@ -728,7 +778,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 			const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
 			if (filtering && own.length + elsewhere.length === 0) return "";
 			const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
-			const head = `<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>
+			const head = `<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed, true)}>
 				${grip("blocks", key)}
 				<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
 				${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${serving}/${workspace.slotIds.length}</span>` : ""}
@@ -765,7 +815,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 				if (ui.reveal && loose.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
 				const collapsed = !filtering && folded(key, foldedByDefault);
 				return `<div class="workspace other" ${dropAttributes("blocks", key)}>
-					<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
+					<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed, true)}>${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
 					${collapsed ? "" : `<div class="workspace-body">${loose.map((slot) => projectCard(slot, list, false)).join("")}</div>`}
 				</div>`;
 			},
@@ -901,7 +951,15 @@ function parseExcluded(text: string): { values: (number | string)[]; bad: string
 	return { values, bad: null };
 }
 
+function openFilePicker(id: string): void {
+	ui.picker = null;
+	ui.filePicker = ui.filePicker?.id === id ? null : { id };
+	render();
+	document.querySelector<HTMLElement>(".file-picker .list-item")?.focus();
+}
+
 function openPicker(id: string): void {
+	ui.filePicker = null;
 	if (ui.picker?.id === id) {
 		ui.picker = null;
 	} else {
@@ -978,6 +1036,16 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "picker":
 			return openPicker(id);
+		case "project-files":
+			return openFilePicker(id);
+		case "pick-file":
+			ui.filePicker = null;
+			send({ type: "setProjectFile", id, file: target.dataset.file ?? "" });
+			return render();
+		case "browse-file":
+			ui.filePicker = null;
+			send({ type: "browseProjectFile", id });
+			return render();
 		case "pick":
 			return pick(Number(index));
 		case "menu":
@@ -1249,6 +1317,7 @@ document.addEventListener("keydown", (event) => {
 	const kind = input.dataset?.input;
 	if (event.key === "Escape") {
 		if (ui.menu) ui.menu = null;
+		else if (ui.filePicker) ui.filePicker = null;
 		else if (kind === "search") ui.picker = null;
 		else if (kind === "branch-name" && ui.picker) ui.picker.create = null;
 		else if (kind === "filter") ui.filter = null;

@@ -111,7 +111,7 @@ if (params.get("theme") === "light") {
 if (params.get("width")) document.body.style.width = params.get("width") + "px";
 
 const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
-	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", port, portSource: "hash",
+	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", projectFiles: ["default.project.json", "bench.project.json", "test.project.json"], port, portSource: "hash",
 	state, connections: 0, target: { kind: "worktree", path: `C:\\Users\\dev\\${projectName}` }, targetLabel, branch: targetLabel,
 	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, claim: null, ...extra,
 });
@@ -120,7 +120,7 @@ const state = {
 	slots: [
 		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "laundry-ui", until: Date.now() + 8 * 60000 } }),
 		slot("b", "VluxyAI", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
-		slot("c", "vluxysf", 35813, "stopped", "main"),
+		slot("c", "vluxysf", 35813, "stopped", "main", { projectName: "vluxysf Tests", projectFile: "test.project.json" }),
 		slot("d", "Wonderland", 35344, "error", "main", { error: ["Rojo did not come up on port 35344.", "[INFO  rojo] Rojo server listening on port 35344", "[ERROR rojo] Rojo crashed!", "[ERROR rojo] Details: called `Result::unwrap()` on an `Err` value: NotFound", "[ERROR rojo] at src/change_processor.rs:199"].join("\n") }),
 		slot("e", "Frameworks", 35120, "starting", "main"),
 	],

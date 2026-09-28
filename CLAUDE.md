@@ -12,7 +12,7 @@ npm run typecheck
 npm test              # build, load the bundles (smoke), unit + end-to-end against a real rojo 7.7 and a temp git repo
 npm run build         # esbuild -> dist/extension.js, dist/service.js
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.16.2.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.17.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
@@ -29,6 +29,9 @@ the running service.
   `vscode`, starts `dist/service.js`, and runs `dist/uninstall.js` against a throwaway home (never the
   real one: it removes agent config entries). 0.10.0 shipped broken because `jsonc-parser`'s UMD build
   cannot be bundled; `build.mjs` prefers ES module builds (`mainFields`) for that reason.
+- Every installed build that changes the service gets a new version, even mid-branch. The extension
+  keeps a running service of the same version, so reinstalling 0.17.0 over 0.17.0 left the old
+  service up without `projectFiles`, and the panel's file list did nothing.
 
 ## Rules that come from measurements (do not "simplify" them away)
 
@@ -39,6 +42,7 @@ the running service.
   folder loses a subfolder (rojo-rbx/rojo#1305) and never unwatches. Views are per commit and are
   collected only while the slot's rojo is stopped.
 - Restarting rojo means a new session, so Studio disconnects. Switching must never restart it.
+  Changing a project's project file (spec 005) is not a switch; the panel only allows it while stopped.
 - Start the pinned rojo binary from Rokit's tool storage (`src/service/tools.ts`), never Rokit's
   `rojo` shim: the shim launches rojo as a console child, and Windows Terminal then pops a window.
 

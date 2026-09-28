@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { PortSettings, SlotView, Target, TargetOption } from "../common/api";
+import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, headFile, inOrca, listWorktrees, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, readHead, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment } from "./ports";
@@ -15,6 +16,8 @@ const READY_TIMEOUT_MS = 30000;
 const PORT_FREE_TIMEOUT_MS = 5000;
 /** A crash this soon after a checkout in the served worktree is put down to that checkout. */
 const CHECKOUT_CRASH_MS = 120000;
+/** How long a project's list of *.project.json files is reused before its folder is read again. */
+const PROJECT_FILES_MS = 2000;
 
 interface Runtime {
 	state: SlotView["state"];
@@ -74,6 +77,9 @@ export class Hub {
 
 	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
 	private readonly claims = new Map<string, Claim>();
+
+	/** Each repo's *.project.json files and when they were read, so every status has them without a read each time (spec 005). */
+	private readonly projectFiles = new Map<string, { at: number; files: string[] }>();
 
 	/** The branch picker's lists, kept warm in the background (spec 002). */
 	readonly targetCache: TargetCache;
@@ -289,6 +295,20 @@ export class Hub {
 		else this.claims.delete(id);
 	}
 
+	/*
+		The project file list for a slot's folder. Read at most every two seconds,
+		about as often as the panel asks for status, so a file added or removed
+		shows up in the open list by itself.
+	*/
+	private filesOf(repoPath: string): string[] {
+		const key = pathKey(repoPath);
+		const cached = this.projectFiles.get(key);
+		if (cached && Date.now() - cached.at < PROJECT_FILES_MS) return cached.files;
+		const files = listProjectFiles(repoPath);
+		this.projectFiles.set(key, { at: Date.now(), files });
+		return files;
+	}
+
 	view(slot: SlotRecord): SlotView {
 		const runtime = this.runtime(slot.id);
 		const claim = this.claimOf(slot.id);
@@ -297,6 +317,7 @@ export class Hub {
 			projectName: slot.projectName,
 			repoPath: slot.repoPath,
 			projectFile: slot.projectFile,
+			projectFiles: this.filesOf(slot.repoPath),
 			port: slot.port,
 			state: runtime.state,
 			connections: runtime.state === "running" ? runtime.log.connections : 0,
@@ -329,21 +350,26 @@ export class Hub {
 	/*
 		Registers the repo containing `path`. The project name must be unique
 		across slots, because the Studio plugin auto-connects a place only to a
-		server reporting the name it saved.
+		server reporting the name it saved. Without a `projectFile`, the folder's
+		default.project.json, or its only *.project.json (spec 005).
 	*/
-	async add(path: string, projectFile = "default.project.json"): Promise<SlotView> {
+	async add(path: string, projectFile?: string): Promise<SlotView> {
 		const repoPath = await primaryCheckout(resolve(path));
-		const file = join(repoPath, projectFile);
-		if (!existsSync(file)) throw new NotFound(`${repoPath} has no ${projectFile}`);
-		const name = readProject(file).name;
-		if (typeof name !== "string" || name.length === 0) throw new Conflict(`${file} has no "name"`);
+		if (projectFile === undefined) {
+			const files = listProjectFiles(repoPath);
+			const chosen = defaultProjectFile(files);
+			if (!chosen) {
+				throw files.length === 0
+					? new NotFound(`${repoPath} has no ${DEFAULT_PROJECT_FILE} or other *.project.json`)
+					: new Conflict(`${repoPath} has several project files (${files.join(", ")}); say which one`);
+			}
+			projectFile = chosen;
+		}
+		if (!isProjectFileName(projectFile)) throw new Conflict(`${projectFile} is not a *.project.json file name`);
 		if (this.registry.slots.some((slot) => pathKey(slot.repoPath) === pathKey(repoPath) && slot.projectFile === projectFile)) {
 			throw new Conflict(`${repoPath} is already registered`);
 		}
-		const clash = this.registry.slots.find((slot) => slot.projectName === name);
-		if (clash) {
-			throw new Conflict(`Another project (${clash.repoPath}) is already named "${name}". Studio auto-connects by name, so names must be unique.`);
-		}
+		const name = this.nameIn(repoPath, projectFile, null);
 		let id = slugify(name);
 		while (this.registry.slots.some((slot) => slot.id === id)) id += "-2";
 		const slot: SlotRecord = {
@@ -368,6 +394,54 @@ export class Hub {
 		this.trackRepos();
 		await this.describeTarget(slot);
 		return this.view(slot);
+	}
+
+	/*
+		The `name` in a project file, which must be unique across slots other than
+		`except` (see add).
+	*/
+	private nameIn(repoPath: string, projectFile: string, except: string | null): string {
+		const file = join(repoPath, projectFile);
+		if (!existsSync(file)) throw new NotFound(`${repoPath} has no ${projectFile}`);
+		const name = readProject(file).name;
+		if (typeof name !== "string" || name.length === 0) throw new Conflict(`${file} has no "name"`);
+		const clash = this.registry.slots.find((slot) => slot.id !== except && slot.projectName === name);
+		if (clash) {
+			throw new Conflict(`Another project (${clash.repoPath}) is already named "${name}". Studio auto-connects by name, so names must be unique.`);
+		}
+		return name;
+	}
+
+	/*
+		Changes which project file a slot serves (spec 005). Rojo reads the name,
+		servePort and place IDs once per session, so a serving slot is stopped and
+		started again on the new file: a new session, which Studio reconnects to.
+		The extension asks before doing that. A stopped slot only records it.
+	*/
+	setProjectFile(id: string, projectFile: string): Promise<SlotView> {
+		const slot = this.registry.get(id);
+		if (!isProjectFileName(projectFile)) throw new Conflict(`${projectFile} is not a *.project.json file name`);
+		return this.enqueue(id, async () => {
+			if (slot.projectFile === projectFile) return this.view(slot);
+			if (this.registry.slots.some((other) => other.id !== id && pathKey(other.repoPath) === pathKey(slot.repoPath) && other.projectFile === projectFile)) {
+				throw new Conflict(`Another project already serves ${projectFile} from ${slot.repoPath}`);
+			}
+			const name = this.nameIn(slot.repoPath, projectFile, id);
+			const runtime = this.runtime(id);
+			const serving = runtime.state !== "stopped";
+			if (serving) await this.stopLocked(slot);
+			slot.projectFile = projectFile;
+			slot.projectName = name;
+			// A servePort in the new file (or gone from the old one) moves the port; take it now, not in a queued move.
+			this.refreshPorts();
+			const assigned = this.assignments.get(id);
+			if (assigned?.port) slot.port = assigned.port;
+			this.registry.save();
+			runtime.notes = [];
+			runtime.error = null;
+			if (serving && slot.wantRunning) await this.startLocked(slot);
+			return this.view(slot);
+		});
 	}
 
 	remove(id: string): Promise<void> {
