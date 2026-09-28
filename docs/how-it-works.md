@@ -132,7 +132,8 @@ groups. Right-clicking anywhere else in the panel still shows Copy. Workspace he
 while the Projects filter is open, since every matching workspace is open then.
 
 The section headers stay at the top while their section scrolls under them, and the footer stays at
-the bottom of the panel.
+the bottom of the panel. VS Code lets a sidebar be dragged as narrow as you like, so below about
+250px the panel stops shrinking and scrolls sideways rather than squeezing names down to a letter.
 
 **Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) that
 appears in their left margin when the pointer is on them; drag one onto another to move it before or after it. Cards move within their workspace,

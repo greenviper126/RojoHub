@@ -33,7 +33,13 @@
 	box-sizing: border-box;
 }
 
+/*
+	VS Code sets no minimum width on a sidebar view, so below 250px the panel
+	stops shrinking and scrolls sideways instead: narrower, names are down to a
+	letter or two and the section counts run into their buttons.
+*/
 body {
+	min-width: 250px;
 	margin: 0;
 	padding: 0 10px 0;
 	color: var(--fg);
