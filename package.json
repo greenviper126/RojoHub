@@ -488,7 +488,10 @@
     "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim",
     "smoke": "node tools/smoke-bundle.cjs",
-    "vscode:uninstall": "node ./dist/uninstall.js"
+    "vscode:uninstall": "node ./dist/uninstall.js",
+    "docs:dev": "vitepress dev site",
+    "docs:build": "vitepress build site",
+    "docs:preview": "vitepress preview site"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.1.2",
@@ -498,7 +501,8 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "jsonc-parser": "^3.3.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitepress": "^1.6.4"
   },
   "dependencies": {
     "smol-toml": "^1.9.0"
