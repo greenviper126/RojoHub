@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.10.2, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.11.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -83,8 +83,9 @@ during the install does not load the new version until it reloads.
 running service is an older version, asks it to exit, and starts its own. Rojo processes keep
 running through this, so Studio stays connected, and the new service adopts them.
 
-**Requirements**: Windows; git on `PATH`; `rojo` on `PATH` through [Rokit](https://github.com/rojo-rbx/rokit)
-(each project's `rokit.toml` picks its Rojo version); Rojo 7.7. Orca is optional.
+**Requirements**: Windows; git on `PATH`; Rojo installed through [Rokit](https://github.com/rojo-rbx/rokit)
+(each project's toolchain file picks its Rojo version, see [Projects](#5-projects)); Rojo 7.7 for
+everything to work as described. Orca is optional.
 
 **Uninstall**: press *Stop all*, uninstall the extension, then end the background service with
 `curl -X POST http://127.0.0.1:34870/shutdown` (or sign out). Delete `%LOCALAPPDATA%\RojoHub\` to
@@ -200,9 +201,24 @@ A newly added project points at its primary checkout and is stopped until you st
 **A project's menu**: Switch Branch…, Start or Stop Serving, Copy Address (`localhost:<port>`),
 Show Rojo Log, Remove Project. Any warning shows at the top of the menu.
 
-**Start Serving** runs `rojo serve` in the primary checkout's folder, so the Rojo version comes from
-that project's `rokit.toml`. It waits until Rojo answers with the project's name, or reports the
-end of the Rojo log if it does not come up within 30 seconds.
+**Start Serving** runs `rojo serve` in the primary checkout's folder, with the Rojo version the
+project pins. It waits until Rojo answers with the project's name, or reports the end of the Rojo
+log if it does not come up within 30 seconds.
+
+**Which Rojo.** Rojo-Hub reads the project's toolchain file the way Rokit does: `rokit.toml`,
+`aftman.toml` or `foreman.toml` in the project folder, then in each folder above it, then the global
+`~/.rokit/rokit.toml`; the nearest one that pins Rojo wins, and `rokit.toml` before the others in
+the same folder. It then runs that version straight from Rokit's tool storage
+(`~/.rokit/tool-storage/rojo-rbx/rojo/<version>/rojo.exe`), with no console, so **no window opens**.
+(Going through Rokit's `rojo` command instead made Windows open a Terminal window for a moment,
+because that command starts the real Rojo as a console program of its own.)
+
+- If the pinned version is not installed, starting fails with, for example: *Rojo 7.3.0 (pinned in
+  …\VluxySF\aftman.toml) is not installed. Run "rokit install" in …\VluxySF, or pin a Rojo version you
+  have.*
+- If no toolchain file pins Rojo, starting says so and suggests `rokit add rojo-rbx/rojo`.
+- A project pinned to a Rojo older than 7.7 starts, with a warning: live branch switching and the
+  Studio-connected light were only verified on 7.7 (older Rojo talks to Studio differently).
 
 **Stop Serving** stops that project's Rojo only; other projects and any Rojo you started by hand
 are left alone.

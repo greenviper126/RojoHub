@@ -8,6 +8,7 @@ import { expandGroup, pathBetween } from "../common/groups";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { parseWorktrees } from "../service/git";
+import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
 import { slugify } from "../service/registry";
@@ -282,4 +283,37 @@ test("findWorkspaces groups registered projects and lists addable folders", asyn
 		["Solo", true, [], 1],
 		["Game", false, ["game", "lib"], 0],
 	], "the window's workspace comes first");
+});
+
+test("rojoSpec reads Rokit, Aftman and Foreman manifests", () => {
+	assert.deepEqual(rojoSpec('[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n'), { author: "rojo-rbx", name: "rojo", version: "7.7.0" });
+	assert.deepEqual(rojoSpec('# aftman\n[tools]\nRojo = "rojo-rbx/rojo@7.3.0"\nwally = "x/y@1"\n'), { author: "rojo-rbx", name: "rojo", version: "7.3.0" });
+	assert.deepEqual(rojoSpec('[tools]\nrojo = { source = "rojo-rbx/rojo", version = "=7.4.0" }\n'), { author: "rojo-rbx", name: "rojo", version: "7.4.0" });
+	assert.equal(rojoSpec('[tools]\nwally = "upliftgames/wally@0.3.2"\n'), null);
+	assert.equal(rojoSpec("not toml ["), null);
+	assert.equal(olderThan77("7.3.0"), true);
+	assert.equal(olderThan77("7.7.0"), false);
+	assert.equal(olderThan77("8.0.0"), false);
+});
+
+test("resolveRojo finds the pinned binary the way Rokit does, or says what to install", () => {
+	const root = mkdtempSync(join(tmpdir(), "rojo-hub-tools-"));
+	const rokit = join(root, ".rokit");
+	const exe = process.platform === "win32" ? "rojo.exe" : "rojo";
+	mkdirSync(join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0"), { recursive: true });
+	writeFileSync(join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0", exe), "");
+	const project = join(root, "work", "Game");
+	mkdirSync(project, { recursive: true });
+
+	writeFileSync(join(root, "work", "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	const fromParent = resolveRojo(project, rokit);
+	assert.ok(fromParent.ok && fromParent.binary === join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0", exe), "a manifest in a parent folder counts");
+
+	writeFileSync(join(project, "aftman.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.3.0"\n');
+	const missing = resolveRojo(project, rokit);
+	assert.ok(!missing.ok && /Rojo 7\.3\.0 .* is not installed\. Run "rokit install"/.test(missing.error), "the nearest manifest wins, and a missing version says what to do");
+
+	writeFileSync(join(project, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	const preferred = resolveRojo(project, rokit);
+	assert.ok(preferred.ok && preferred.manifest === join(project, "rokit.toml"), "rokit.toml before aftman.toml in the same folder");
 });
