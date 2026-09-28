@@ -48,7 +48,7 @@ export default defineConfig({
 			{ text: "Reference", link: "/reference/settings", activeMatch: "/reference/" },
 			{ text: "Troubleshooting", link: "/troubleshooting" },
 			{
-				text: "0.18.2",
+				text: "0.18.3",
 				items: [
 					{ text: "Changelog", link: "/changelog" },
 					{ text: "Releases", link: "https://github.com/greenviper126/RojoHub/releases" },
