@@ -668,13 +668,19 @@ function agentNudge(): string {
 	</div>`;
 }
 
+/** A count's first word stays in a narrow panel; the rest ("serving") hides. */
+function countText(count: string): string {
+	const [lead, ...rest] = count.split(" ");
+	return `${escape(lead)}${rest.length ? `<span class="wide-only"> ${escape(rest.join(" "))}</span>` : ""}`;
+}
+
 /** Top-level sections are open by default, except the settings ones. */
 function section(key: string, title: string, iconName: string, count: string, extra: string, body: string): string {
 	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}" id="section-${key}">
 		<div class="section-head" ${foldable(key, "sections", collapsed)}>
-			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${escape(count)}</span>` : ""}</button>
+			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${countText(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
 		</div>
 		${collapsed ? "" : `<div class="section-body">${body}</div>`}
@@ -845,7 +851,7 @@ function render(): void {
 				.map((slot) => escape(slot.projectName))
 				.join(", ")}</strong>? Studio places connected to them disconnect.</span></div>
 			<div class="row">${button("stop-all-yes", "Yes, stop all", { icon: "debug-stop", kind: "danger" })}${button("stop-all-no", "Cancel", { kind: "secondary" })}</div>`
-		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `${serving.length} of ${slots.length} serving`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
+		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `<span class="wide-only">${serving.length} of ${slots.length} serving</span><span class="narrow-only">${serving.length}/${slots.length}</span>`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
 
 	// The service is invisible unless it could not be started at all.
 	const banner = state.service.error

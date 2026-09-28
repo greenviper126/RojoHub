@@ -33,13 +33,9 @@
 	box-sizing: border-box;
 }
 
-/*
-	VS Code sets no minimum width on a sidebar view, so below 250px the panel
-	stops shrinking and scrolls sideways instead: narrower, names are down to a
-	letter or two and the section counts run into their buttons.
-*/
+/* Below 170px nothing reads any more, so the panel stops shrinking and scrolls sideways. */
 body {
-	min-width: 250px;
+	min-width: 170px;
 	margin: 0;
 	padding: 0 10px 0;
 	color: var(--fg);
@@ -1229,9 +1225,78 @@ button:focus-visible {
 	container: panel / inline-size;
 }
 
+.narrow-only {
+	display: none;
+}
+
+/* Section titles give way before their counts and buttons. */
+.section-toggle > span:not(.count) {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.section-toggle,
+.summary {
+	white-space: nowrap;
+}
+
+.section-head > .btn {
+	flex: none;
+}
+
+/*
+	A narrow panel drops what is said elsewhere or can wait for a hover, in
+	steps, so names keep their letters and nothing runs past a card's edge.
+*/
 @container panel (max-width: 300px) {
 	.pill.dense {
 		display: none;
+	}
+}
+
+@container panel (max-width: 260px) {
+	.wide-only,
+	.port .host,
+	.workspace-body .member .sub,
+	.row .badge.icon-badge,
+	.card-head > .codicon.bad,
+	.card-head > .codicon.warn,
+	.card:not(:hover) .hover-tools:not(:focus-within) {
+		display: none;
+	}
+
+	.narrow-only {
+		display: inline;
+	}
+
+	.card-foot .btn > span {
+		display: none;
+	}
+
+	.card-foot .btn:not(.icon-only) {
+		padding: 0 6px;
+	}
+}
+
+@container panel (max-width: 210px) {
+	.members .port,
+	.card-head .port,
+	.footer .btn.icon-only {
+		display: none;
+	}
+
+	.workspace-body {
+		margin-left: 3px;
+		padding-left: 6px;
+	}
+
+	.group-toggle {
+		min-width: min(3em, 40%);
+	}
+
+	.port {
+		padding: 1px 4px;
 	}
 }
 
