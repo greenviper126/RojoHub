@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -9,9 +10,9 @@ import { pathBetween } from "../common/groups";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
-import { agentWishes, askOnce, copySetup, registerVsCodeAgents, setAgentBox, vscodeAgentsOn } from "./agents";
+import { actedOn, askOnce, changedWishes, copySetup, reconcileAgents, registerVsCodeAgents, setAgentBox, trackAgentBoxes, vscodeAgentsOn } from "./agents";
 import { hideAgentNudge, showAgentNudge } from "./nudge";
-import { client, ensureService } from "./client";
+import { client, ensureService, expectedHome } from "./client";
 import { savedState } from "./saved";
 import { findWorkspaces } from "./workspaces";
 import { HubPanel } from "./panel";
@@ -24,14 +25,16 @@ import { HubPanel } from "./panel";
 */
 
 const POLL_MS = 2000;
+const WINDOWS_ONLY = "Rojo-Hub supports Windows only for now.";
 
 let panel: HubPanel;
+let extensionContext: vscode.ExtensionContext;
 let serviceScript = "";
 let serviceHealth: { running: boolean; version: string | null; error: string | null } = { running: false, version: null, error: null };
 /** A start of the service already under way, so concurrent callers wait for the same one. */
 let starting: Promise<void> | null = null;
 /** The service's state folder: from its /health once seen, else where it puts it by default. */
-let hubHome = join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
+let hubHome = expectedHome();
 let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
@@ -86,6 +89,7 @@ async function ensureRunning(): Promise<void> {
 	if (await client.health()) return;
 	starting ??= (async () => {
 		try {
+			if (process.platform !== "win32") throw new Error(WINDOWS_ONLY);
 			await ensureService(serviceScript);
 			await pushSettings();
 			serviceHealth.error = null;
@@ -99,18 +103,25 @@ async function ensureRunning(): Promise<void> {
 	await starting;
 }
 
-let toldToReload = false;
+const TOLD_TO_RELOAD = "rojoHub.toldToReload";
 
 /*
-	A newer service than this window's extension means Rojo-Hub was updated and
-	this window has not been reloaded. It keeps working against the newer
-	service, but its panel code is old, so it asks once to reload.
+	A newer service than this window's extension means Rojo-Hub was updated,
+	either in another VS Code profile or without this window being reloaded.
+	It keeps working against the newer service, but its panel code is old, so
+	it says so once per service version. That is remembered per profile: in a
+	profile that still has the old version installed, reloading cannot help,
+	so asking again in every window would only nag.
 */
 function checkOutdated(serviceVersion: string | undefined): void {
-	if (toldToReload || !serviceVersion || compareVersions(serviceVersion, SERVICE_VERSION) <= 0) return;
-	toldToReload = true;
+	if (!serviceVersion || compareVersions(serviceVersion, SERVICE_VERSION) <= 0) return;
+	if (extensionContext.globalState.get<string>(TOLD_TO_RELOAD) === serviceVersion) return;
+	void extensionContext.globalState.update(TOLD_TO_RELOAD, serviceVersion);
 	void vscode.window
-		.showInformationMessage(`Rojo-Hub was updated to ${serviceVersion}; this window still runs ${SERVICE_VERSION}. Reload it to use the new version.`, "Reload Window")
+		.showInformationMessage(
+			`Rojo-Hub ${serviceVersion} is running, but this window has ${SERVICE_VERSION}. Reload the window; if this VS Code profile still has ${SERVICE_VERSION} installed, install the update in this profile too.`,
+			"Reload Window",
+		)
 		.then((choice) => {
 			if (choice) void vscode.commands.executeCommand("workbench.action.reloadWindow");
 		});
@@ -310,11 +321,12 @@ async function projectMenu(id: string): Promise<void> {
 	const slot = lastSlots.find((entry) => entry.id === id);
 	if (!slot) return openMenu();
 	const serving = slot.state === "running" || slot.state === "starting";
+	const stopItem: MenuItem = { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) };
+	const startItem: MenuItem = { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) };
 	const items: MenuItem[] = [
 		{ label: "$(git-branch) Switch Branch…", description: `now ${slot.targetLabel}`, run: () => switchSlot(slot.id) },
-		serving
-			? { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) }
-			: { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) },
+		// A project in error can be started again, or stopped so it stops retrying.
+		...(serving ? [stopItem] : slot.state === "error" ? [startItem, stopItem] : [startItem]),
 		{ label: "$(copy) Copy Port", description: `${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
 		fileLocked(slot)
 			? { label: "$(lock) Project File", description: `${slot.projectFile} · stop the project to change it` }
@@ -696,8 +708,17 @@ async function pushSettings(): Promise<void> {
 			sourcemaps: config.get<boolean>("sourcemaps", true),
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
-	// Agent access (spec 004); a failure shows on that agent's row in the panel.
-	lastAgents = await client.putAgents(agentWishes()).catch(() => lastAgents);
+}
+
+/*
+	Agent access (spec 004): sends only the boxes the user changed since this
+	window last acted on them (agents.ts), never the whole setting. A failure
+	shows on that agent's row in the panel.
+*/
+async function pushAgentChanges(): Promise<void> {
+	const changed = changedWishes();
+	if (Object.keys(changed).length === 0) return;
+	lastAgents = await client.putAgents(changed).catch(() => lastAgents);
 }
 
 function orcaRepos():Promise<{ path: string; displayName: string }[]> {
@@ -759,15 +780,26 @@ async function createBranch(id: string, name: string, base: string): Promise<voi
 	}
 }
 
+const BUILD_FOLDER = "rojoHub.buildFolder";
+
+/** A file name part with the characters Windows forbids in file names replaced. */
+function fileNamePart(text: string): string {
+	return text.replace(/[\\/:*?"<>|\x00-\x1f]+/g, "-").replace(/[. ]+$/, "") || "build";
+}
+
 /*
-	Build place file: a save dialog prefilled with build/<project>-<branch>.rbxl
-	in the repo, then rojo build of exactly what the project serves.
+	Build place file: a save dialog prefilled with <project>-<branch>.rbxl in
+	the folder last built into, else Documents (never the repo, where it would
+	be an untracked file), then rojo build of exactly what the project serves.
 */
 async function buildPlace(slot: SlotView): Promise<void> {
-	const label = (slot.branch ?? slot.targetLabel ?? "build").replace(/[\\/:*?"<>|]+/g, "-");
+	const label = fileNamePart(slot.branch ?? slot.targetLabel ?? "build");
+	const documents = join(homedir(), "Documents");
+	const remembered = extensionContext.globalState.get<string>(BUILD_FOLDER);
+	const folder = remembered && existsSync(remembered) ? remembered : existsSync(documents) ? documents : homedir();
 	const target = await vscode.window.showSaveDialog({
 		title: `Build a place file of ${slot.projectName} (${slot.targetLabel})`,
-		defaultUri: vscode.Uri.file(join(slot.repoPath, "build", `${slot.projectName}-${label}.rbxl`)),
+		defaultUri: vscode.Uri.file(join(folder, `${fileNamePart(slot.projectName)}-${label}.rbxl`)),
 		filters: { "Roblox place": ["rbxl", "rbxlx"] },
 		saveLabel: "Build",
 	});
@@ -775,6 +807,7 @@ async function buildPlace(slot: SlotView): Promise<void> {
 		panel.post({ type: "busy", key: `build:${slot.id}`, busy: false });
 		return;
 	}
+	await extensionContext.globalState.update(BUILD_FOLDER, dirname(target.fsPath));
 	const built = await act(`build:${slot.id}`, () => client.build(slot.id, target.fsPath));
 	if (!built) return;
 	const size = built.bytes >= 1 << 20 ? `${(built.bytes / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(built.bytes / 1024))} KB`;
@@ -798,6 +831,15 @@ async function confirmRemove(slot: SlotView): Promise<boolean> {
 		"Remove",
 	);
 	return sure === "Remove";
+}
+
+/* A project that was never started has no rojo.log yet; say so instead of a file-not-found error. */
+async function showLog(slot: SlotView): Promise<void> {
+	if (!existsSync(slot.logFile)) {
+		void vscode.window.showInformationMessage(`${slot.projectName} has no Rojo log yet; it appears once the project has been started.`);
+		return;
+	}
+	await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 }
 
 async function onPanel(message: FromPanel): Promise<void> {
@@ -878,7 +920,7 @@ async function onPanel(message: FromPanel): Promise<void> {
 			void vscode.window.setStatusBarMessage(`$(copy) Copied port ${slot.port}`, 2500);
 			return;
 		case "log":
-			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
+			if (slot) await showLog(slot);
 			return;
 		case "setProjectFile":
 			if (slot) await useProjectFile(slot, message.file, `slot:${slot.id}`);
@@ -936,11 +978,14 @@ async function onPanel(message: FromPanel): Promise<void> {
 			return;
 		}
 		case "walkthrough":
-			await vscode.commands.executeCommand("workbench.action.openWalkthrough", "greenviper126.rojo-hub#rojoHub.start", false);
+			await vscode.commands.executeCommand("workbench.action.openWalkthrough", `${extensionContext.extension.id}#rojoHub.start`, false);
 			return;
 		case "setAgent":
 			await act(`agent:${message.id}`, async () => {
-				if ((await setAgentBox(message.id, message.on)) && message.id !== "vscode") lastAgents = await client.putAgents(agentWishes());
+				if (!(await setAgentBox(message.id, message.on)) || message.id === "vscode") return;
+				// Sent even when the box already said so: ticking an agent whose entry was removed by hand adds it again.
+				actedOn(message.id, message.on);
+				lastAgents = await client.putAgents({ [message.id]: message.on });
 			});
 			return;
 		case "copyAgentSetup":
@@ -952,11 +997,36 @@ async function onPanel(message: FromPanel): Promise<void> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	extensionContext = context;
 	panel = new HubPanel(context.extensionUri, onPanel);
 	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem);
 
 	serviceScript = context.asAbsolutePath("dist/service.js");
+
+	/*
+		Rojo-Hub is Windows-only for now: the service starts rojo from Rokit's
+		Windows tool storage and relies on Windows paths throughout. Elsewhere the
+		panel says so and nothing is started.
+	*/
+	if (process.platform !== "win32") {
+		const message = WINDOWS_ONLY;
+		serviceHealth = { running: false, version: null, error: message };
+		panel.update({
+			service: serviceHealth,
+			slots: [],
+			groups: [],
+			settings: { portRange: "", excludedPorts: [] },
+			here: [],
+			workspaces: [],
+			order: lastOrder,
+			agents: { url: MCP_URL, vscode: false, list: [] },
+			agentNudge: false,
+		});
+		void vscode.window.showWarningMessage(message);
+		return;
+	}
+
 	const postFold = (argument: unknown, how: "expand" | "collapse" | "others" | "all") => {
 		const { rojoHubFoldKey: key, rojoHubFoldList: list } = (argument ?? {}) as { rojoHubFoldKey?: unknown; rojoHubFoldList?: unknown };
 		if (typeof key === "string" && typeof list === "string") panel.post({ type: "fold", key, list, how });
@@ -989,7 +1059,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		},
 		"rojoHub.showLog": async (argument) => {
 			const slot = await pickSlot(argument, "Show whose log?");
-			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
+			if (slot) await showLog(slot);
 		},
 		"rojoHub.copyAddress": async (argument) => {
 			const slot = await pickSlot(argument, "Copy whose port?");
@@ -1013,7 +1083,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.copyAgentPrompt": () => copySetup("prompt"),
 		"rojoHub.stopAll": async () => {
 			await refresh();
-			const serving = lastSlots.filter((slot) => slot.state === "running" || slot.state === "starting");
+			// A project in error counts: stopping it ends its retries.
+			const serving = lastSlots.filter((slot) => slot.state === "running" || slot.state === "starting" || slot.state === "error");
 			if (serving.length === 0) {
 				void vscode.window.showInformationMessage("Rojo-Hub: nothing is serving.");
 				return;
@@ -1038,19 +1109,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => void locateRepos()));
 	await locateRepos();
 
+	trackAgentBoxes();
 	try {
 		await ensureService(serviceScript);
 		await pushSettings();
 	} catch (error) {
-		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
+		serviceHealth.error = error instanceof Error ? error.message : String(error);
+		void vscode.window.showErrorMessage(`Rojo-Hub: ${serviceHealth.error}`);
 	}
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((event) => {
-			if (event.affectsConfiguration("rojoHub")) void pushSettings().then(refresh);
+			if (!event.affectsConfiguration("rojoHub")) return;
+			void pushSettings()
+				.then(() => (event.affectsConfiguration("rojoHub.agents") ? pushAgentChanges() : undefined))
+				.then(refresh);
 		}),
 	);
 	registerVsCodeAgents(context, ensureRunning);
 	await refresh();
+	// Agent entries are not re-added on start; a box whose entry was removed by hand is turned off instead.
+	if (serviceHealth.running) await reconcileAgents(lastAgents);
 	void askOnce(context, hubHome, lastAgents);
 
 	/*

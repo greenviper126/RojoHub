@@ -10,7 +10,7 @@ import { listProjectFiles } from "../common/projectFiles";
 	VS Code workspaces (.code-workspace files) that Rojo-Hub projects belong to,
 	for grouping the Projects list visually. Found in two places: the file this
 	window has open, and the top folder of every registered project (where a
-	multi-root workspace usually lives, e.g. TheLaundryShift.code-workspace).
+	multi-root workspace usually lives, e.g. MyGame.code-workspace).
 	Nothing here changes a project; it only decides where its card is drawn,
 	and which folders in a workspace could still be added.
 */

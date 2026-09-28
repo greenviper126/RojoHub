@@ -118,20 +118,20 @@ const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
 const state = {
 	service: { running: true, version: "0.13.0", error: null },
 	slots: [
-		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "laundry-ui", until: Date.now() + 8 * 60000 } }),
-		slot("b", "VluxyAI", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
-		slot("c", "vluxysf", 35813, "stopped", "main", { projectName: "vluxysf Tests", projectFile: "test.project.json" }),
+		slot("a", "SkyIslands", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "sky-ui", until: Date.now() + 8 * 60000 } }),
+		slot("b", "NpcBrain", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
+		slot("c", "combatlib", 35813, "stopped", "main", { projectName: "combatlib Tests", projectFile: "test.project.json" }),
 		slot("d", "Wonderland", 35344, "error", "main", { error: ["Rojo did not come up on port 35344.", "[INFO  rojo] Rojo server listening on port 35344", "[ERROR rojo] Rojo crashed!", "[ERROR rojo] Details: called `Result::unwrap()` on an `Err` value: NotFound", "[ERROR rojo] at src/change_processor.rs:199"].join("\n") }),
 		slot("e", "Frameworks", 35120, "starting", "main"),
 	],
 	groups: [
-		{ id: "g1", name: "Laundry Shift", slotIds: ["a", "b"], groupIds: [], active: true, projectIds: ["a", "b"] },
+		{ id: "g1", name: "Sky Islands", slotIds: ["a", "b"], groupIds: [], active: true, projectIds: ["a", "b"] },
 		{ id: "g2", name: "Everything", slotIds: ["c"], groupIds: ["g1"], active: false, projectIds: ["c", "a", "b"] },
 	],
 	settings: { portRange: "34873-35872", excludedPorts: [] },
 	here: ["a"],
 	workspaces: params.get("workspaces") === "1" ? [
-		{ file: "C:\\ws\\Laundry.code-workspace", name: "Laundry", slotIds: ["a", "b"], addable: [{ label: "SharedLib", path: "C:\\dev\\SharedLib" }], isWindow: true },
+		{ file: "C:\\ws\\Sky.code-workspace", name: "Sky", slotIds: ["a", "b"], addable: [{ label: "SharedLib", path: "C:\\dev\\SharedLib" }], isWindow: true },
 	] : [],
 	order: { projects: [], groups: [] },
 	agents: {
@@ -148,8 +148,8 @@ const state = {
 if (params.get("empty") === "1") { state.slots = []; state.groups = []; }
 
 const options = [
-	{ target: { kind: "worktree", path: "C:\\Users\\dev\\TheLaundryShift" }, label: "chore/untrack-wally-lock", description: "C:\\Users\\dev\\TheLaundryShift", branch: "chore/untrack-wally-lock", isPrimary: true, committedAt: 0 },
-	{ target: { kind: "worktree", path: "C:\\orca\\laundry-ui" }, label: "laundry-ui", description: "feat/new-ui · Orca worktree", branch: "feat/new-ui", isPrimary: false, committedAt: 0 },
+	{ target: { kind: "worktree", path: "C:\\Users\\dev\\SkyIslands" }, label: "chore/untrack-wally-lock", description: "C:\\Users\\dev\\SkyIslands", branch: "chore/untrack-wally-lock", isPrimary: true, committedAt: 0 },
+	{ target: { kind: "worktree", path: "C:\\orca\\sky-ui" }, label: "sky-ui", description: "feat/new-ui · Orca worktree", branch: "feat/new-ui", isPrimary: false, committedAt: 0 },
 	{ target: { kind: "branch", ref: "refs/heads/main" }, label: "main", description: "branch · no worktree", branch: "main", isPrimary: false, committedAt: Date.now() / 1000 - 7200 },
 	{ target: { kind: "branch", ref: "refs/heads/fix/dryer" }, label: "fix/dryer", description: "branch · no worktree", branch: "fix/dryer", isPrimary: false, committedAt: Date.now() / 1000 - 3 * 86400 },
 	{ target: { kind: "branch", ref: "refs/remotes/origin/gh-pages" }, label: "origin/gh-pages", description: "remote branch · no worktree", branch: "origin/gh-pages", isPrimary: false, committedAt: Date.now() / 1000 - 40 * 86400 },

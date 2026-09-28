@@ -364,6 +364,8 @@ function filePicker(slot: SlotView): string {
 */
 function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): string {
 	const serving = slot.state === "running" || slot.state === "starting";
+	// A project in error can be started again, or stopped so it stops retrying.
+	const failed = slot.state === "error";
 	const busy = ui.busy.has(`slot:${slot.id}`);
 	const here = state?.here.includes(slot.id) ? `<span class="badge icon-badge" title="This window's project">${icon("window")}</span>` : "";
 	const targetIcon = slot.target.kind === "worktree" ? "folder" : "git-branch";
@@ -381,10 +383,8 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	if (isFolded) {
 		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
 			<div class="row card-head" ${foldable(key, list, true)}>${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${
-				serving
-					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
-					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
-			}</div>
+				serving || failed ? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id }) : ""
+			}${serving ? "" : iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })}</div>
 		</article>`;
 	}
 	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
@@ -415,10 +415,8 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${ui.busy.has(`build:${slot.id}`) ? `<span class="btn ghost icon-only" title="Building a place file…">${icon("loading", "codicon-modifier-spin")}</span>` : ""}
 			${cardMenu(slot)}
 			${
-				serving
-					? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary", disabled: busy })
-					: button("start", "Start", { icon: "play", data: { id: slot.id }, kind: "primary", disabled: busy })
-			}
+				serving || failed ? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary", disabled: busy }) : ""
+			}${serving ? "" : button("start", "Start", { icon: "play", data: { id: slot.id }, kind: "primary", disabled: busy })}
 		</div>
 	</article>`;
 }
@@ -631,7 +629,7 @@ function newGroupForm(): string {
 	if (!ui.newGroup) return "";
 	return `<div class="card adder">
 		<div class="row"><strong>New group</strong><span class="grow"></span>${iconButton("close-new-group", "close", "Cancel")}</div>
-		<div class="row"><input data-key="new-group" data-input="new-group" placeholder="Group name, e.g. Laundry Shift" value="${escape(ui.newGroup.name)}" spellcheck="false"></div>
+		<div class="row"><input data-key="new-group" data-input="new-group" placeholder="Group name, e.g. My Game" value="${escape(ui.newGroup.name)}" spellcheck="false"></div>
 		<div class="row">${button("create-group", "Create", { icon: "check", kind: "primary", disabled: !ui.newGroup.name.trim() })}<span class="muted small">Then add projects with its dropdown.</span></div>
 	</div>`;
 }
@@ -895,13 +893,15 @@ function render(): void {
 				})());
 
 	const serving = slots.filter((slot) => slot.state === "running" || slot.state === "starting");
+	// Stop all also stops projects in error, which may still be retrying.
+	const stoppable = slots.filter((slot) => slot.state === "running" || slot.state === "starting" || slot.state === "error");
 	const agentCount = state.agents.list.filter((agent) => agent.state === "connected").length + (state.agents.vscode ? 1 : 0);
 	const footer = ui.confirmStopAll
-		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${serving.length} serving project${serving.length === 1 ? "" : "s"}: <strong>${serving
+		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${stoppable.length} serving project${stoppable.length === 1 ? "" : "s"}: <strong>${stoppable
 				.map((slot) => escape(slot.projectName))
 				.join(", ")}</strong>? Studio places connected to them disconnect.</span></div>
 			<div class="row">${button("stop-all-yes", "Yes, stop all", { icon: "debug-stop", kind: "danger" })}${button("stop-all-no", "Cancel", { kind: "secondary" })}</div>`
-		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `<span class="wide-only">${serving.length} of ${slots.length} serving</span><span class="narrow-only">${serving.length}/${slots.length}</span>`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
+		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `<span class="wide-only">${serving.length} of ${slots.length} serving</span><span class="narrow-only">${serving.length}/${slots.length}</span>`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: stoppable.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
 
 	// The service is invisible unless it could not be started at all.
 	const banner = state.service.error

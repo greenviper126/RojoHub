@@ -10,30 +10,33 @@
 	the rewrite is silently dropped. Every $path is absolute for the same
 	reason: a verbatim path does no ".." processing.
 
-	Usage:  node tools/live-switch-probe.mjs serve [tiny|tls]   start rojo on the probe port, serving A
+	Usage:  node tools/live-switch-probe.mjs serve <tiny|repo> <repo>
+	                                                             start rojo on the probe port, serving A
 	        node tools/live-switch-probe.mjs switch <a|b>        rewrite the project file to the other tree
 	        node tools/live-switch-probe.mjs edit <a|b>          append a line to Foo in that tree (tiny only)
 	        node tools/live-switch-probe.mjs status              print the served project name and session id
 	        node tools/live-switch-probe.mjs stop                stop the probe's rojo
 
-	"tiny" is a two-tree fixture made here. "tls" serves TheLaundryShift's real
-	default.project.json: A is the primary folder, B an archive of HEAD~40.
+	<repo> is a Rojo project's git checkout with a rokit.toml pinning rojo.
+	"tiny" is a two-tree fixture made here, served with that repo's rojo.
+	"repo" serves the repo's real default.project.json: A is the repo's
+	folder, B an archive of its HEAD~40.
 */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const PORT = 34880;
 const ROOT = join(tmpdir(), "rojo-hub-probe");
 const PROJECT = join(ROOT, "slot.project.json");
 const STATE = join(ROOT, "state.json");
 const LOG = join(ROOT, "serve.log");
-const TLS = "C:\\Users\\green\\ROBLOX_VSCODE\\TheLaundryShift";
 const PACKAGE_PATHS = new Set(["Packages", "ServerPackages"]);
 
-const [command = "status", arg] = process.argv.slice(2);
+const [command = "status", arg, repoArg] = process.argv.slice(2);
+const USAGE = "Usage: node tools/live-switch-probe.mjs serve <tiny|repo> <path to a Rojo project's git checkout with a rokit.toml>";
 
 function makeTiny() {
 	const trees = {};
@@ -58,14 +61,14 @@ function makeTiny() {
 	return { base, trees, packagesFrom: null };
 }
 
-function makeTls() {
-	const old = join(ROOT, "tls-old");
+function makeRepo(repo) {
+	const old = join(ROOT, "repo-old");
 	rmSync(old, { recursive: true, force: true });
 	mkdirSync(old, { recursive: true });
-	const archive = execFileSync("git", ["archive", "HEAD~40", "src"], { cwd: TLS, maxBuffer: 1 << 28 });
+	const archive = execFileSync("git", ["archive", "HEAD~40", "src"], { cwd: repo, maxBuffer: 1 << 28 });
 	execFileSync("tar", ["-x", "-C", old], { input: archive });
-	const base = JSON.parse(readFileSync(join(TLS, "default.project.json"), "utf8"));
-	return { base, trees: { a: TLS, b: old }, packagesFrom: TLS };
+	const base = JSON.parse(readFileSync(join(repo, "default.project.json"), "utf8"));
+	return { base, trees: { a: repo, b: old }, packagesFrom: repo };
 }
 
 /*
@@ -126,13 +129,15 @@ function stop() {
 async function main() {
 	mkdirSync(ROOT, { recursive: true });
 	if (command === "serve") {
+		if ((arg !== "tiny" && arg !== "repo") || !repoArg || !existsSync(join(repoArg, "rokit.toml"))) throw new Error(USAGE);
+		const repo = resolve(repoArg);
 		stop();
-		const fixture = arg === "tls" ? makeTls() : makeTiny();
-		const state = { fixture: arg === "tls" ? "tls" : "tiny", ...fixture };
+		const fixture = arg === "repo" ? makeRepo(repo) : makeTiny();
+		const state = { fixture: arg, ...fixture };
 		writeProject(state, "a");
 		const log = openSync(LOG, "w");
-		const cwd = state.fixture === "tls" ? TLS : ROOT;
-		if (state.fixture === "tiny") writeFileSync(join(ROOT, "rokit.toml"), readFileSync(join(TLS, "rokit.toml")));
+		const cwd = state.fixture === "repo" ? repo : ROOT;
+		if (state.fixture === "tiny") writeFileSync(join(ROOT, "rokit.toml"), readFileSync(join(repo, "rokit.toml")));
 		const child = spawn("rojo.exe", ["serve", "\\\\?\\" + PROJECT, "--port", String(PORT)], {
 			cwd,
 			detached: true,

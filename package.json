@@ -6,9 +6,35 @@
   "publisher": "greenviper126",
   "icon": "media/icon.png",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
-  "repository": "https://github.com/greenviper126/RojoHub",
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "roblox",
+    "rojo",
+    "luau",
+    "studio",
+    "worktree"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/greenviper126/RojoHub.git"
+  },
+  "homepage": "https://greenviper126.github.io/RojoHub/",
+  "bugs": {
+    "url": "https://github.com/greenviper126/RojoHub/issues"
+  },
   "engines": {
     "vscode": "^1.101.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Rojo-Hub runs git and Rojo in your projects' folders."
+    }
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -484,7 +510,7 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc -p . --noEmit",
     "test": "npm run build && npm run smoke && tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
-    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --skip-license",
     "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim",
     "smoke": "node tools/smoke-bundle.cjs",

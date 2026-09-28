@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { compareVersions } from "../common/version";
 import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
@@ -24,13 +26,40 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 	return payload;
 }
 
-async function health(): Promise<Health | null> {
+async function anyHealth(): Promise<Health | null> {
 	try {
 		const response = await fetch(base + "/health", { signal: AbortSignal.timeout(1500) });
 		return response.ok ? ((await response.json()) as Health) : null;
 	} catch {
 		return null;
 	}
+}
+
+/** The service's state folder for this Windows user, worked out exactly as src/service/main.ts does. */
+export function expectedHome(): string {
+	return process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
+}
+
+const homeKey = (path: string) => resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+/*
+	Port 34870 is machine-wide, so with two Windows users signed in, the other
+	user's service can be the one answering. Its /health names its home, which
+	is under that user's profile; a service with another home is never used or
+	shut down.
+*/
+function ours(current: Health): boolean {
+	return !current.home || homeKey(current.home) === homeKey(expectedHome());
+}
+
+function otherUserError(current: Health): Error {
+	return new Error(`Port ${SERVICE_PORT} is used by another Windows user's Rojo-Hub (${current.home}). Only one signed-in user can run Rojo-Hub at a time.`);
+}
+
+/** This user's service's health, or null when nothing (or another user's service) answers. */
+async function health(): Promise<Health | null> {
+	const current = await anyHealth();
+	return current && ours(current) ? current : null;
 }
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -43,11 +72,12 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 	not been reloaded since an update must not put the old service back.
 */
 export async function ensureService(serviceScript: string): Promise<Health> {
-	let current = await health();
+	let current = await anyHealth();
+	if (current && !ours(current)) throw otherUserError(current);
 	if (current && compareVersions(current.version, SERVICE_VERSION) >= 0) return current;
 	if (current) {
 		await call("POST", "/shutdown", { stopServing: false }).catch(() => undefined);
-		for (let i = 0; i < 40 && (await health()); i++) await sleep(100);
+		for (let i = 0; i < 40 && (await anyHealth()); i++) await sleep(100);
 	}
 	const child = spawn(process.execPath, [serviceScript], {
 		detached: true,
@@ -57,7 +87,8 @@ export async function ensureService(serviceScript: string): Promise<Health> {
 	});
 	child.unref();
 	for (let i = 0; i < 100; i++) {
-		current = await health();
+		current = await anyHealth();
+		if (current && !ours(current)) throw otherUserError(current);
 		if (current) return current;
 		await sleep(100);
 	}

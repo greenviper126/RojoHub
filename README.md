@@ -15,16 +15,39 @@ branch or Orca worktree without Studio's Rojo connection dropping.
 - **Background service.** A small local service owns the Rojo processes, so closing VS Code windows
   does not stop serving. It listens on `127.0.0.1:34870`.
 
-Full description of every feature, setting and file, for users and for writing user docs:
-[`docs/how-it-works.md`](docs/how-it-works.md). Why it is built this way, with measurements:
+Documentation: [greenviper126.github.io/RojoHub](https://greenviper126.github.io/RojoHub/). The
+full description of every feature, setting and file is in [`docs/how-it-works.md`](docs/how-it-works.md);
+why it is built this way, with measurements, in
 [`specs/001-rojo-hub-foundation.md`](specs/001-rojo-hub-foundation.md).
 
+## Requirements
+
+- Windows 10 or 11.
+- VS Code 1.101 or later.
+- git 2.31 or later on `PATH`.
+- [Rokit](https://github.com/rojo-rbx/rokit), with each project's pinned Rojo installed (`rokit install`
+  in the project). Rojo-Hub runs the Rojo that Rokit installed; one installed by Aftman or Foreman is
+  not found, but `rokit install` reads their `aftman.toml` and `foreman.toml` too.
+- Rojo 7.7 or later, and its Studio plugin.
+
 ## Install
+
+Download `rojo-hub-<version>.vsix` from the
+[GitHub Releases](https://github.com/greenviper126/RojoHub/releases) page and install it, either with
+*Extensions: Install from VSIX...* in VS Code or from a terminal:
+
+```sh
+code --install-extension rojo-hub-<version>.vsix --force
+```
+
+Each VS Code profile has its own extensions, so install it in every profile you use (add
+`--profile "<name>"` to the command). A Marketplace release is planned.
+
+To build the .vsix yourself:
 
 ```sh
 npm install
 npm run package
-code --install-extension rojo-hub-0.15.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 ```
 
 ## Develop
