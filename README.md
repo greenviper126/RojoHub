@@ -22,7 +22,7 @@ Full description of every feature, setting and file, for users and for writing u
 ```sh
 npm install
 npm run package
-code --install-extension rojo-hub-0.14.2.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.15.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 ```
 
 ## Develop

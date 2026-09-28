@@ -1,16 +1,19 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync, type FSWatcher } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { PortSettings, SlotView, Target, TargetOption } from "../common/api";
-import { git, listTargets, listWorktrees, orcaNames, pathKey, primaryCheckout, sameTarget } from "./git";
+import { branchExists, checkBranchName, git, headFile, inOrca, listWorktrees, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, readHead, sameTarget } from "./git";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, repoSeed, savePortSettings, type PortAssignment } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
-import { LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
+import { buildPlace, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
+import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
 
 const READY_TIMEOUT_MS = 30000;
 const PORT_FREE_TIMEOUT_MS = 5000;
+/** A crash this soon after a checkout in the served worktree is put down to that checkout. */
+const CHECKOUT_CRASH_MS = 120000;
 
 interface Runtime {
 	state: SlotView["state"];
@@ -29,6 +32,11 @@ interface Runtime {
 	queue: Promise<unknown>;
 	targetLabel: string;
 	branch: string | null;
+	/** The served worktree's HEAD file and what it said, to notice a checkout made in it while serving. */
+	headFile: string | null;
+	head: string | null;
+	/** The last such checkout, to explain a crash that follows it. */
+	checkout: { branch: string; at: number } | null;
 }
 
 /*
@@ -45,8 +53,16 @@ export class Hub {
 	/** Slots with a port move queued, so a slow restart is not queued twice. */
 	private readonly moving = new Set<string>();
 
+	/** The branch picker's lists, kept warm in the background (spec 002). */
+	readonly targetCache: TargetCache;
+
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
+		this.targetCache = new TargetCache((path) => this.isHubView(path));
+	}
+
+	private trackRepos(): void {
+		this.targetCache.track([...new Set(this.registry.slots.map((slot) => slot.repoPath))]);
 	}
 
 	private slotDir(id: string): string {
@@ -82,6 +98,9 @@ export class Hub {
 				queue: Promise.resolve(),
 				targetLabel: "",
 				branch: null,
+				headFile: null,
+				head: null,
+				checkout: null,
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -106,6 +125,7 @@ export class Hub {
 			if (!slot.seed) slot.seed = await repoSeed(slot.repoPath, slot.projectName);
 		}
 		this.refreshPorts();
+		this.trackRepos();
 		await Promise.all(
 			this.registry.slots.map((slot) =>
 				this.enqueue(slot.id, async () => {
@@ -119,6 +139,7 @@ export class Hub {
 						runtime.log.poll();
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
+						this.trackHead(slot);
 						return;
 					}
 					await this.startLocked(slot).catch(() => undefined);
@@ -137,6 +158,7 @@ export class Hub {
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			if (runtime.state !== "running") continue;
+			this.checkHead(slot);
 			runtime.log.poll();
 			const problems = runtime.log.takeProblems();
 			if (problems.length > 0) runtime.error = problems.slice(-6).join("\n");
@@ -166,8 +188,11 @@ export class Hub {
 		runtime.error = `Rojo stopped unexpectedly${reason ? `: ${reason}` : ""}`;
 		void this.enqueue(slot.id, async () => {
 			if (runtime.state !== "error" || !slot.wantRunning) return;
+			const checkout = runtime.checkout && Date.now() - runtime.checkout.at < CHECKOUT_CRASH_MS ? runtime.checkout : null;
 			runtime.notes = [
-				`Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; reconnect Studio. ${reason ?? ""}`.trim(),
+				checkout && slot.target.kind === "worktree"
+					? `Checking out ${checkout.branch} in ${basename(slot.target.path)} removed a folder Rojo was watching, and Rojo 7.7 crashed (rojo-rbx/rojo#1305). Rojo-Hub restarted it on the same port; reconnect Studio. Picking a branch in Rojo-Hub's picker switches without this.`
+					: `Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; reconnect Studio. ${reason ?? ""}`.trim(),
 			];
 			await this.startLocked(slot);
 		}).catch(() => undefined);
@@ -251,6 +276,7 @@ export class Hub {
 			portSource: this.assignments.get(slot.id)?.source ?? "hash",
 			sessionId: runtime.sessionId,
 			logFile: this.logFile(slot.id),
+			targetsAt: this.targetCache.stamp(slot.repoPath),
 		};
 	}
 
@@ -298,6 +324,7 @@ export class Hub {
 			throw new Conflict(assigned?.error ?? "No port could be assigned");
 		}
 		this.registry.save();
+		this.trackRepos();
 		await this.describeTarget(slot);
 		return this.view(slot);
 	}
@@ -313,12 +340,72 @@ export class Hub {
 			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
 			this.registry.save();
 			this.runtimes.delete(id);
+			this.trackRepos();
 		});
 	}
 
 	targets(id: string): Promise<TargetOption[]> {
+		return this.targetCache.get(this.registry.get(id).repoPath);
+	}
+
+	/** Fetches every remote of the slot's repo (pruning deleted branches), then reads the picker's list again. */
+	async fetch(id: string): Promise<TargetOption[]> {
 		const slot = this.registry.get(id);
-		return listTargets(slot.repoPath, this.isHubView);
+		await git(slot.repoPath, ["fetch", "--all", "--prune"], { timeout: 120000 });
+		await this.targetCache.refresh(slot.repoPath);
+		return this.targetCache.get(slot.repoPath);
+	}
+
+	/*
+		A new branch from `base` in a folder of its own, so it can be edited, and
+		the slot switched to it: an Orca worktree when the repo is in Orca, else
+		a git worktree beside the repo (<repo>-worktrees/<name>). Never a
+		checkout in a folder rojo is serving (see prepareTree).
+	*/
+	async createBranch(id: string, name: string, base: string): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git" }> {
+		const slot = this.registry.get(id);
+		const clean = await checkBranchName(slot.repoPath, name.trim());
+		if (await branchExists(slot.repoPath, clean)) throw new Conflict(`A branch named ${clean} already exists; pick it under Local branches.`);
+		try {
+			await git(slot.repoPath, ["rev-parse", "--verify", `${base}^{commit}`]);
+		} catch {
+			throw new NotFound(`${base} is not a branch or commit of ${basename(slot.repoPath)}`);
+		}
+		let path: string;
+		let branch = clean;
+		let via: "orca" | "git";
+		if (await inOrca(slot.repoPath)) {
+			const made = await orcaCreateWorktree(slot.repoPath, clean, base);
+			path = made.path;
+			branch = made.branch ?? clean;
+			via = "orca";
+		} else {
+			const parent = join(dirname(slot.repoPath), `${basename(slot.repoPath)}-worktrees`);
+			path = join(parent, clean.replace(/[\\/]+/g, "-"));
+			if (existsSync(path)) throw new Conflict(`${path} already exists`);
+			mkdirSync(parent, { recursive: true });
+			await git(slot.repoPath, ["worktree", "add", "-b", clean, path, base]);
+			via = "git";
+		}
+		void this.targetCache.refresh(slot.repoPath).catch(() => undefined);
+		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via };
+	}
+
+	/*
+		Builds a place file of exactly what the slot serves: its slot file, so a
+		borrowed project file and Packages from the primary checkout match what
+		Studio gets. A stopped slot has its files written first, as a start would.
+	*/
+	async build(id: string, output: string): Promise<{ output: string; bytes: number }> {
+		const slot = this.registry.get(id);
+		const rojo = resolveRojo(slot.repoPath);
+		if (!rojo.ok) throw new Conflict(rojo.error);
+		await this.enqueue(id, async () => {
+			if (this.runtime(id).state !== "running") this.writeFiles(slot, await this.prepareTree(slot, slot.target));
+		});
+		mkdirSync(dirname(output), { recursive: true });
+		await buildPlace(rojo.binary, this.slotFile(slot.id), output, slot.repoPath);
+		return { output, bytes: statSync(output).size };
 	}
 
 	start(id: string): Promise<SlotView> {
@@ -361,6 +448,7 @@ export class Hub {
 			runtime.log.poll();
 			runtime.log.takeProblems();
 			this.watchBorrowed(slot, tree);
+			this.trackHead(slot);
 			await this.describeTarget(slot);
 			if (runtime.state !== "running") await this.collectViews(slot);
 			return this.view(slot);
@@ -369,6 +457,7 @@ export class Hub {
 
 	async shutdown(stopServing: boolean): Promise<void> {
 		if (this.poller) clearInterval(this.poller);
+		this.targetCache.dispose();
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			runtime.watcher?.close();
@@ -406,6 +495,7 @@ export class Hub {
 			slot.wantRunning = true;
 			this.registry.save();
 			this.watchBorrowed(slot, tree);
+			this.trackHead(slot);
 			runtime.log.poll();
 			runtime.log.takeProblems();
 			await this.describeTarget(slot);
@@ -565,6 +655,31 @@ export class Hub {
 			}
 		}
 		await git(slot.repoPath, ["worktree", "prune"]).catch(() => undefined);
+	}
+
+	private trackHead(slot: SlotRecord): void {
+		const runtime = this.runtime(slot.id);
+		runtime.headFile = slot.target.kind === "worktree" ? headFile(slot.target.path) : null;
+		runtime.head = runtime.headFile ? readHead(runtime.headFile) : null;
+	}
+
+	/*
+		A checkout made in the served worktree (in a terminal, Source Control,
+		Orca) changes what Studio gets, and when it removes a folder Rojo 7.7
+		crashes. The Hub cannot stop it, so it says what happened.
+	*/
+	private checkHead(slot: SlotRecord): void {
+		const runtime = this.runtime(slot.id);
+		if (!runtime.headFile || slot.target.kind !== "worktree") return;
+		const now = readHead(runtime.headFile);
+		if (!now || now === runtime.head) return;
+		const before = runtime.head;
+		runtime.head = now;
+		runtime.checkout = { branch: now, at: Date.now() };
+		runtime.notes = [
+			`${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Picking a branch in Rojo-Hub's picker switches without touching the folder.`,
+		];
+		void this.describeTarget(slot);
 	}
 
 	private async describeTarget(slot: SlotRecord): Promise<void> {

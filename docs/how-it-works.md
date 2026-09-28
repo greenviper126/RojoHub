@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.14.2, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.15.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -127,8 +127,8 @@ workspaces among workspaces, groups among groups. The order is saved in the serv
 window shows it, and **it never changes a port**: which project keeps a port when two collide goes by
 the order projects were added, which reordering does not touch.
 
-**Projects** (the header shows how many are serving, and `+` adds a project). Each project is a
-card:
+**Projects** (the header shows how many are serving; the filter icon filters the list and `+` adds
+a project). Each project is a card:
 
 - a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
   marks the project this VS Code window is open on);
@@ -139,11 +139,24 @@ card:
   *Worktrees* (under Orca's names), *Local branches* and *Remote branches* (a cloud icon; only those
   with no local branch of the same name), each with how many it holds. Branches show when they last
   had a commit. The current one is ticked. Clicking one switches; Enter picks the first match,
-  Escape closes it. Studio stays connected;
-- **warnings** (yellow) and **errors** (red), in full;
+  Escape closes it. Studio stays connected. The picker opens with its list already drawn (see
+  [Switching branches](#8-switching-branches)); its **Fetch** button (⟳, in the search box) and
+  **New branch** row are described there too;
+- **warnings** (yellow) and **errors** (red), in full. An error from Rojo shows its first line, then
+  up to the last five lines Rojo logged about it, with *Show full log*;
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
-  Studio), *Starting…*, *Stopped* or *Error*), buttons for the Rojo log and for removing the project (which asks first),
-  and **Start** or **Stop** at the right.
+  Studio), *Starting…*, *Stopped* or *Error*), a **⋯** menu, and **Start** or **Stop** at the right.
+  The ⋯ menu has *Build place file…*, *Show Rojo log* and *Remove from Rojo-Hub…* (which asks
+  first).
+
+**Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
+borrowed project file and packages match what Studio gets. A save dialog opens on
+`build/<project>-<branch>.rbxl` in the repo; a spinner shows on the card while it builds, and when it
+is done a message gives the size and offers *Reveal in File Explorer*.
+
+**Filter** (the filter icon in the Projects header) opens a box above the cards. Typing narrows
+the list to projects whose name, branch or port match every word; workspaces with no match hide
+and the rest open. Escape or ✕ clears it. The filter is not remembered.
 
 A **folded** card is one row: grip, arrow, light, name, a warning or error icon if it has one, the
 port, and a start or stop button.
@@ -342,6 +355,39 @@ closing. Rojo-Hub counts them; that count drives the filled/outlined icon and th
 - **Branches**: every local branch not checked out in a worktree, and remote branches with no
   local counterpart. A branch is served from a **view** (below).
 
+In the panel, local and remote branches are listed separately, as in Source Control.
+
+**The list is kept up to date in the background.** The service keeps each registered repo's list in
+memory and watches the repo's `.git` folder: a new or deleted branch, a fetch, a new worktree or a
+checkout anywhere updates the list within about a second, whoever made it (a terminal, Source
+Control, Orca). Orca's worktree names are read again when the list is more than a minute old. The
+picker therefore opens with its list drawn, and if a newer list arrives while it is open, the list
+updates in place and keeps what you typed.
+
+**Fetch** (⟳ in the picker's search box) runs `git fetch --all --prune` for the repo, for branches
+pushed since you last fetched. It never asks for a password; a failure (offline, no access) shows in
+the picker. Rojo-Hub does not fetch by itself.
+
+**New branch.** The last row of the picker is *New branch…*; when what you typed in the search box
+is not an existing branch, it reads *New branch "‹what you typed›"*. It opens a small form: the
+name and **From** (what the project serves now, then local, then remote branches). *Create* makes
+the branch in a folder of its own so you can edit it, and switches the project to it; Studio stays
+connected:
+
+- when the repo is in **Orca**, as an Orca worktree (`orca worktree create`, setup skipped). Orca
+  names the branch `<your git user>/<name>`;
+- otherwise as a git worktree beside the repo, in `<repo>-worktrees/<name>`.
+
+A name git does not allow, a branch that already exists, or a base that does not exist is pointed out
+in the form before anything is made. When it is done, a message offers *Open in New Window*.
+
+**Checking out in a served worktree.** Switching in the picker never touches your folders. If you
+check out another branch *inside* a worktree that is being served (in a terminal, Source Control or
+Orca), Studio gets that branch, and the card says so: *‹branch› was checked out in ‹folder› while it
+was being served*. If the checkout removed a folder, Rojo 7.7 crashes (see
+[Known limits](#14-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
+card says the checkout caused it, and that Studio needs reconnecting.
+
 ### What happens on a switch
 
 Rojo-Hub never restarts Rojo to switch. Each project is served from a small generated project
@@ -469,7 +515,10 @@ debugging.
 | `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path` |
 | `DELETE /slots/:id` | | Remove a project |
 | `POST /slots/:id/start`, `/stop` | | Start or stop serving |
-| `GET /slots/:id/targets` | | Worktrees and branches it can serve |
+| `GET /slots/:id/targets` | | Worktrees and branches it can serve, from the service's cache |
+| `POST /slots/:id/fetch` | | `git fetch --all --prune`, then the fresh list |
+| `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
+| `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output` |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{kind:"worktree",path}` or `{kind:"branch",ref}` |
 | `GET /groups` | | Every group |
 | `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
@@ -502,17 +551,18 @@ view worktrees it registers with git (visible in `git worktree list`) and remove
 
 ## 12. Settings
 
-Both are **user settings that apply to every project and window**; a workspace cannot override them.
+All are **user settings that apply to every project and window**; a workspace cannot override them.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to any project: numbers (`35000`) or ranges (`"35000-35010"`). 34872 is always excluded. |
+| `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |
 
-The panel's **Port settings** section edits them, as does *Open Menu → Port Settings*. Changes apply
+The panel's **Port settings** section edits the two port settings, as does *Open Menu → Port Settings*. Changes apply
 within a few seconds.
 
-**Where they are saved.** Both are VS Code user settings, written for you when you press *Save* or
+**Where they are saved.** The port settings are VS Code user settings, written for you when you press *Save* or
 *Reset*. They are marked as applying to every VS Code profile, so VS Code keeps them in the main
 user `settings.json` (`%APPDATA%\Code\User\settings.json`) and every profile shares them. *Reset*
 removes `rojoHub.portRange` from that file, so the default applies again. The service keeps a copy of
@@ -530,7 +580,8 @@ bar has Open Menu, Refresh and Collapse All, and its `…` menu has Add Project,
 fix pending in PR #1319). It happens with plain `rojo serve` too. Anything that removes a folder
 containing files under a served tree triggers it: deleting it in Explorer, a `git checkout` or
 rebase that removes a folder, deleting a worktree the project served earlier in the same session.
-Rojo-Hub restarts Rojo on the same port and tells you; reconnect Studio.
+Rojo-Hub restarts Rojo on the same port and tells you (naming the checkout when one caused it);
+reconnect Studio. Switching with the picker instead of checking out in the served folder avoids it.
 
 **"Rojo-Hub could not start"**: the background service did not come up. The message says why;
 `%LOCALAPPDATA%\RojoHub\service.log` has more. Your projects and groups are still saved. Fix the

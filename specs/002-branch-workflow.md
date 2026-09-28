@@ -1,7 +1,9 @@
 # 002 — Branch workflow and project tools
 
-Status: **draft, waiting on Viper's answers to the design questions below**. Builds on 001 and on
-the 0.14 panel (PR #3).
+Status: **implemented in 0.15.0**. Viper asked for whatever helps a user most, so the defaults
+below were taken, and the card's less frequent actions moved into a ⋯ menu to make room for Build.
+Tested end to end against a real Rojo 7.7 and temp git repos (not Orca, not Studio; see Testing).
+Builds on 001 and on the 0.14 panel (PR #3).
 
 ## Problem
 
@@ -26,64 +28,83 @@ when Studio drops its connection.
 ## Acceptance criteria
 
 ### Instant branch picker
-- [ ] The service keeps each registered repo's target list in memory and returns it without running
+- [x] The service keeps each registered repo's target list in memory and returns it without running
       git or `orca`. It refreshes the list in the background:
       - when the repo's refs or worktrees change (watching `.git/HEAD`, `.git/refs`,
         `.git/packed-refs` and `.git/worktrees`),
       - after a fetch, a new branch or a new worktree,
       - and at least every 60 s for Orca's names.
-- [ ] The picker opens with its list already drawn, with no spinner once the list has loaded once in
+- [x] The picker opens with its list already drawn, with no spinner once the list has loaded once in
       the session. If a refresh finishes while the picker is open, the list updates in place and
       keeps the search text and scroll position.
-- [ ] The first request for a repo with no cached list still works. It waits for the list, as today.
+- [x] The first request for a repo with no cached list still works. It waits for the list, as today.
 
 ### Fetch
-- [ ] The picker's search row has a Fetch button. It runs `git fetch --prune` on the repo and shows
+- [x] The picker's search row has a Fetch button. It runs `git fetch --prune` on the repo and shows
       a spinner while fetching. When it finishes, the list refreshes. A failure (offline, auth)
       shows in the picker and does not close it.
 
 ### New branch or worktree
-- [ ] The picker has a *New branch…* row at the bottom (and *New branch "‹search›"* when the search
+- [x] The picker has a *New branch…* row at the bottom (and *New branch "‹search›"* when the search
       matches nothing). It asks for a name and a base, which defaults to what the project serves
       now. It creates the branch and switches the project to it. (See question 3 for where the
       files live.)
-- [ ] Names git refuses (`git check-ref-format --branch`) and names that already exist are pointed
+- [x] Names git refuses (`git check-ref-format --branch`) and names that already exist are pointed
       out before anything is created.
 
 ### Checkout in a served worktree
-- [ ] When the HEAD of a worktree that a running project serves changes, the card says so plainly,
+- [x] When the HEAD of a worktree that a running project serves changes, the card says so plainly,
       e.g. *main was checked out in TheLaundryShift while it was served*. When Rojo crashed because
       of it, the card says so too: *Rojo restarted on the same port; reconnect Studio*. The note
       clears on the next start, stop or switch, like the Hub's other notes.
-- [ ] (See question 4) Optionally, when the extension sees a checkout coming from VS Code's own Git
+- [x] (See question 4) Optionally, when the extension sees a checkout coming from VS Code's own Git
       in a served worktree, it offers to serve that branch from a Hub copy first, so Studio stays
       connected.
 
 ### Build a place file
-- [ ] Each card has *Build place file…* (in a ⋯ menu, beside log and remove). It runs the pinned
+- [x] Each card has *Build place file…* (in a ⋯ menu, beside log and remove). It runs the pinned
       `rojo build` on exactly what the project serves (the slot file, so borrowed trees and
       Packages from the primary checkout match what Studio gets). A save dialog opens, prefilled
       with `<project>-<branch>.rbxl` in the repo's `build/` folder. On success it offers *Reveal*.
 
 ### Filter
-- [ ] The Projects header has a filter (search icon). Typing narrows cards by project name, branch
+- [x] The Projects header has a filter (search icon). Typing narrows cards by project name, branch
       or port. Workspaces with no match hide. Escape clears it. The filter is not remembered across
       reloads.
 
 ### Error detail
-- [ ] An error card shows up to the last 5 problem lines from Rojo's log in a monospace block, with
+- [x] An error card shows up to the last 5 problem lines from Rojo's log in a monospace block, with
       *Show full log*. A single-line error looks as it does today.
 
 ### Studio disconnect notice
-- [ ] Optional, off by default (`rojoHub.notifyOnStudioDisconnect`). When a serving project's
+- [x] Optional, off by default (`rojoHub.notifyOnStudioDisconnect`). When a serving project's
       Studio connections go from one or more to zero, one window shows an information message
       naming the project. Other windows stay quiet: the message comes from the window that owns
       the service.
 
 ### Sourcemaps (see question 6)
-- [ ] Decided by question 6 below: either dropped, or limited to Hub views.
+- [x] Decided by question 6 below: either dropped, or limited to Hub views.
 
-## Measurements to take before building
+## Measurements (2026-09-27)
+
+- **Picker latency, before**: `GET /slots/:id/targets` took 0.25–0.35 s on TheLaundryShift and
+  VluxyAI, 0.22 s of it `orca worktree list`. **After**: served from memory; the e2e test asserts
+  under 200 ms including HTTP, and the panel draws its last list before the answer arrives. On the
+  live 0.15.0 service: about 1 ms for TheLaundryShift, VluxyAI and VluxySF.
+- **Watching .git on Windows**: a recursive `fs.watch` on a clone's `.git` reported a new branch,
+  `git fetch`, `git pack-refs`, `git worktree add` and a checkout in a linked worktree, each within
+  ~30 ms. Relevant names: `HEAD`, `packed-refs`, `refs/…`, `worktrees/<name>[/HEAD]`; everything else
+  (`index`, `logs/`, `objects/`, `*.lock`, `FETCH_HEAD`, `ORIG_HEAD`, `AUTO_MERGE`) is ignored,
+  because VS Code's own `git status` rewrites the index constantly.
+- **VS Code's Git API**: not measured in a running VS Code. Its API has no event before a checkout
+  (only `onDidChange` after state changes), and git itself updates the working tree before HEAD,
+  so "offer first" was not built. The after-the-fact note is.
+- **`orca worktree create`**: probed on RojoHub's own repo (then removed with `orca worktree rm`):
+  1.6 s with `--setup skip`; the answer's `result.worktree.path` is where it went, and the branch
+  is `refs/heads/<git user>/<name>`, not `<name>`. Orca's CLI cannot remove a repo, so no throwaway
+  repo was registered in Orca.
+
+## Measurements planned before building
 
 1. Picker latency before and after, from click to list drawn (panel timing plus service timing).
 2. How big a `.git/refs` watch is on Windows for TheLaundryShift (count of refs and worktrees),
@@ -101,7 +122,21 @@ when Studio drops its connection.
 - Merging, pulling or pushing from the panel.
 - Anything that restarts a running rojo during a switch (001's rule stands).
 
-## Design questions (defaults in bold)
+## Testing
+
+- `npm test`: 30 tests. The new e2e test drives the real service: the list is read in the
+  background after registering and comes back in under 200 ms; a branch made with plain git shows
+  up by itself; Fetch lists a branch pushed to the remote since; New branch refuses a bad name, an
+  existing branch and a missing base, then makes `<repo>-worktrees/feat-new-thing` on
+  `feat/new-thing` and switches to it; Build writes a place file while stopped; a checkout in the
+  served worktree is noted, the label follows it, and Rojo keeps running.
+- Unit tests for the `.git` change filter and for reading a primary and a linked worktree's HEAD.
+- The panel (picker with Fetch, New branch form, ⋯ menu, filter, error detail) was screenshot in
+  headless Chrome with `tools/panel-preview.html`.
+- **Not tried**: New branch through Orca end to end (only the CLI probe above), a fetch that needs
+  credentials, the disconnect notice with a real Studio, anything in a real Studio.
+
+## Design questions (answered: defaults taken)
 
 1. **Picker cache scope.** **The service holds the cache**, so every window shares it and it
    survives window reloads. The panel also redraws its last list at once while asking for a fresh

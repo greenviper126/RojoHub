@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -72,6 +72,9 @@ export const client = {
 	start: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/start`),
 	stop: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/stop`),
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
+	fetch: (id: string) => call<TargetOption[]>("POST", `/slots/${encodeURIComponent(id)}/fetch`),
+	createBranch: (id: string, name: string, base: string) => call<BranchResult>("POST", `/slots/${encodeURIComponent(id)}/branch`, { name, base }),
+	build: (id: string, output: string) => call<{ output: string; bytes: number }>("POST", `/slots/${encodeURIComponent(id)}/build`, { output }),
 	switch: (id: string, target: Target) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/switch`, { target }),
 	groups: () => call<GroupView[]>("GET", "/groups"),
 	createGroup: (name: string, slotIds: string[]) => call<GroupView>("POST", "/groups", { name, slotIds }),

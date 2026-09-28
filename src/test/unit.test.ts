@@ -9,7 +9,8 @@ import { expandGroup, pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
-import { parseWorktrees } from "../service/git";
+import { headFile, parseWorktrees, readHead } from "../service/git";
+import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
@@ -340,4 +341,23 @@ test("decodeInfo reads Rojo 7.7's MessagePack and older Rojo's JSON", () => {
 	// {"sessionId":"s2","projectName":"TLS"} in MessagePack
 	const packed = new Uint8Array([0x82, 0xa9, ...new TextEncoder().encode("sessionId"), 0xa2, 0x73, 0x32, 0xab, ...new TextEncoder().encode("projectName"), 0xa3, 0x54, 0x4c, 0x53]);
 	assert.deepEqual(decodeInfo(packed, "application/msgpack"), { sessionId: "s2", projectName: "TLS" });
+});
+
+test("isRefChange keeps ref, HEAD and worktree changes and ignores the index, logs, objects and locks", () => {
+	for (const name of ["HEAD", "packed-refs", "refs\\heads\\main", "refs/remotes/origin/x", "worktrees", "worktrees/wt2", "worktrees\\wt2\\HEAD"]) assert.ok(isRefChange(name), name);
+	for (const name of ["index", "FETCH_HEAD", "ORIG_HEAD", "logs/HEAD", "objects/ab/cdef", "refs/heads/main.lock", "packed-refs.lock", "worktrees/wt2/index", "worktrees/wt2/HEAD.lock"])
+		assert.ok(!isRefChange(name), name);
+});
+
+test("headFile and readHead find a worktree's HEAD, primary or linked", () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-head-"));
+	mkdirSync(join(dir, "main", ".git"), { recursive: true });
+	writeFileSync(join(dir, "main", ".git", "HEAD"), "ref: refs/heads/feature/x\n");
+	assert.equal(headFile(join(dir, "main")), join(dir, "main", ".git", "HEAD"));
+	assert.equal(readHead(headFile(join(dir, "main"))!), "feature/x");
+	mkdirSync(join(dir, "main", ".git", "worktrees", "wt"), { recursive: true });
+	writeFileSync(join(dir, "main", ".git", "worktrees", "wt", "HEAD"), "0123456789abcdef0123456789abcdef01234567\n");
+	mkdirSync(join(dir, "wt"), { recursive: true });
+	writeFileSync(join(dir, "wt", ".git"), `gitdir: ${join(dir, "main", ".git", "worktrees", "wt")}\n`);
+	assert.equal(readHead(headFile(join(dir, "wt"))!), "01234567", "a detached HEAD reads as the short commit");
 });
