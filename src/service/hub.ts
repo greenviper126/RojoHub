@@ -397,7 +397,7 @@ export class Hub {
 			runtime.toolWarnings = [];
 			if (olderThan77(rojo.version)) {
 				runtime.toolWarnings = [
-					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}). Live branch switching and the Studio-connected light were only verified on Rojo 7.7; update the pin to be sure.`,
+					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}), which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it. The Studio-connected light also needs Rojo 7.7.`,
 				];
 			}
 			await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));

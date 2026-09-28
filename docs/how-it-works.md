@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.11.2, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.11.3, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -223,8 +223,12 @@ because that command starts the real Rojo as a console program of its own.)
   …\VluxySF\aftman.toml) is not installed. Run "rokit install" in …\VluxySF, or pin a Rojo version you
   have.*
 - If no toolchain file pins Rojo, starting says so and suggests `rokit add rojo-rbx/rojo`.
-- A project pinned to a Rojo older than 7.7 starts, with a warning: live branch switching and the
-  Studio-connected light were only verified on 7.7 (older Rojo talks to Studio differently).
+- A project pinned to a Rojo older than 7.7 starts, with a warning. **Rojo 7.7 is the first version
+  that speaks protocol 5, and the Studio plugin only connects to a server with the same protocol**,
+  so a 7.7 plugin refuses Rojo 7.0–7.6 (protocol 4) with *"it's using a different protocol version,
+  and is incompatible"*. Since one Studio plugin serves every place, keep every project on Rojo 7.7.
+  Live switching itself was measured working on 7.3.0; the Studio-connected light needs 7.7.
+  Older Rojo answers Rojo-Hub's status check in JSON rather than MessagePack; both are read.
 
 **Stop Serving** stops that project's Rojo only; other projects and any Rojo you started by hand
 are left alone.

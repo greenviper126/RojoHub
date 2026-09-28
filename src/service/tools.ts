@@ -89,7 +89,12 @@ export function resolveRojo(projectDir: string, rokitHome = process.env.ROKIT_RO
 	return { ok: false, error: `No rokit.toml, aftman.toml or foreman.toml pins Rojo for ${projectDir}. Add one with "rokit add rojo-rbx/rojo".` };
 }
 
-/** True for versions older than 7.7, which Rojo-Hub's live switching and connection count were not measured on. */
+/*
+	True for versions older than 7.7. They speak Rojo protocol 4 (7.7 is the
+	first with 5, checked against each release's plugin Config.lua), so the
+	7.7 Studio plugin refuses them. Live switching itself was measured working
+	on 7.3.0 too; the Studio-connected light needs 7.7's websocket log lines.
+*/
 export function olderThan77(version: string): boolean {
 	const [major, minor] = version.split(".").map((part) => Number(part));
 	return major < 7 || (major === 7 && minor < 7);

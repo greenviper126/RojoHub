@@ -14,7 +14,7 @@ import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
 import { slugify } from "../service/registry";
-import { countConnections } from "../service/rojo";
+import { countConnections, decodeInfo } from "../service/rojo";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -332,4 +332,12 @@ test("the port range default is the same in package.json and the code", () => {
 	};
 	assert.equal(manifest.contributes.configuration.properties["rojoHub.portRange"].default, DEFAULT_PORT_RANGE);
 	assert.deepEqual([parsePortSettings({}).first, parsePortSettings({}).last], DEFAULT_PORT_RANGE.split("-").map(Number));
+});
+
+test("decodeInfo reads Rojo 7.7's MessagePack and older Rojo's JSON", () => {
+	const json = new TextEncoder().encode('{"sessionId":"s1","serverVersion":"7.3.0","projectName":"vluxysf"}');
+	assert.equal(decodeInfo(json, "application/json").projectName, "vluxysf");
+	// {"sessionId":"s2","projectName":"TLS"} in MessagePack
+	const packed = new Uint8Array([0x82, 0xa9, ...new TextEncoder().encode("sessionId"), 0xa2, 0x73, 0x32, 0xab, ...new TextEncoder().encode("projectName"), 0xa3, 0x54, 0x4c, 0x53]);
+	assert.deepEqual(decodeInfo(packed, "application/msgpack"), { sessionId: "s2", projectName: "TLS" });
 });
