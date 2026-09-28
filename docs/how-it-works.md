@@ -113,6 +113,11 @@ first workspace (or, with no workspaces, the first project card); the rest start
 you fold or open is remembered. Opening a project from elsewhere (a group, Active ports, the status
 bar) unfolds its card and its workspace.
 
+**Collapse All** (the icon at the top right of the panel's title bar, as in the Explorer) folds
+everything except what is running: Projects and Groups stay open, and inside them the cards of
+serving or starting projects, the workspaces that hold them, and running groups stay open. Every
+other card and group folds, and Active ports and Port settings fold.
+
 The section headers stay at the top while their section scrolls under them, and the footer stays at
 the bottom of the panel.
 
@@ -517,7 +522,7 @@ the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projec
 
 Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). Only **Rojo-Hub:
 Open Menu** appears in the command palette; it offers the same actions as menus. The panel's title
-bar has Open Menu and Refresh, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
+bar has Open Menu, Refresh and Collapse All, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
 
 ## 14. Known limits and troubleshooting
 
