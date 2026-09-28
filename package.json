@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -150,6 +150,26 @@
         "icon": "$(collapse-all)"
       },
       {
+        "command": "rojoHub.fold.expand",
+        "title": "Expand",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.fold.collapse",
+        "title": "Collapse",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.fold.collapseOthers",
+        "title": "Collapse Others",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.fold.expandAll",
+        "title": "Expand All",
+        "category": "Rojo-Hub"
+      },
+      {
         "command": "rojoHub.stopAll",
         "title": "Stop All",
         "category": "Rojo-Hub",
@@ -201,7 +221,45 @@
           "group": "zz"
         }
       ],
+      "webview/context": [
+        {
+          "command": "rojoHub.fold.expand",
+          "when": "webviewId == 'rojoHub.panel' && rojoHubFold == 'folded'",
+          "group": "fold@1"
+        },
+        {
+          "command": "rojoHub.fold.collapse",
+          "when": "webviewId == 'rojoHub.panel' && rojoHubFold == 'open'",
+          "group": "fold@1"
+        },
+        {
+          "command": "rojoHub.fold.collapseOthers",
+          "when": "webviewId == 'rojoHub.panel' && rojoHubFold",
+          "group": "fold@2"
+        },
+        {
+          "command": "rojoHub.fold.expandAll",
+          "when": "webviewId == 'rojoHub.panel' && rojoHubFold",
+          "group": "fold@3"
+        }
+      ],
       "commandPalette": [
+        {
+          "command": "rojoHub.fold.expand",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.fold.collapse",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.fold.collapseOthers",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.fold.expandAll",
+          "when": "false"
+        },
         {
           "command": "rojoHub.projectMenu",
           "when": "false"

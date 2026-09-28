@@ -828,6 +828,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem);
 
 	serviceScript = context.asAbsolutePath("dist/service.js");
+	const postFold = (argument: unknown, how: "expand" | "collapse" | "others" | "all") => {
+		const { rojoHubFoldKey: key, rojoHubFoldList: list } = (argument ?? {}) as { rojoHubFoldKey?: unknown; rojoHubFoldList?: unknown };
+		if (typeof key === "string" && typeof list === "string") panel.post({ type: "fold", key, list, how });
+	};
 	const commands: Record<string, (argument?: unknown) => unknown> = {
 		"rojoHub.openMenu": () => openMenu(),
 		"rojoHub.projectMenu": (argument) => (typeof argument === "string" ? projectMenu(argument) : openMenu()),
@@ -877,6 +881,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			});
 		},
 		"rojoHub.collapseAll": () => panel.post({ type: "collapse" }),
+		// The panel's right-click menu on a foldable header; the argument is that header's data-vscode-context.
+		"rojoHub.fold.expand": (argument) => postFold(argument, "expand"),
+		"rojoHub.fold.collapse": (argument) => postFold(argument, "collapse"),
+		"rojoHub.fold.collapseOthers": (argument) => postFold(argument, "others"),
+		"rojoHub.fold.expandAll": (argument) => postFold(argument, "all"),
 		"rojoHub.copyAgentCommands": () => copySetup("commands"),
 		"rojoHub.copyAgentPrompt": () => copySetup("prompt"),
 		"rojoHub.stopAll": async () => {

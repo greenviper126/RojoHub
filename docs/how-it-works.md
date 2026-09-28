@@ -122,8 +122,25 @@ everything except what is running: Projects and Groups stay open, and inside the
 serving or starting projects, the workspaces that hold them, and running groups stay open. Every
 other card and group folds, and Active ports and Port settings fold.
 
+**Right-clicking a header** that folds (a section, a workspace, a project card or a group) opens a
+menu in place of Cut/Copy/Paste: **Expand** or **Collapse** for that header, **Collapse Others**
+(folds its neighbours and opens it) and **Expand All** (opens it and its neighbours). Expand and
+Expand All open everything inside as well: expanding Projects opens every workspace and project card
+in it, and expanding Groups opens every group. Clicking a chevron still opens just that one. Neighbours are
+the headers in the same list: the sections, the workspaces, the cards in one workspace, or the
+groups. Right-clicking anywhere else in the panel still shows Copy. Workspace headers have no menu
+while the Projects filter is open, since every matching workspace is open then.
+
 The section headers stay at the top while their section scrolls under them, and the footer stays at
 the bottom of the panel.
+
+In a narrow sidebar the panel drops things in steps so names stay readable and nothing runs past a
+card's edge. Below about 280px: counts lose their words ("2/5"), the footer reads "3/5", ports lose
+`localhost`, Stop and Start and Agent access's Copy commands and Copy prompt become icons, the window badges, a folded card's error or warning icon
+(the card stays tinted) and "not added"/"shown above" hide, and a group's rename and delete show
+only on hover. Below about 230px: ports leave project headers and group members (Active ports still
+lists them), the footer's Refresh hides and Stop all becomes an icon. VS Code lets a sidebar be dragged as narrow as you like,
+so below 170px the panel stops shrinking and scrolls sideways.
 
 **Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) that
 appears in their left margin when the pointer is on them; drag one onto another to move it before or after it. Cards move within their workspace,

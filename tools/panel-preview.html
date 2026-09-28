@@ -181,6 +181,13 @@ window.acquireVsCodeApi = () => ({
 if (params.get("picker") === "1") setTimeout(() => document.querySelector('[data-action="picker"]')?.click(), 50);
 // ?collapse=1 presses the title bar's Collapse All.
 if (params.get("collapse") === "1") setTimeout(() => window.postMessage({ type: "collapse" }, "*"), 60);
+// ?fold=how:key sends what a header's right-click menu sends, e.g. ?fold=others:card:b or ?fold=collapse:group:g1
+if (params.get("fold")) setTimeout(() => {
+	const [how, ...rest] = params.get("fold").split(":");
+	const key = rest.join(":");
+	const list = document.querySelector(`[data-fold-key="${CSS.escape(key)}"]`)?.dataset.foldList ?? "";
+	window.postMessage({ type: "fold", key, list, how }, "*");
+}, 60);
 // ?click=a,b clicks the first element with each data-action in turn, e.g. ?click=solo-group,remove-member
 for (const [index, action] of (params.get("click") ?? "").split(",").filter(Boolean).entries())
 	setTimeout(() => document.querySelector(`[data-action="${action}"]`)?.click(), 80 + index * 40);
