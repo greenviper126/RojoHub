@@ -492,10 +492,10 @@ function fileTag(slot: SlotView): string {
 	return `<span class="file-tag" title="Serves ${escape(slot.projectFile)}">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}</span>`;
 }
 
-/** A port chip that copies localhost:<port>; it shows a tick for a moment after a copy. */
+/** A port chip that copies the port number; it shows a tick for a moment after a copy. */
 function portChip(slot: SlotView, host = false): string {
 	const copied = ui.copied === slot.id;
-	const title = copied ? "Copied" : `Copy localhost:${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}`;
+	const title = copied ? "Copied" : `Copy ${slot.port}${slot.portSource === "servePort" ? " (from servePort)" : ""}`;
 	return `<button class="port${copied ? " copied" : ""}" data-action="copy" data-id="${escape(slot.id)}" title="${title}"><span>${host ? `<span class="host">localhost</span>` : ""}:${slot.port}</span>${icon(copied ? "check" : "copy", "port-icon")}</button>`;
 }
 

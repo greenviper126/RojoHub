@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -82,7 +82,7 @@
       },
       {
         "command": "rojoHub.copyAddress",
-        "title": "Copy Address",
+        "title": "Copy Port",
         "category": "Rojo-Hub"
       },
       {

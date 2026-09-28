@@ -160,7 +160,7 @@ a project). Each project is a card:
   marks the project this VS Code window is open on). Folded, a project serving a file other than
   `default.project.json` shows that file's name in a small tag after its own (`test` for
   `test.project.json`);
-- the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked; it shows a
+- the **port** (`:35045`) at the top right, which copies the number (`35045`) when clicked; it shows a
   copy icon on hover and a green tick for a moment after copying;
 - **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
   the branch picker inside the card: a search box, then, like Source Control's branch picker,
@@ -227,7 +227,7 @@ projects are serving (green when all are). Inside:
   a row under the name; the projects stay). Both show when the pointer is on the card.
 
 **Active ports** (below Groups; the header shows how many): every project serving right now, lowest
-port first, with its status light, name and branch, its address `localhost:<port>` (click to copy)
+port first, with its status light, name and branch, its address `localhost:<port>` (click to copy the port number)
 which copies it when clicked. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
 serving* when nothing is.
 
@@ -323,7 +323,7 @@ pick `test.project.json` (or whatever builds a place with the library and its te
   file…*. A branch or worktree without that file shows an error on the card until you switch back or
   pick another file.
 
-**A project's menu**: Switch Branch…, Start or Stop Serving, Copy Address (`localhost:<port>`),
+**A project's menu**: Switch Branch…, Start or Stop Serving, Copy Port (just the number),
 Project File…, Show Rojo Log, Remove Project. Any warning shows at the top of the menu.
 
 **Start Serving** runs `rojo serve` in the primary checkout's folder, with the Rojo version the
@@ -404,7 +404,7 @@ so; add that port to `rojoHub.excludedPorts` and the project moves.
 ## 7. Connecting Studio
 
 1. Open the place in Studio.
-2. In the Rojo plugin, set the address to `localhost` and the project's port (*Copy Address*).
+2. In the Rojo plugin, set the address to `localhost` and the project's port (*Copy Port*).
 3. Connect.
 4. In the plugin's settings, turn on **Auto Reconnect**.
 
