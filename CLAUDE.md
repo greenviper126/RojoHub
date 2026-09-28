@@ -1,6 +1,6 @@
 # Rojo-Hub
 
-A private VS Code extension plus a background service that serves many Rojo projects at once, one
+A public (MIT) VS Code extension plus a background service that serves many Rojo projects at once, one
 fixed port each, and switches any of them to another branch or Orca worktree without dropping
 Studio's connection. Spec and measurements: `specs/001-rojo-hub-foundation.md`. Read it before
 changing how project files are generated or served.
@@ -22,6 +22,19 @@ are worked out by `src/service/ports.ts` (servePort, else a hash of the repo's f
 port, is always excluded. Bump
 `SERVICE_VERSION` in `src/common/api.ts` with the package version, so an updated extension replaces
 the running service.
+
+## Releasing
+
+- Bump the version in every place at once: `package.json`, `package-lock.json` (its first two
+  `version` fields), `SERVICE_VERSION` in `src/common/api.ts`, the install line above, the version
+  line at the top of `docs/how-it-works.md`, the version menu in `site/.vitepress/config.mts`, and a
+  new entry in both `CHANGELOG.md` and `site/changelog.md`.
+- Merge to `main`, then push a tag `vX.Y.Z` on `main`. The Release workflow checks the tag matches
+  `package.json`, packages the `.vsix` and makes the GitHub release. It also publishes to the VS Code
+  Marketplace and Open VSX when the `VSCE_PAT` / `OVSX_PAT` secrets are set.
+- The documentation site (`site/`, VitePress) deploys to GitHub Pages from `main` by the Docs
+  workflow. Built pages are never committed.
+- Marketplace versions only go up; never reuse or lower a published version.
 
 ## Rules that come from mistakes
 
