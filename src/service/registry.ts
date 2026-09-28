@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Target } from "../common/api";
+import type { DisplayOrder, Target } from "../common/api";
 
 /*
 	The slots the Hub knows about, persisted as JSON in the Hub's folder. Only
@@ -41,12 +41,15 @@ interface RegistryFile {
 	version: 1;
 	slots: SlotRecord[];
 	groups?: GroupRecord[];
+	/** How the panel shows things; never affects ports (see DisplayOrder). */
+	order?: DisplayOrder;
 }
 
 export class Registry {
 	private readonly file: string;
 	slots: SlotRecord[] = [];
 	groups: GroupRecord[] = [];
+	order: DisplayOrder = { projects: [], groups: [] };
 
 	constructor(readonly home: string) {
 		this.file = join(home, "registry.json");
@@ -55,11 +58,12 @@ export class Registry {
 			const parsed = JSON.parse(readFileSync(this.file, "utf8")) as RegistryFile;
 			this.slots = parsed.slots ?? [];
 			this.groups = parsed.groups ?? [];
+			this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
 		}
 	}
 
 	save(): void {
-		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups };
+		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order };
 		const temporary = this.file + ".tmp";
 		writeFileSync(temporary, JSON.stringify(body, null, "\t") + "\n");
 		renameSync(temporary, this.file);

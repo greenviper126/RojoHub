@@ -18,18 +18,25 @@ export interface RojoInfo {
 
 /*
 	Asks whatever answers on the port what it is serving. Rojo 7.7 answers
-	/api/rojo in MessagePack only. Null when nothing answers.
+	/api/rojo in MessagePack; older Rojo (7.3, say) in JSON, so the content
+	type decides. Null when nothing answers.
 */
 export async function rojoInfo(port: number): Promise<RojoInfo | null> {
 	try {
 		const response = await fetch(`http://localhost:${port}/api/rojo`, { signal: AbortSignal.timeout(1500) });
 		if (!response.ok) return null;
-		const body = decode(new Uint8Array(await response.arrayBuffer())) as Partial<RojoInfo>;
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		const body = decodeInfo(bytes, response.headers.get("content-type"));
 		if (typeof body.sessionId !== "string" || typeof body.projectName !== "string") return null;
 		return { sessionId: body.sessionId, projectName: body.projectName, serverVersion: String(body.serverVersion ?? "") };
 	} catch {
 		return null;
 	}
+}
+
+export function decodeInfo(bytes: Uint8Array, contentType: string | null): Partial<RojoInfo> {
+	if (contentType?.includes("json")) return JSON.parse(new TextDecoder().decode(bytes)) as Partial<RojoInfo>;
+	return decode(bytes) as Partial<RojoInfo>;
 }
 
 /** True when nothing is listening on the port on the loopback address Rojo binds. */
@@ -44,16 +51,15 @@ export function portFree(port: number): Promise<boolean> {
 /*
 	Starts `rojo serve` for a slot file, detached so it outlives the service
 	(Studio stays connected while the service restarts; the next service adopts
-	it). The working directory is the project's primary checkout so Rokit picks
-	the rojo version that project's rokit.toml pins.
+	it). `binary` is the pinned rojo from Rokit's tool storage (tools.ts), run
+	directly and with no console, so no window opens.
 
 	-v turns on Rojo's debug log, which is where it records each plugin websocket
 	opening and closing; --color never keeps those lines plain in the file.
 */
-export function startRojo(slotFile: string, port: number, cwd: string, logFile: string): Promise<number> {
+export function startRojo(binary: string, slotFile: string, port: number, cwd: string, logFile: string): Promise<number> {
 	return new Promise((done, fail) => {
 		const log = openSync(logFile, "w");
-		const binary = process.platform === "win32" ? "rojo.exe" : "rojo";
 		const child = spawn(binary, ["serve", verbatim(slotFile), "--port", String(port), "-v", "--color", "never"], {
 			cwd,
 			detached: true,
@@ -61,7 +67,7 @@ export function startRojo(slotFile: string, port: number, cwd: string, logFile: 
 			stdio: ["ignore", log, log],
 		});
 		closeSync(log);
-		child.once("error", (error) => fail(new Error(`rojo could not be started: ${error.message}. Is rojo on PATH (rokit install)?`)));
+		child.once("error", (error) => fail(new Error(`${binary} could not be started: ${error.message}`)));
 		child.once("spawn", () => {
 			child.unref();
 			done(child.pid ?? 0);

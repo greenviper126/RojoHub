@@ -5,7 +5,9 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.10.0";
+/** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
+export const DEFAULT_PORT_RANGE = "34873-35872";
+export const SERVICE_VERSION = "0.13.0";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -68,6 +70,19 @@ export interface ErrorBody {
 	The global port settings, from VS Code's user settings rojoHub.portRange and
 	rojoHub.excludedPorts. Ranges are "first-last" strings.
 */
+/*
+	The order the user arranged things in the panel. Kept apart from
+	registration order on purpose: registration order decides which project
+	keeps a port when two hash to the same one, and dragging a card must never
+	move a port. `projects` holds slot ids and workspace block keys
+	("ws:<file>", "ws:other"); `groups` holds group ids. Unknown or missing ids
+	simply fall back to the default order.
+*/
+export interface DisplayOrder {
+	projects: string[];
+	groups: string[];
+}
+
 export interface PortSettings {
 	portRange?: string;
 	excludedPorts?: (number | string)[];
@@ -84,7 +99,7 @@ export interface GroupView {
 	slotIds: string[];
 	/** Groups directly in the group. */
 	groupIds: string[];
-	/** Started (Start or Only this) and not stopped since. */
+	/** Started (Start or Singleton) and not stopped since. */
 	active: boolean;
 	/** Every project the group holds, through nested groups, each once. */
 	projectIds: string[];

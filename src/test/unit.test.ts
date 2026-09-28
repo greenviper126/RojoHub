@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
+import { DEFAULT_PORT_RANGE } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
+import { compareVersions } from "../common/version";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { parseWorktrees } from "../service/git";
+import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
 import { slugify } from "../service/registry";
-import { countConnections } from "../service/rojo";
+import { countConnections, decodeInfo } from "../service/rojo";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -205,7 +208,7 @@ test("countConnections follows Rojo's websocket log lines", () => {
 
 test("savedState shows the registry's projects and groups while the service is stopped", () => {
 	const home = mkdtempSync(join(tmpdir(), "rojo-hub-saved-"));
-	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "no registry yet");
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [], order: { projects: [], groups: [] } }, "no registry yet");
 	writeFileSync(
 		join(home, "registry.json"),
 		JSON.stringify({
@@ -232,7 +235,7 @@ test("savedState shows the registry's projects and groups while the service is s
 		["TLS", ["tls", "ai"], false, []],
 	]);
 	writeFileSync(join(home, "registry.json"), "{ not json");
-	assert.deepEqual(savedState(home, []), { slots: [], groups: [] }, "a broken file shows nothing rather than failing");
+	assert.deepEqual(savedState(home, []), { slots: [], groups: [], order: { projects: [], groups: [] } }, "a broken file shows nothing rather than failing");
 });
 
 test("parseWorkspaceFile reads VS Code's commented, trailing-comma workspace files", () => {
@@ -282,4 +285,59 @@ test("findWorkspaces groups registered projects and lists addable folders", asyn
 		["Solo", true, [], 1],
 		["Game", false, ["game", "lib"], 0],
 	], "the window's workspace comes first");
+});
+
+test("rojoSpec reads Rokit, Aftman and Foreman manifests", () => {
+	assert.deepEqual(rojoSpec('[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n'), { author: "rojo-rbx", name: "rojo", version: "7.7.0" });
+	assert.deepEqual(rojoSpec('# aftman\n[tools]\nRojo = "rojo-rbx/rojo@7.3.0"\nwally = "x/y@1"\n'), { author: "rojo-rbx", name: "rojo", version: "7.3.0" });
+	assert.deepEqual(rojoSpec('[tools]\nrojo = { source = "rojo-rbx/rojo", version = "=7.4.0" }\n'), { author: "rojo-rbx", name: "rojo", version: "7.4.0" });
+	assert.equal(rojoSpec('[tools]\nwally = "upliftgames/wally@0.3.2"\n'), null);
+	assert.equal(rojoSpec("not toml ["), null);
+	assert.equal(olderThan77("7.3.0"), true);
+	assert.equal(olderThan77("7.7.0"), false);
+	assert.equal(olderThan77("8.0.0"), false);
+});
+
+test("resolveRojo finds the pinned binary the way Rokit does, or says what to install", () => {
+	const root = mkdtempSync(join(tmpdir(), "rojo-hub-tools-"));
+	const rokit = join(root, ".rokit");
+	const exe = process.platform === "win32" ? "rojo.exe" : "rojo";
+	mkdirSync(join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0"), { recursive: true });
+	writeFileSync(join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0", exe), "");
+	const project = join(root, "work", "Game");
+	mkdirSync(project, { recursive: true });
+
+	writeFileSync(join(root, "work", "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	const fromParent = resolveRojo(project, rokit);
+	assert.ok(fromParent.ok && fromParent.binary === join(rokit, "tool-storage", "rojo-rbx", "rojo", "7.7.0", exe), "a manifest in a parent folder counts");
+
+	writeFileSync(join(project, "aftman.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.3.0"\n');
+	const missing = resolveRojo(project, rokit);
+	assert.ok(!missing.ok && /Rojo 7\.3\.0 .* is not installed\. Run "rokit install"/.test(missing.error), "the nearest manifest wins, and a missing version says what to do");
+
+	writeFileSync(join(project, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	const preferred = resolveRojo(project, rokit);
+	assert.ok(preferred.ok && preferred.manifest === join(project, "rokit.toml"), "rokit.toml before aftman.toml in the same folder");
+});
+
+test("compareVersions orders versions numerically, so an old window never downgrades the service", () => {
+	assert.ok(compareVersions("0.10.2", "0.9.0") > 0, "0.10 is newer than 0.9, which a string compare gets wrong");
+	assert.ok(compareVersions("0.11.0", "0.11.1") < 0);
+	assert.equal(compareVersions("1.0", "1.0.0"), 0);
+});
+
+test("the port range default is the same in package.json and the code", () => {
+	const manifest = JSON.parse(readFileSync(join(__dirname, "..", "..", "package.json"), "utf8")) as {
+		contributes: { configuration: { properties: Record<string, { default: unknown }> } };
+	};
+	assert.equal(manifest.contributes.configuration.properties["rojoHub.portRange"].default, DEFAULT_PORT_RANGE);
+	assert.deepEqual([parsePortSettings({}).first, parsePortSettings({}).last], DEFAULT_PORT_RANGE.split("-").map(Number));
+});
+
+test("decodeInfo reads Rojo 7.7's MessagePack and older Rojo's JSON", () => {
+	const json = new TextEncoder().encode('{"sessionId":"s1","serverVersion":"7.3.0","projectName":"vluxysf"}');
+	assert.equal(decodeInfo(json, "application/json").projectName, "vluxysf");
+	// {"sessionId":"s2","projectName":"TLS"} in MessagePack
+	const packed = new Uint8Array([0x82, 0xa9, ...new TextEncoder().encode("sessionId"), 0xa2, 0x73, 0x32, 0xab, ...new TextEncoder().encode("projectName"), 0xa3, 0x54, 0x4c, 0x53]);
+	assert.deepEqual(decodeInfo(packed, "application/msgpack"), { sessionId: "s2", projectName: "TLS" });
 });

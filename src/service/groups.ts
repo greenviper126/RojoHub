@@ -12,8 +12,8 @@ import { Conflict, NotFound, slugify, type GroupRecord } from "./registry";
 	refused with the chain that would loop, and expansion ignores any loop that
 	got into registry.json some other way.
 
-	A group is "running" from Start (or Only this) until Stop (or another
-	group's Only this). Stopping a group leaves alone any project that another
+	A group is "running" from Start (or Singleton) until Stop (or another
+	group's Singleton). Stopping a group leaves alone any project that another
 	running group also contains.
 */
 

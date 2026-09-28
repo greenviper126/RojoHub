@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.10.0",
+  "version": "0.13.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -117,7 +117,7 @@
       },
       {
         "command": "rojoHub.soloGroup",
-        "title": "Serve Only This Group",
+        "title": "Singleton",
         "category": "Rojo-Hub",
         "icon": "$(target)"
       },
@@ -335,7 +335,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "Groups hold projects and other groups. Start runs them all; Only this runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups hold projects and other groups. Start runs them all; Singleton runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },
@@ -351,10 +351,11 @@
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "typecheck": "tsc -p . --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
-    "package": "npm run typecheck && npm run build && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "test": "npm run build && npm run smoke && tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
+    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --allow-missing-repository --skip-license",
     "service": "node dist/service.js",
-    "probe:headless": "node tools/live-switch-headless.mjs verbatim"
+    "probe:headless": "node tools/live-switch-headless.mjs verbatim",
+    "smoke": "node tools/smoke-bundle.cjs"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.1.2",
@@ -365,5 +366,8 @@
     "esbuild": "^0.28.2",
     "jsonc-parser": "^3.3.1",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.0"
   }
 }

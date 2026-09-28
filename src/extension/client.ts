@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 
-import { SERVICE_PORT, SERVICE_VERSION, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
+import { compareVersions } from "../common/version";
+import { SERVICE_PORT, SERVICE_VERSION, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -35,13 +36,15 @@ async function health(): Promise<Health | null> {
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 /*
-	Makes sure a service of this extension's version is running. An older one
-	(left from before an update) is asked to exit, leaving its rojo processes
-	serving for the new one to adopt.
+	Makes sure a service at least as new as this extension is running. An older
+	one (left from before an update) is asked to exit, leaving its rojo
+	processes serving for the new one to adopt. A newer one is kept: every
+	VS Code window runs its own copy of the extension, and a window that has
+	not been reloaded since an update must not put the old service back.
 */
 export async function ensureService(serviceScript: string): Promise<Health> {
 	let current = await health();
-	if (current && current.version === SERVICE_VERSION) return current;
+	if (current && compareVersions(current.version, SERVICE_VERSION) >= 0) return current;
 	if (current) {
 		await call("POST", "/shutdown", { stopServing: false }).catch(() => undefined);
 		for (let i = 0; i < 40 && (await health()); i++) await sleep(100);
@@ -76,6 +79,8 @@ export const client = {
 	deleteGroup: (id: string) => call<{ ok: true }>("DELETE", `/groups/${encodeURIComponent(id)}`),
 	startGroup: (id: string, only: boolean) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/start`, { only }),
 	stopGroup: (id: string) => call<GroupResult>("POST", `/groups/${encodeURIComponent(id)}/stop`),
+	order: () => call<DisplayOrder>("GET", "/order"),
+	putOrder: (order: Partial<DisplayOrder>) => call<DisplayOrder>("PUT", "/order", order),
 	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
 	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),

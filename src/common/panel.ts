@@ -4,11 +4,15 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { GroupView, SlotView, Target, TargetOption } from "./api";
+import type { DisplayOrder, GroupView, SlotView, Target, TargetOption } from "./api";
 
-/** A group member: a project or a nested group. */
+/*
+	Something to add to or take out of a group: a project, a nested group, or
+	(adding only) a workspace, which adds each of its projects not already in
+	the group. `id` is the workspace's file for a workspace.
+*/
 export interface GroupMember {
-	kind: "project" | "group";
+	kind: "project" | "group" | "workspace";
 	id: string;
 }
 
@@ -41,6 +45,8 @@ export interface PanelState {
 	here: string[];
 	/** Workspaces for grouping the Projects list; purely visual. */
 	workspaces: WorkspaceInfo[];
+	/** The user's arrangement of projects, workspace blocks and groups. */
+	order: DisplayOrder;
 }
 
 export type ToPanel =
@@ -70,8 +76,10 @@ export type FromPanel =
 	| { type: "removeFromGroup"; id: string; member: GroupMember }
 	| { type: "startGroup"; id: string; only: boolean }
 	| { type: "stopGroup"; id: string }
+	| { type: "resetPortRange" }
 	| { type: "saveSettings"; portRange: string; excludedPorts: (number | string)[] }
 	| { type: "stopAll" }
+	| { type: "reorder"; projects?: string[]; groups?: string[] }
 	| { type: "addWorkspace"; file: string }
 	| { type: "groupWorkspace"; file: string }
 	| { type: "walkthrough" };

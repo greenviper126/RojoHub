@@ -7,6 +7,7 @@ import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, repoSeed, savePortSettings, type PortAssignment } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo } from "./rojo";
+import { olderThan77, resolveRojo } from "./tools";
 
 const READY_TIMEOUT_MS = 30000;
 const PORT_FREE_TIMEOUT_MS = 5000;
@@ -17,6 +18,8 @@ interface Runtime {
 	warnings: string[];
 	/** Events worth telling the user about until they next start, stop or switch (e.g. a crash restart). */
 	notes: string[];
+	/** About the running rojo itself (an old pinned version); kept across switches, cleared on start. */
+	toolWarnings: string[];
 	mode: Plan["mode"] | null;
 	sessionId: string | null;
 	log: LogFollower;
@@ -71,6 +74,7 @@ export class Hub {
 				error: null,
 				warnings: [],
 				notes: [],
+				toolWarnings: [],
 				mode: null,
 				sessionId: null,
 				log: new LogFollower(this.logFile(id)),
@@ -240,6 +244,7 @@ export class Hub {
 				...runtime.notes,
 				...(this.assignments.get(slot.id)?.note ? [this.assignments.get(slot.id)!.note!] : []),
 				...this.portProblems,
+				...runtime.toolWarnings,
 				...runtime.warnings,
 			],
 			error: this.assignments.get(slot.id)?.error ?? runtime.error,
@@ -387,7 +392,15 @@ export class Hub {
 			await this.collectViews(slot);
 			if (existsSync(this.logFile(slot.id))) renameSync(this.logFile(slot.id), this.logFile(slot.id).replace(/\.log$/, ".previous.log"));
 			runtime.log = new LogFollower(this.logFile(slot.id));
-			await startRojo(this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
+			const rojo = resolveRojo(slot.repoPath);
+			if (!rojo.ok) throw new Conflict(rojo.error);
+			runtime.toolWarnings = [];
+			if (olderThan77(rojo.version)) {
+				runtime.toolWarnings = [
+					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}), which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it. The Studio-connected light also needs Rojo 7.7.`,
+				];
+			}
+			await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
 			runtime.sessionId = await this.waitForRojo(slot);
 			runtime.state = "running";
 			slot.wantRunning = true;

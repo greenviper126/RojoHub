@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.10.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.13.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -79,12 +79,16 @@ code --install-extension rojo-hub-<version>.vsix --force --profile "Roblox"
 Then **reload the window** (`Ctrl+Shift+P` → *Developer: Reload Window*). A window that was open
 during the install does not load the new version until it reloads.
 
-**Update**: install the newer `.vsix` the same way and reload. The new extension notices that the
+**Update**: install the newer `.vsix` the same way and reload **every** window that has Rojo-Hub
+(each window runs its own copy of the extension). A window only ever replaces the service with a
+newer one, never an older one; a window still on the old version keeps using the newer service and
+asks once to be reloaded. The new extension notices that the
 running service is an older version, asks it to exit, and starts its own. Rojo processes keep
 running through this, so Studio stays connected, and the new service adopts them.
 
-**Requirements**: Windows; git on `PATH`; `rojo` on `PATH` through [Rokit](https://github.com/rojo-rbx/rokit)
-(each project's `rokit.toml` picks its Rojo version); Rojo 7.7. Orca is optional.
+**Requirements**: Windows; git on `PATH`; Rojo installed through [Rokit](https://github.com/rojo-rbx/rokit)
+(each project's toolchain file picks its Rojo version, see [Projects](#5-projects)); Rojo 7.7 for
+everything to work as described. Orca is optional.
 
 **Uninstall**: press *Stop all*, uninstall the extension, then end the background service with
 `curl -X POST http://127.0.0.1:34870/shutdown` (or sign out). Delete `%LOCALAPPDATA%\RojoHub\` to
@@ -103,15 +107,24 @@ menus pop up at the top of the window.
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
 
-It has three sections that fold open and closed (the panel remembers which are folded), and a
-footer:
+It has four sections that fold open and closed, and a footer. **Projects, Groups and Active ports
+start open; Port settings starts folded.** Within Projects, **only the first item starts open**: the
+first workspace (or, with no workspaces, the first project card); the rest start folded. Whatever
+you fold or open is remembered. Opening a project from elsewhere (a group, Active ports, the status
+bar) unfolds its card and its workspace.
+
+**Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) on the
+left; drag one onto another to move it before or after it. Cards move within their workspace,
+workspaces among workspaces, groups among groups. The order is saved in the service, so every
+window shows it, and **it never changes a port**: which project keeps a port when two collide goes by
+the order projects were added, which reordering does not touch.
 
 **Projects** (the header shows how many are serving, and `+` adds a project). Each project is a
 card:
 
-- a **status light** and the project's **name** (a *this window* badge marks the project this VS
-  Code window is open on; those come first);
-- the **port** (`:35045`), which copies `localhost:35045` when clicked;
+- a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
+  marks the project this VS Code window is open on);
+- the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked;
 - **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
   the branch picker inside the card: a search box, then *Worktrees* (under Orca's names) and
   *Branches*, with the current one ticked. Clicking one switches; Enter picks the first match,
@@ -119,15 +132,18 @@ card:
 - a **status line**: *Studio connected*, *Serving · waiting for Studio*, *Starting…*, *Stopped* or
   *Error*;
 - **warnings** (yellow) and **errors** (red), in full;
-- **Start** or **Stop**, and buttons for the Rojo log, copying the address, and removing the
-  project (which asks first).
+- **Start** or **Stop**, and buttons for the Rojo log and for removing the project (which asks
+  first).
+
+A **folded** card is one row: grip, arrow, light, name, a warning or error icon if it has one, the
+port, and a start or stop button.
 
 Running projects have a green edge, and projects with an error a red one. With no projects, the
 section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
 
 **Grouped by workspace.** When projects belong to a VS Code workspace (a `.code-workspace`
-file), the Projects list groups them under that workspace's name, with its serving count, a *this
-window* badge for the workspace this window has open, and a **Group** button that makes a group
+file), the Projects list groups them under that workspace's name, with its serving count, a window icon
+for the workspace this window has open, and a **Group** button that makes a group
 of its projects. Folders the workspace lists that have a `default.project.json` but are not added
 yet appear under it as *not added* with an **Add** button (and *Add all* when there are several).
 Projects in no workspace are under **Other projects**. See [Workspaces](#workspaces).
@@ -140,19 +156,29 @@ project's card is highlighted once it is added.
 Enter or *Create* makes it. Each group is a card that folds open and closed, showing how many of its
 projects are serving (green when all are). Inside:
 
-- the groups inside it, then its projects, each with ✕ to take it out (clicking a name jumps to
-  its card);
-- an **Add a project or group…** dropdown: projects not in it yet, then groups, with groups that
-  would make a loop greyed out;
-- **Start**, **Only this** (start this group, stop every other project; asks first, naming what it
-  will stop) and **Stop** (keeps projects another running group uses);
+- the groups inside it, then its projects, each project with its port (click to copy
+  `localhost:<port>`) and ✕ to take it out, which asks *Take … out of …?* first (clicking a name
+  jumps to its card);
+- an **Add a project, group or workspace…** dropdown: workspaces (adding each of their projects),
+  projects not in it yet, then groups, with groups that would make a loop greyed out;
+- one **Start** / **Stop** button (Start while the group is not running, Stop while it is; Stop
+  keeps projects another running group uses), then **Singleton** (serve only this group, stopping
+  every other project; asks first, naming what it will stop);
 - a green *running* badge while the group is running;
 - ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete?* in
   place; the projects stay).
 
+**Active ports** (below Groups; the header shows how many): every project serving right now, lowest
+port first, with its status light, name and branch, its address `localhost:<port>` (click to copy)
+and a copy button. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
+serving* when nothing is.
+
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
-*Save* and *Undo*. Mistakes are pointed out before saving. These edit the VS Code user settings
-described in [Settings](#12-settings).
+*Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
+puts back the default range (34873–35872) after asking: it says how many projects get their port from
+the range, since their ports may change and serving ones restart. Reset is greyed out when the range
+is already the default; excluded ports have no reset. These edit the VS Code user settings described
+in [Settings](#12-settings).
 
 **Footer**: how many projects are serving, **Stop all**, and Refresh. *Stop all* stops every
 serving project and marks every group not running; it asks first, on the panel, naming what it will
@@ -200,9 +226,28 @@ A newly added project points at its primary checkout and is stopped until you st
 **A project's menu**: Switch Branch…, Start or Stop Serving, Copy Address (`localhost:<port>`),
 Show Rojo Log, Remove Project. Any warning shows at the top of the menu.
 
-**Start Serving** runs `rojo serve` in the primary checkout's folder, so the Rojo version comes from
-that project's `rokit.toml`. It waits until Rojo answers with the project's name, or reports the
-end of the Rojo log if it does not come up within 30 seconds.
+**Start Serving** runs `rojo serve` in the primary checkout's folder, with the Rojo version the
+project pins. It waits until Rojo answers with the project's name, or reports the end of the Rojo
+log if it does not come up within 30 seconds.
+
+**Which Rojo.** Rojo-Hub reads the project's toolchain file the way Rokit does: `rokit.toml`,
+`aftman.toml` or `foreman.toml` in the project folder, then in each folder above it, then the global
+`~/.rokit/rokit.toml`; the nearest one that pins Rojo wins, and `rokit.toml` before the others in
+the same folder. It then runs that version straight from Rokit's tool storage
+(`~/.rokit/tool-storage/rojo-rbx/rojo/<version>/rojo.exe`), with no console, so **no window opens**.
+(Going through Rokit's `rojo` command instead made Windows open a Terminal window for a moment,
+because that command starts the real Rojo as a console program of its own.)
+
+- If the pinned version is not installed, starting fails with, for example: *Rojo 7.3.0 (pinned in
+  …\VluxySF\aftman.toml) is not installed. Run "rokit install" in …\VluxySF, or pin a Rojo version you
+  have.*
+- If no toolchain file pins Rojo, starting says so and suggests `rokit add rojo-rbx/rojo`.
+- A project pinned to a Rojo older than 7.7 starts, with a warning. **Rojo 7.7 is the first version
+  that speaks protocol 5, and the Studio plugin only connects to a server with the same protocol**,
+  so a 7.7 plugin refuses Rojo 7.0–7.6 (protocol 4) with *"it's using a different protocol version,
+  and is incompatible"*. Since one Studio plugin serves every place, keep every project on Rojo 7.7.
+  Live switching itself was measured working on 7.3.0; the Studio-connected light needs 7.7.
+  Older Rojo answers Rojo-Hub's status check in JSON rather than MessagePack; both are read.
 
 **Stop Serving** stops that project's Rojo only; other projects and any Rojo you started by hand
 are left alone.
@@ -326,10 +371,19 @@ in several groups. Groups live in the **Groups** section of the panel, below Pro
 
 - **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name and press Enter
   or *Create*.
-- **Add to it** with the group card's **Add a project or group…** dropdown. It lists the projects
-  not in the group yet, then the groups. Pick one to add it; do it again for the next.
-- **Take something out** with the ✕ next to it in the group. Nothing is deleted: a project stays
-  registered, a group stays a group.
+- **Add to it** with the group card's **Add a project, group or workspace…** dropdown. It lists:
+  - **Workspaces**: picking one adds every project of that VS Code workspace that is not in the
+    group yet (for example all three of TheLaundryShift's). They are added as ordinary projects, so
+    each can be taken out again with its ✕. Folders the workspace lists that are not added to
+    Rojo-Hub are not added to the group; the entry says when there are some. A workspace whose
+    projects are all in the group already is greyed out.
+  - **Projects** not in the group yet.
+  - **Groups**, with those that would loop greyed out.
+
+  Pick one to add it; do it again for the next.
+- **Take something out** with the ✕ next to it in the group. It asks first, in place (*Take VluxyAI
+  out of Laundry Shift? Yes / No*). Nothing is deleted: a project stays registered, a group stays a
+  group.
 - **Groups inside groups** are listed first in the card, with a layers icon and how many of their
   projects are serving. Clicking one scrolls to its own card.
 
@@ -349,13 +403,14 @@ over all of them.
 
 | Action | Effect |
 |---|---|
+| **Start** / **Stop** | One button: Start while the group is not running, Stop while it is. |
 | **Start** | Serves every project the group holds, each on its own port. Projects already serving are left alone, so their Studio sessions continue. |
-| **Only this** | Serves the group and stops every other project (the profile switch). **Asks first**, naming exactly which projects it will stop; Open Menu asks with a dialog. |
+| **Singleton** | Serves the group and stops every other project (the profile switch). **Asks first**, naming exactly which projects it will stop; Open Menu asks with a dialog. |
 | **Stop** | Stops the group's projects, **except any that another running group also holds**: that project is in use elsewhere, so its port keeps serving. Rojo-Hub says which projects it kept and why. |
 | ✎ **Rename** | Edit the name in place; Enter saves, Escape cancels. |
 | 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only. |
 
-A group is **running** from Start or Only this until Stop, or until another group's Only this. The
+A group is **running** from Start or Singleton until Stop, or until another group's Singleton. The
 card then shows a green *running* badge and a green edge. Running is about what you started, not
 about whether all its projects happen to be serving, so a group you never started never keeps a
 project alive. Stopping a single project from its own card does not change which groups are
@@ -410,6 +465,8 @@ debugging.
 | `DELETE /groups/:id` | | Delete a group |
 | `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped |
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
+| `GET /order` | | The panel's display order: `{ projects, groups }` |
+| `PUT /order` | `{ projects?, groups? }` | Save a new display order (never changes a port) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
 | `PUT /settings` | `{ portRange?, excludedPorts? }` | Port settings (sent by the extension) |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
@@ -420,7 +477,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving) and groups (members, nested groups, whether running) |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), and the panel's display order |
 | `settings.json` | The port settings last sent by VS Code |
 | `service.log` | Service start, stop and fatal errors |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
@@ -442,6 +499,12 @@ Both are **user settings that apply to every project and window**; a workspace c
 
 The panel's **Port settings** section edits them, as does *Open Menu → Port Settings*. Changes apply
 within a few seconds.
+
+**Where they are saved.** Both are VS Code user settings, written for you when you press *Save* or
+*Reset*. They are marked as applying to every VS Code profile, so VS Code keeps them in the main
+user `settings.json` (`%APPDATA%\Code\User\settings.json`) and every profile shares them. *Reset*
+removes `rojoHub.portRange` from that file, so the default applies again. The service keeps a copy of
+the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projects with no window open.
 
 ## 13. Commands
 

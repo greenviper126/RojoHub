@@ -4,7 +4,9 @@ import { cpSync, mkdirSync } from "node:fs";
 import { context } from "esbuild";
 
 const watch = process.argv.includes("--watch");
-const shared = { bundle: true, sourcemap: true, logLevel: "info" };
+// mainFields prefers ES module builds: some packages (jsonc-parser) ship a UMD "main" whose
+// dynamic require()s esbuild cannot follow, which breaks the bundle at load time.
+const shared = { bundle: true, sourcemap: true, logLevel: "info", mainFields: ["module", "main"] };
 const builds = [
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/extension.ts"], outfile: "dist/extension.js", external: ["vscode"] },
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/service/main.ts"], outfile: "dist/service.js" },
