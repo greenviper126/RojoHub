@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
@@ -18,13 +18,23 @@ import { findWorkspaces } from "./workspaces";
 import { HubPanel } from "./panel";
 
 /*
-	The front end. All state lives in the background service; this polls it,
-	draws it in the sidebar panel (panel.ts, src/webview) and the status bar,
-	and sends it commands. "Rojo-Hub: Open Menu" offers the same actions as
-	quick picks for keyboard use.
+	The front end. All state lives in the background service; this follows it
+	(its GET /events stream, else polling), draws it in the sidebar panel
+	(panel.ts, src/webview) and the status bar, and sends it commands.
+	"Rojo-Hub: Open Menu" offers the same actions as quick picks for keyboard
+	use.
 */
 
+/** How often the service is polled while its event stream is not connected. */
 const POLL_MS = 2000;
+/*
+	While the stream is connected it carries projects, groups and order the
+	moment they change; the rest (the service's health and version, agents,
+	workspace files) is read this often.
+*/
+const SLOW_POLL_MS = 10000;
+/** No bytes on the stream for this long (the service sends a keep-alive every 15 s) means the connection died unnoticed. */
+const STREAM_SILENCE_MS = 40000;
 const WINDOWS_ONLY = "Rojo-Hub supports Windows only for now.";
 
 let panel: HubPanel;
@@ -41,6 +51,18 @@ let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
+/** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
+let streaming = false;
+let lastFullRefresh = 0;
+let disposed = false;
+/** Every project's branch-picker list, fetched ahead so a picker opens with it drawn; with the targetsAt it was fetched for. */
+const targetLists = new Map<string, TargetOption[]>();
+const targetStamps = new Map<string, number>();
+/** The adder's folders and Orca repos, worked out ahead so it opens with them listed. */
+let lastCandidates: Candidate[] | null = null;
+let candidatesSignature = "";
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 function pathKey(path: string): string {
 	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -136,17 +158,116 @@ async function refresh(): Promise<void> {
 	serviceHealth = { running: !!health, version: health?.version ?? null, error: health ? null : serviceHealth.error };
 	checkOutdated(health?.version);
 	if (health?.home) hubHome = health.home;
-	try {
-		[lastSlots, lastGroups, lastOrder] = health ? await Promise.all([client.slots(), client.groups(), client.order()]) : [[], [], lastOrder];
-	} catch {
-		lastSlots = [];
-		lastGroups = [];
+	lastFullRefresh = Date.now();
+	if (!health || !streaming) {
+		try {
+			[lastSlots, lastGroups, lastOrder] = health ? await Promise.all([client.slots(), client.groups(), client.order()]) : [[], [], lastOrder];
+		} catch {
+			lastSlots = [];
+			lastGroups = [];
+		}
 	}
 	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
 	noticeDisconnects(health ? lastSlots : []);
-	if (health) noticePortMoves(lastSlots);
+	if (health) {
+		noticePortMoves(lastSlots);
+		prefetch();
+	}
 	await refreshWorkspaces();
+	render();
+}
+
+/*
+	A snapshot from the event stream: drawn at once, before anything slower.
+	Workspace files are re-read (and the panel drawn again) only when the set of
+	projects changed.
+*/
+async function applySnapshot(snapshot: Snapshot): Promise<void> {
+	lastSlots = snapshot.slots;
+	lastGroups = snapshot.groups;
+	lastOrder = snapshot.order;
+	noticeDisconnects(lastSlots);
+	noticePortMoves(lastSlots);
+	render();
+	prefetch();
+	await refreshWorkspaces();
+	render();
+}
+
+/*
+	Keeps the panel's dropdowns filled before they are opened: each project's
+	branch list whenever the service says it read a newer one (targetsAt), and
+	the adder's candidates whenever the projects or the window's folders change.
+	The panel keeps what it is sent, so opening never waits on a request.
+*/
+function prefetch(): void {
+	for (const slot of lastSlots) {
+		if (targetStamps.get(slot.id) === slot.targetsAt) continue;
+		targetStamps.set(slot.id, slot.targetsAt);
+		void client.targets(slot.id).then(
+			(options) => {
+				targetLists.set(slot.id, options);
+				panel.post({ type: "targets", id: slot.id, options });
+			},
+			() => undefined,
+		);
+	}
+	const signature = JSON.stringify([lastSlots.map((slot) => slot.repoPath), (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath)]);
+	if (signature === candidatesSignature) return;
+	candidatesSignature = signature;
+	void postCandidates();
+}
+
+async function postCandidates(): Promise<void> {
+	lastCandidates = await candidates().catch(() => lastCandidates ?? []);
+	panel.post({ type: "candidates", items: lastCandidates });
+}
+
+/*
+	Follows the service's event stream for as long as this window is open, so
+	a change made anywhere (another window, an agent, a crash, Studio
+	connecting) shows within a fraction of a second. When the stream is down
+	(the service restarting or being replaced by a newer one), polling takes
+	over until it is back.
+*/
+async function follow(): Promise<void> {
+	let delay = 250;
+	while (!disposed) {
+		if (serviceHealth.running) {
+			const controller = new AbortController();
+			let watchdog = setTimeout(() => controller.abort(), STREAM_SILENCE_MS);
+			const alive = () => {
+				clearTimeout(watchdog);
+				watchdog = setTimeout(() => controller.abort(), STREAM_SILENCE_MS);
+			};
+			const stop = () => controller.abort();
+			stopFollowing = stop;
+			try {
+				await client.events(
+					(snapshot) => {
+						streaming = true;
+						delay = 250;
+						void applySnapshot(snapshot);
+					},
+					alive,
+					controller.signal,
+				);
+			} catch {
+				// the service went away or was replaced; reconnect below
+			}
+			clearTimeout(watchdog);
+			streaming = false;
+		}
+		if (disposed) return;
+		await sleep(delay);
+		delay = Math.min(delay * 2, 4000);
+	}
+}
+
+let stopFollowing: () => void = () => undefined;
+
+function render(): void {
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	panel.update({
 		service: serviceHealth,
@@ -157,7 +278,7 @@ async function refresh(): Promise<void> {
 		workspaces: lastWorkspaces,
 		order: lastOrder,
 		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
-		agentNudge: !!health && showAgentNudge(hubHome, lastSlots.length, lastAgents),
+		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 	});
 	updateStatus();
 }
@@ -842,14 +963,34 @@ async function showLog(slot: SlotView): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 }
 
+/*
+	The panel draws some actions ahead of the service (src/webview/pending.ts)
+	and ends that look on the action's busy:false. An action that stops early
+	(a quick pick or dialog cancelled, nothing to do) must still send it, or the
+	look would stay until it times out.
+*/
 async function onPanel(message: FromPanel): Promise<void> {
+	const tracked = message.type === "addProject" ? "add" : message.type === "setProjectFile" ? `slot:${message.id}` : null;
+	try {
+		await handlePanel(message);
+	} finally {
+		if (tracked) panel.post({ type: "busy", key: tracked, busy: false });
+	}
+}
+
+async function handlePanel(message: FromPanel): Promise<void> {
 	const slot = "id" in message ? lastSlots.find((entry) => entry.id === message.id) : undefined;
 	switch (message.type) {
 		case "ready":
+			// A panel that was just drawn (or redrawn) gets the lists fetched ahead at once.
+			for (const [id, options] of targetLists) panel.post({ type: "targets", id, options });
+			if (lastCandidates) panel.post({ type: "candidates", items: lastCandidates });
 			return refresh();
 		case "refresh":
 			serviceHealth.error = null;
 			workspaceSignature = "";
+			candidatesSignature = "";
+			targetStamps.clear();
 			await act("service", async () => undefined);
 			return;
 		case "addWorkspace": {
@@ -887,7 +1028,9 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "targets":
 			try {
 				await ensureRunning();
-				panel.post({ type: "targets", id: message.id, options: await client.targets(message.id) });
+				const options = await client.targets(message.id);
+				targetLists.set(message.id, options);
+				panel.post({ type: "targets", id: message.id, options });
 			} catch (error) {
 				panel.post({ type: "targets", id: message.id, options: null, error: error instanceof Error ? error.message : String(error) });
 			}
@@ -932,7 +1075,9 @@ async function onPanel(message: FromPanel): Promise<void> {
 			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));
 			return;
 		case "candidates":
-			panel.post({ type: "candidates", items: await candidates() });
+			// What is known now at once, then a fresh look (Orca's repos can take a moment).
+			if (lastCandidates) panel.post({ type: "candidates", items: lastCandidates });
+			await postCandidates();
 			return;
 		case "addProject":
 		case "browse": {
@@ -1140,8 +1285,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		void vscode.commands.executeCommand(`${HubPanel.viewId}.focus`);
 	}
 
-	const timer = setInterval(() => void refresh(), POLL_MS);
-	context.subscriptions.push({ dispose: () => clearInterval(timer) });
+	void follow();
+	const timer = setInterval(() => {
+		if (streaming && Date.now() - lastFullRefresh < SLOW_POLL_MS) return;
+		void refresh();
+	}, POLL_MS);
+	context.subscriptions.push({
+		dispose: () => {
+			clearInterval(timer);
+			disposed = true;
+			stopFollowing();
+		},
+	});
 }
 
 export function deactivate(): void {

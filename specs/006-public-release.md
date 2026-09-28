@@ -1,6 +1,6 @@
 # 006 — Public release
 
-Status: **in progress on `chore/public-release` (0.18.0)**. Asked for by Viper: "we need to get this
+Status: **implemented on `chore/public-release` in 0.18.0**; not yet tried against a real Studio. Asked for by Viper: "we need to get this
 ready for a public release so this needs to be compatiable out of the box for other people too. so we
 need to know what is required to use it and make sure you only need those things for it to run." Then:
 "fix all of the issues found and make sure everything is robust", and "we just want the inital page
@@ -77,12 +77,12 @@ below.
 
 ### Responsiveness
 
-- [ ] The service pushes the panel's whole state (`GET /events`, server-sent events) on every change,
+- [x] The service pushes the panel's whole state (`GET /events`, server-sent events) on every change,
       within 150 ms; windows stop polling while subscribed and fall back to polling if the stream
       drops.
-- [ ] Clicks update the panel at once (optimistic state), and the service's answer confirms or
+- [x] Clicks update the panel at once (optimistic state), and the service's answer confirms or
       corrects it.
-- [ ] Dropdowns (branch picker, project files, group add, menus) open from data already in the panel,
+- [x] Dropdowns (branch picker, project files, group add, menus) open from data already in the panel,
       with no request in the way.
 
 ## Non-goals

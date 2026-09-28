@@ -10,6 +10,8 @@
 	what is being typed in it.
 */
 
+const CONTROL = /^(INPUT|SELECT|TEXTAREA|OPTION)$/;
+
 function keyOf(node: Node): string | null {
 	if (!(node instanceof Element)) return null;
 	const id = node.getAttribute("id");
@@ -36,6 +38,14 @@ function patchNode(from: Node, to: Node): void {
 		if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
 		return;
 	}
+	/*
+		Most of the panel is the same from one update to the next (a state
+		update changes a card or two). The browser compares a subtree much
+		faster than walking it here, so an unchanged one is left alone. Not
+		one holding a form control: its live value or ticked state can differ
+		from its attributes, and is set below.
+	*/
+	if (from.isEqualNode(to) && !CONTROL.test(from.tagName) && !to.querySelector("input, select, textarea")) return;
 	patchAttributes(from, to);
 	patchChildren(from, to);
 	// Attributes set an input's starting value only; its live value is a property. A focused box is being typed in.

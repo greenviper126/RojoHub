@@ -133,6 +133,20 @@ sidebar. It opens by itself the first time Rojo-Hub runs in a VS Code profile. T
 for Rojo-Hub and drawn in VS Code's theme colours and icons. Everything can be done from it; no
 menus pop up at the top of the window.
 
+**Always current, and immediate.** After the panel first loads, it follows the background service
+as a live stream: a change made anywhere (another window, an agent, a crash restart, Studio
+connecting, a branch made in a terminal) shows within a fraction of a second, with no Refresh.
+Every click shows its result at once: Start turns the card to *Starting…* (with Stop ready, to
+cancel), Stop to *Stopping…*, a branch or project file you pick shows on the card straight away, and
+group actions, Stop all, renames, deletes, member changes, new groups, reordering and adding a
+project (an *Adding…* row) all draw before the service answers. If the service then says otherwise
+(the action failed), the card shows what really happened and the error appears as a notification.
+The branch picker, project file list and *Add a project* list are filled ahead of time, so they open
+with their contents already there; the service keeps them up to date in the background. Menus,
+pickers, rename boxes and confirmations stay open through updates unless what they are about is
+gone. If the stream drops (the service restarting or being updated), the panel falls back to asking
+every two seconds until it is back.
+
 | The panel (sample data) | Switching branch inside a card |
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
