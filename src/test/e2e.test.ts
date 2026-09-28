@@ -599,8 +599,12 @@ test("robustness: events stream, racing adds, work after a remove, a deleted ser
 	await call("POST", `/slots/${slot.id}/stop`);
 	await until("stopped in the stream", async () => snapshots.at(-1)!.slots.find((view) => view.id === slot.id)?.state === "stopped");
 
-	// a Start queued behind a Remove is refused rather than serving a removed project
+	// a Start queued behind a Remove is refused rather than serving a removed project; removing a
+	// serving project takes a moment (stop rojo, wait for its port), so the Start sent just after it
+	// is queued behind it
+	await call("POST", `/slots/${slot.id}/start`);
 	const removing = call("DELETE", `/slots/${slot.id}`);
+	await sleep(50);
 	const starting = call("POST", `/slots/${slot.id}/start`);
 	await removing;
 	await assert.rejects(starting, /removed|No project/);
