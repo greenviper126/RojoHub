@@ -62,7 +62,7 @@ export type ToPanel =
 	| { type: "collapse" }
 	/**
 	 * A foldable header's right-click menu: fold or unfold `key`, fold the rest of
-	 * its `list` and unfold it ("others"), or unfold its whole `list` ("all").
+	 * its `list` and unfold it ("others"), or unfold it and everything inside it ("all").
 	 */
 	| { type: "fold"; key: string; list: string; how: "expand" | "collapse" | "others" | "all" }
 	| { type: "busy"; key: string; busy: boolean }

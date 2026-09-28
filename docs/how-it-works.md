@@ -123,13 +123,18 @@ serving or starting projects, the workspaces that hold them, and running groups 
 other card and group folds, and Active ports and Port settings fold.
 
 **Right-clicking a header** that folds (a section, a workspace, a project card or a group) opens a
-menu in place of Cut/Copy/Paste: **Expand** or **Collapse** for that header, **Collapse Others**
-(folds its neighbours and opens it) and **Expand All** (opens it and its neighbours). Expand and
-Expand All open everything inside as well: expanding Projects opens every workspace and project card
-in it, and expanding Groups opens every group. Clicking a chevron still opens just that one. Neighbours are
-the headers in the same list: the sections, the workspaces, the cards in one workspace, or the
-groups. Right-clicking anywhere else in the panel still shows Copy. Workspace headers have no menu
-while the Projects filter is open, since every matching workspace is open then.
+menu in place of Cut/Copy/Paste:
+
+- **Expand** (on a folded header) opens just that header, like clicking its chevron;
+- **Expand All** opens it and everything inside it: on Projects, every workspace and project card;
+  on Groups, every group; on a workspace, its cards. It shows only on headers that hold other
+  foldable headers;
+- **Collapse** (on an open header) folds it;
+- **Collapse Others** folds its neighbours and opens it. Neighbours are the headers in the same list:
+  the sections, the workspaces, the cards in one workspace, or the groups.
+
+Right-clicking anywhere else in the panel still shows Copy. Workspace headers have no menu while the
+Projects filter is open, since every matching workspace is open then.
 
 The section headers stay at the top while their section scrolls under them, and the footer stays at
 the bottom of the panel.

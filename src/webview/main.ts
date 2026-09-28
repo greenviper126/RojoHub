@@ -90,12 +90,13 @@ function folded(key: string, byDefault: boolean): boolean {
 
 /*
 	Marks a foldable header for its right-click menu (webview/context in
-	package.json): Expand or Collapse, Collapse Others, Expand All, instead of
-	Cut/Copy/Paste. `list` is the header's siblings for the last two. Group keys
-	are "group:<id>", as groups keep their fold in closedGroups.
+	package.json) instead of Cut/Copy/Paste: Expand or Collapse, Collapse
+	Others (its siblings in `list`), and Expand All for a header that `nests`
+	other foldable headers. Group keys are "group:<id>", as groups keep their
+	fold in closedGroups.
 */
-function foldable(key: string, list: string, isFolded: boolean): string {
-	const context = { rojoHubFold: isFolded ? "folded" : "open", rojoHubFoldKey: key, rojoHubFoldList: list, preventDefaultContextMenuItems: true };
+function foldable(key: string, list: string, isFolded: boolean, nests = false): string {
+	const context = { rojoHubFold: isFolded ? "folded" : "open", rojoHubFoldNests: nests, rojoHubFoldKey: key, rojoHubFoldList: list, preventDefaultContextMenuItems: true };
 	return `data-fold-key="${escape(key)}" data-fold-list="${escape(list)}" data-vscode-context="${escape(JSON.stringify(context))}"`;
 }
 
@@ -112,16 +113,16 @@ function setFold(key: string, fold: boolean): void {
 }
 
 /*
-	Expand and Expand All open everything inside too (workspaces, project
-	cards), not just the header. What is inside a folded header is not drawn,
-	so this opens one level, draws, and looks again until nothing is left.
+	Expand opens just the header. Expand All opens everything inside it too
+	(workspaces, project cards, groups); what is inside a folded header is not
+	drawn, so it opens one level, draws, and looks again until nothing is left.
 */
 function foldFromMenu(key: string, list: string, how: "expand" | "collapse" | "others" | "all"): void {
 	const siblings = [...document.querySelectorAll<HTMLElement>(`[data-fold-list="${CSS.escape(list)}"]`)].map((element) => element.dataset.foldKey ?? "");
-	if (how === "collapse") setFold(key, true);
+	if (how === "collapse" || how === "expand") setFold(key, how === "collapse");
 	else if (how === "others") for (const other of siblings) setFold(other, other !== key);
 	else {
-		let opening = how === "all" ? siblings : [key];
+		let opening = [key];
 		const seen = new Set<string>();
 		while (opening.length > 0) {
 			for (const each of opening) {
@@ -688,7 +689,7 @@ function section(key: string, title: string, iconName: string, count: string, ex
 	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}" id="section-${key}">
-		<div class="section-head" ${foldable(key, "sections", collapsed)}>
+		<div class="section-head" ${foldable(key, "sections", collapsed, key === "projects" || key === "groups")}>
 			<button class="section-toggle" data-action="toggle-section" data-id="${key}" data-default="${byDefault ? 1 : 0}" aria-expanded="${!collapsed}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon(iconName)}<span>${escape(title)}</span>${count ? `<span class="count">${countText(count)}</span>` : ""}</button>
 			<span class="grow"></span>${extra}
 		</div>
@@ -737,7 +738,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 			const elsewhere = workspace.slotIds.filter((id) => home.get(id) !== workspace.file).map((id) => byId.get(id)).filter((slot): slot is SlotView => !!slot);
 			if (filtering && own.length + elsewhere.length === 0) return "";
 			const serving = workspace.slotIds.map((id) => byId.get(id)).filter((slot) => slot && slot.state === "running").length;
-			const head = `<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>
+			const head = `<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed, true)}>
 				${grip("blocks", key)}
 				<button class="group-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${escape(workspace.file)}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder-library")}<span class="name">${escape(workspace.name)}</span></button>
 				${workspace.slotIds.length ? `<span class="count" title="${serving} of ${workspace.slotIds.length} serving">${serving}/${workspace.slotIds.length}</span>` : ""}
@@ -774,7 +775,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 				if (ui.reveal && loose.some((slot) => slot.id === ui.reveal)) ui.collapsed[key] = false;
 				const collapsed = !filtering && folded(key, foldedByDefault);
 				return `<div class="workspace other" ${dropAttributes("blocks", key)}>
-					<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed)}>${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
+					<div class="row workspace-head" ${filtering ? "" : foldable(key, "blocks", collapsed, true)}>${grip("blocks", key)}<button class="group-toggle" data-action="toggle-section" data-id="${key}" data-default="${foldedByDefault ? 1 : 0}">${icon(collapsed ? "chevron-right" : "chevron-down")}${icon("folder")}<span class="name">Other projects</span></button><span class="count">${loose.length}</span></div>
 					${collapsed ? "" : `<div class="workspace-body">${loose.map((slot) => projectCard(slot, list, false)).join("")}</div>`}
 				</div>`;
 			},

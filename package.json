@@ -235,12 +235,12 @@
         {
           "command": "rojoHub.fold.collapseOthers",
           "when": "webviewId == 'rojoHub.panel' && rojoHubFold",
-          "group": "fold@2"
+          "group": "fold@3"
         },
         {
           "command": "rojoHub.fold.expandAll",
-          "when": "webviewId == 'rojoHub.panel' && rojoHubFold",
-          "group": "fold@3"
+          "when": "webviewId == 'rojoHub.panel' && rojoHubFoldNests",
+          "group": "fold@2"
         }
       ],
       "commandPalette": [
