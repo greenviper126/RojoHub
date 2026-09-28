@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -70,6 +70,7 @@ export const client = {
 	add: (path: string, projectFile?: string) => call<SlotView>("POST", "/slots", { path, projectFile }),
 	setProjectFile: (id: string, projectFile: string) => call<SlotView>("PUT", `/slots/${encodeURIComponent(id)}/project-file`, { projectFile }),
 	remove: (id: string) => call<{ ok: true }>("DELETE", `/slots/${encodeURIComponent(id)}`),
+	portMovesOnRemove: (id: string) => call<PortMove[]>("GET", `/slots/${encodeURIComponent(id)}/port-moves-on-remove`),
 	start: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/start`),
 	stop: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/stop`),
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
