@@ -152,8 +152,10 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			}
 
 			if (method === "GET" && url.pathname === "/events") {
+				// Built before the headers go out, so a failure is still an ordinary error answer.
+				const first = snapshot();
 				response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-				response.write(`data: ${snapshot()}\n\n`);
+				response.write(`data: ${first}\n\n`);
 				subscribers.add(response);
 				request.socket.setKeepAlive(true);
 				response.on("close", () => subscribers.delete(response));

@@ -414,6 +414,7 @@
         "rojoHub.agents": {
           "type": "object",
           "scope": "application",
+          "ignoreSync": true,
           "additionalProperties": false,
           "properties": {
             "vscode": {

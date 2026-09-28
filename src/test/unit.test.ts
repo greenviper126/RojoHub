@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -22,7 +23,7 @@ import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verba
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
-import { countConnections, decodeInfo } from "../service/rojo";
+import { countConnections, decodeInfo, findRojo } from "../service/rojo";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -130,6 +131,23 @@ test("port settings: defaults, ranges, 34872 always excluded, bad input reported
 	assert.deepEqual([single.first, single.last, single.problems.length], [35000, 35000, 0], "a one-port range is a range");
 });
 
+test("findRojo matches command lines with non-ASCII letters and quotes", { skip: process.platform !== "win32" }, async () => {
+	// A stand-in rojo.exe (a copy of cmd.exe) whose command line names a slot file under such a folder.
+	const dir = mkdtempSync(join(tmpdir(), "rojohub-find-"));
+	const exe = join(dir, "rojo.exe");
+	copyFileSync(join(process.env.SystemRoot ?? "C:\Windows", "System32", "cmd.exe"), exe);
+	const slotFile = join(dir, "ΝΙΚΟΣ İbrahim’s", "slots", "a", "slot.project.json");
+	const child = spawn(exe, ["/c", `ping -n 30 127.0.0.1 >nul & rem ${slotFile}`], { windowsHide: true, stdio: "ignore" });
+	try {
+		await new Promise((done) => setTimeout(done, 500));
+		assert.deepEqual(await findRojo(slotFile), [child.pid], "found by its own path, whatever the letters");
+		assert.deepEqual(await findRojo(slotFile.toUpperCase()), [child.pid], "case-insensitively");
+		assert.deepEqual(await findRojo(join(dir, "someone-else", "slot.project.json")), [], "and nothing else");
+	} finally {
+		child.kill();
+	}
+});
+
 test("git version check", () => {
 	assert.deepEqual(gitVersion("git version 2.45.1.windows.1\n"), [2, 45]);
 	assert.deepEqual(gitVersion("git version 2.30.0"), [2, 30]);
@@ -211,6 +229,7 @@ test("excluded ports are skipped, two servePorts on one port are an error", () =
 	const result = assignPorts([request("a", seed)], parsePortSettings({ excludedPorts: [own] }));
 	assert.notEqual(result.get("a")!.port, own);
 	assert.match(result.get("a")!.note!, /excluded/);
+	assert.match(assignPorts([request("svc", "s", SERVICE_PORT)], parsePortSettings({})).get("svc")?.error ?? "", /service port/, "a servePort cannot take the service's port");
 	const clash = assignPorts([request("a", "s", 40000), request("b", "t", 40000)], parsePortSettings({}));
 	assert.equal(clash.get("a")!.port, 40000);
 	assert.match(clash.get("b")!.error!, /also set by a/);
@@ -440,6 +459,8 @@ test("agent config: Rojo-Hub's entry, another rojohub entry, or none", () => {
 		assert.equal(agentState(claude), "connected");
 		writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { rojohub: { type: "http", url: "http://example.com/mcp" } } }));
 		assert.equal(agentState(claude), "other", "someone else's rojohub is left alone");
+		writeFileSync(join(home, ".claude.json"), '{"mcpServers": {"rojohub": ');
+		assert.equal(agentState(claude), "unknown", "a file caught mid-write is not taken for a removed entry");
 		writeFileSync(join(home, "config.toml"), `model = "x"
 
 [mcp_servers.rojohub]

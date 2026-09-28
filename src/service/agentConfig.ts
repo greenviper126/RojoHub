@@ -84,13 +84,18 @@ export const AGENTS: Agent[] = [
 	},
 ];
 
-/** "connected", "absent" or "other" (someone else's rojohub entry). */
+/*
+	"connected", "absent", "other" (someone else's rojohub entry), or "unknown"
+	when the config file exists but cannot be read or parsed, as when the agent
+	is writing it at that moment. Unknown is never taken for absent: nothing is
+	added, removed or reconciled on it.
+*/
 export function agentState(agent: Agent): AgentStatus["state"] {
 	let url: string | null | undefined;
 	try {
 		url = agent.readUrl();
 	} catch {
-		return "absent";
+		return "unknown";
 	}
 	if (url === null || url === undefined) return "absent";
 	return url.replace(/\/+$/, "") === MCP_URL ? "connected" : "other";

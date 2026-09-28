@@ -73,8 +73,8 @@ export async function pruneMissingWorktreesUnder(repo: string, dir: string): Pro
 	for (const name of readdirSync(admin)) {
 		let tree: string;
 		try {
-			// gitdir holds the worktree's .git file path.
-			tree = dirname(readFileSync(join(admin, name, "gitdir"), "utf8").trim());
+			// gitdir holds the worktree's .git file path; relative to this folder with worktree.useRelativePaths (git 2.48+).
+			tree = dirname(resolve(join(admin, name), readFileSync(join(admin, name, "gitdir"), "utf8").trim()));
 		} catch {
 			continue;
 		}

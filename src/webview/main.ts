@@ -737,12 +737,14 @@ function agentsBody(): string {
 			? { text: "Connected", tone: "ok", title: `Rojo-Hub is in ${agent.label}'s user config. Turn off to take it out.` }
 			: agent.state === "other"
 				? { text: "Set up by you", tone: "info", title: `${agent.label}'s config already has a rojohub entry pointing elsewhere; Rojo-Hub leaves it alone.` }
+				: agent.state === "unknown"
+					? { text: "Can't read config", tone: "", title: `${agent.label}'s config could not be read just now (it may be being written). Rojo-Hub leaves it alone and looks again.` }
 				: agent.installed
 					? { text: "Off", tone: "", title: `Turn on to add Rojo-Hub to ${agent.label}'s user config.` }
 					: { text: "Not installed", tone: "", title: `${agent.label} was not found on PATH.` };
 	const rows = [
 		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? { text: "Connected", tone: "ok", title: "Copilot and other agents in VS Code. Nothing is written to disk." } : { text: "Off", tone: "", title: "Turn on to let Copilot and other agents in VS Code use Rojo-Hub." }, false, null),
-		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || (!agent.installed && agent.state !== "connected"), agent.error)),
+		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && agent.state !== "connected"), agent.error)),
 	].join("");
 	const manual = ui.agentsManual
 		? `<div class="agents-manual">

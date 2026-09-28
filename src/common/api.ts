@@ -166,7 +166,7 @@ export interface AgentStatus {
 	/** Its CLI was found on PATH. */
 	installed: boolean;
 	/** "connected": its user config has Rojo-Hub's entry; "other": an entry named rojohub with another URL, which is the user's own. */
-	state: "connected" | "absent" | "other";
+	state: "connected" | "absent" | "other" | "unknown";
 	/** The last add or remove that failed, until the next one. */
 	error: string | null;
 }

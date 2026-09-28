@@ -95,7 +95,11 @@ export function startRojo(binary: string, slotFile: string, port: number, cwd: s
 
 	The match is a lower-cased Contains rather than [StringComparison] or -like,
 	which also runs under PowerShell's Constrained Language Mode and is not
-	confused by the [ ] a path can contain.
+	confused by the [ ] a path can contain. Both sides are lower-cased by .NET
+	(JavaScript and .NET disagree on letters such as Greek final sigma or a
+	dotted capital I, which a Windows user name can hold), and the needle is
+	passed in an environment variable, so no quote in a path can break the
+	script.
 */
 export function findRojo(needle: string, extra = ""): Promise<number[]> {
 	return new Promise((done) => {
@@ -104,11 +108,16 @@ export function findRojo(needle: string, extra = ""): Promise<number[]> {
 			return;
 		}
 		const script =
-			`$needle = '${needle.toLowerCase().replace(/'/g, "''")}'\n` +
+			"$needle = $env:ROJO_HUB_NEEDLE.ToLowerInvariant()\n" +
 			"Get-CimInstance Win32_Process -Filter \"Name='rojo.exe'\" | " +
 			`Where-Object { $_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle)${extra} } | ` +
 			"ForEach-Object { $_.ProcessId }";
-		execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 20000 }, (_error, stdout) => done(pids(stdout)));
+		execFile(
+			"powershell.exe",
+			["-NoProfile", "-NonInteractive", "-Command", script],
+			{ encoding: "utf8", windowsHide: true, timeout: 20000, env: { ...process.env, ROJO_HUB_NEEDLE: needle } },
+			(_error, stdout) => done(pids(stdout)),
+		);
 	});
 }
 

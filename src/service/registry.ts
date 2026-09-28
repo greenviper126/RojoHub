@@ -77,9 +77,14 @@ export class Registry {
 		this.save();
 	}
 
+	/*
+		Takes only records that have what the service relies on, so a hand edit
+		that breaks one project or group costs that one, not every status the
+		service sends.
+	*/
 	private load(parsed: RegistryFile): void {
-		this.slots = Array.isArray(parsed.slots) ? parsed.slots : [];
-		this.groups = Array.isArray(parsed.groups) ? parsed.groups : [];
+		this.slots = Array.isArray(parsed.slots) ? parsed.slots.filter(validSlot) : [];
+		this.groups = Array.isArray(parsed.groups) ? parsed.groups.filter(validGroup) : [];
 		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
 	}
 
@@ -119,6 +124,25 @@ export class Registry {
 		if (!group) throw new NotFound(`No group with id "${id}"`);
 		return group;
 	}
+}
+
+const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+function validSlot(slot: SlotRecord): boolean {
+	const target = slot?.target as { kind?: unknown; path?: unknown; ref?: unknown } | undefined;
+	return (
+		!!slot &&
+		text(slot.id) &&
+		text(slot.projectName) &&
+		text(slot.repoPath) &&
+		text(slot.projectFile) &&
+		Number.isInteger(slot.port) &&
+		(target?.kind === "worktree" ? text(target.path) : target?.kind === "branch" && text(target.ref))
+	);
+}
+
+function validGroup(group: GroupRecord): boolean {
+	return !!group && text(group.id) && typeof group.name === "string" && Array.isArray(group.slotIds);
 }
 
 /*

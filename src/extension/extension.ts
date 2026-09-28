@@ -53,6 +53,8 @@ let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
 let streaming = false;
+/** Snapshots applied so far, so a slower poll that started before one never overwrites it. */
+let snapshots = 0;
 let lastFullRefresh = 0;
 let disposed = false;
 /** Every project's branch-picker list, fetched ahead so a picker opens with it drawn; with the targetsAt it was fetched for. */
@@ -159,12 +161,23 @@ async function refresh(): Promise<void> {
 	checkOutdated(health?.version);
 	if (health?.home) hubHome = health.home;
 	lastFullRefresh = Date.now();
+	/*
+		No health while the stream still looks open means the service stalled or
+		went away: drop the stream, so its reconnect starts with a whole snapshot
+		instead of this window waiting for a change that may never be sent.
+	*/
+	if (!health && streaming) stopFollowing();
 	if (!health || !streaming) {
+		// A snapshot that arrives while these are read is newer than they are; it wins.
+		const generation = snapshots;
 		try {
-			[lastSlots, lastGroups, lastOrder] = health ? await Promise.all([client.slots(), client.groups(), client.order()]) : [[], [], lastOrder];
+			const read: [SlotView[], GroupView[], DisplayOrder] = health ? await Promise.all([client.slots(), client.groups(), client.order()]) : [[], [], lastOrder];
+			if (generation === snapshots) [lastSlots, lastGroups, lastOrder] = [read[0], read[1], read[2]];
 		} catch {
-			lastSlots = [];
-			lastGroups = [];
+			if (generation === snapshots) {
+				lastSlots = [];
+				lastGroups = [];
+			}
 		}
 	}
 	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
@@ -184,6 +197,7 @@ async function refresh(): Promise<void> {
 	projects changed.
 */
 async function applySnapshot(snapshot: Snapshot): Promise<void> {
+	snapshots++;
 	lastSlots = snapshot.slots;
 	lastGroups = snapshot.groups;
 	lastOrder = snapshot.order;
@@ -870,7 +884,7 @@ async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefine
 		void vscode.window.showErrorMessage(`Rojo-Hub: ${error instanceof Error ? error.message : error}`);
 		return undefined;
 	} finally {
-		panel.post({ type: "busy", key, busy: false });
+		postIdle(key);
 		await refresh();
 	}
 }
@@ -925,7 +939,7 @@ async function buildPlace(slot: SlotView): Promise<void> {
 		saveLabel: "Build",
 	});
 	if (!target) {
-		panel.post({ type: "busy", key: `build:${slot.id}`, busy: false });
+		postIdle(`build:${slot.id}`);
 		return;
 	}
 	await extensionContext.globalState.update(BUILD_FOLDER, dirname(target.fsPath));
@@ -963,18 +977,68 @@ async function showLog(slot: SlotView): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 }
 
+/** busy:false messages sent per key, so onPanel can tell whether an action already said it is over. */
+const idleSent = new Map<string, number>();
+
+function postIdle(key: string): void {
+	idleSent.set(key, (idleSent.get(key) ?? 0) + 1);
+	panel.post({ type: "busy", key, busy: false });
+}
+
+/*
+	The busy key the panel waits on for a message, and how many busy:false it
+	expects (Add all adds each folder as an action of its own). The same keys as
+	sendTracked in src/webview/main.ts.
+*/
+function trackedKey(message: FromPanel): { key: string; count: number } | null {
+	switch (message.type) {
+		case "start":
+		case "stop":
+		case "switch":
+		case "setProjectFile":
+		case "sourcemap":
+			return { key: `slot:${message.id}`, count: 1 };
+		case "build":
+			return { key: `build:${message.id}`, count: 1 };
+		case "startGroup":
+		case "stopGroup":
+		case "renameGroup":
+		case "deleteGroup":
+		case "addToGroup":
+		case "removeFromGroup":
+			return { key: `group:${message.id}`, count: 1 };
+		case "newGroup":
+		case "groupWorkspace":
+			return { key: "group:new", count: 1 };
+		case "stopAll":
+			return { key: "stop-all", count: 1 };
+		case "reorder":
+			return { key: "reorder", count: 1 };
+		case "setAgent":
+			return { key: `agent:${message.id}`, count: 1 };
+		case "addProject":
+			return { key: "add", count: 1 };
+		case "addWorkspace":
+			return { key: "add", count: lastWorkspaces.find((entry) => entry.file === message.file)?.addable.length ?? 0 };
+		default:
+			return null;
+	}
+}
+
 /*
 	The panel draws some actions ahead of the service (src/webview/pending.ts)
 	and ends that look on the action's busy:false. An action that stops early
-	(a quick pick or dialog cancelled, nothing to do) must still send it, or the
-	look would stay until it times out.
+	(a quick pick or dialog cancelled, a group or workspace that is gone) must
+	still send it, exactly as many times as the panel waits for, or the look
+	would stay until it times out.
 */
 async function onPanel(message: FromPanel): Promise<void> {
-	const tracked = message.type === "addProject" ? "add" : message.type === "setProjectFile" ? `slot:${message.id}` : null;
+	const tracked = trackedKey(message);
+	const before = tracked ? (idleSent.get(tracked.key) ?? 0) : 0;
 	try {
 		await handlePanel(message);
 	} finally {
-		if (tracked) panel.post({ type: "busy", key: tracked, busy: false });
+		if (tracked) for (let sent = (idleSent.get(tracked.key) ?? 0) - before; sent < tracked.count; sent++) postIdle(tracked.key);
 	}
 }
 

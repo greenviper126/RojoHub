@@ -49,7 +49,7 @@ const homeKey = (path: string) => resolve(path).replace(/\\/g, "/").replace(/\/+
 	shut down.
 */
 function ours(current: Health): boolean {
-	return !current.home || homeKey(current.home) === homeKey(expectedHome());
+	return !!current.home && homeKey(current.home) === homeKey(expectedHome());
 }
 
 function otherUserError(current: Health): Error {

@@ -44,6 +44,11 @@ export class TargetCache {
 		return entry.options;
 	}
 
+	/** The list as it is now, without reading it; null before the first read. */
+	peek(repo: string): TargetOption[] | null {
+		return this.entries.get(pathKey(repo))?.options ?? null;
+	}
+
 	/** When the repo's list was last read, so the panel can tell that a newer one is ready. */
 	stamp(repo: string): number {
 		return this.entries.get(pathKey(repo))?.at ?? 0;

@@ -24,6 +24,8 @@ const PROJECT_FILES_MS = 2000;
 	a crash, and restarting a healthy rojo would disconnect Studio.
 */
 const CRASH_MISSES = 3;
+/** How long a new port assignment must hold before a slot is moved to it (see refreshPorts). */
+const MOVE_SETTLE_MS = 2500;
 
 interface Runtime {
 	state: SlotView["state"];
@@ -89,6 +91,9 @@ export class Hub {
 
 	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
 	private readonly claims = new Map<string, Claim>();
+
+	/** A port a slot is to move to, and since when it has been the one assigned (see refreshPorts). */
+	private readonly pendingMoves = new Map<string, { port: number; since: number }>();
 
 	/** The servePort last read from each slot's project file, kept while the file cannot be read (see portRequests). */
 	private readonly servePorts = new Map<string, number | null>();
@@ -254,7 +259,11 @@ export class Hub {
 		// A rojo this service started reports its own exit, so its crash needs no waiting and no lookup.
 		const own = runtime.rojo;
 		if (own ? own.alive() : ++runtime.misses < CRASH_MISSES) return;
-		if (!own && (await rojoAlive(this.slotFile(slot.id)))) return;
+		if (!own && (await rojoAlive(this.slotFile(slot.id)))) {
+			// Alive but not answering (hung, or very busy): not a crash. Look again only after a while, not with PowerShell every second.
+			runtime.misses = -3 * CRASH_MISSES;
+			return;
+		}
 		if (runtime.state !== "running" || runtime.sessionId !== session) return;
 		runtime.misses = 0;
 		this.restartAfterCrash(slot);
@@ -290,18 +299,34 @@ export class Hub {
 		changed gets it through its queue; a running one is restarted on the new
 		port, which Studio sees as a new session.
 	*/
-	private refreshPorts(): void {
+	private refreshPorts(settle = true): void {
 		const config = loadPortConfig(this.home);
 		this.portProblems = config.problems;
 		this.assignments = assignPorts(this.portRequests(this.registry.slots), config);
 		for (const slot of this.registry.slots) {
 			const assigned = this.assignments.get(slot.id);
-			if (!assigned?.port || assigned.port === slot.port) continue;
+			if (!assigned?.port || assigned.port === slot.port) {
+				this.pendingMoves.delete(slot.id);
+				continue;
+			}
 			if (slot.port === 0) {
 				slot.port = assigned.port;
 				this.registry.save();
 				continue;
 			}
+			/*
+				A move restarts a serving rojo, so it waits until the new port has held
+				for a while: an auto-saved servePort being typed (3, 34, 349…) or a line
+				deleted and put back must not restart it at every step. A change of the
+				port settings, which the user saved on purpose, moves at once.
+			*/
+			const pending = this.pendingMoves.get(slot.id);
+			if (settle && (!pending || pending.port !== assigned.port)) {
+				this.pendingMoves.set(slot.id, { port: assigned.port, since: Date.now() });
+				continue;
+			}
+			if (settle && Date.now() - pending!.since < MOVE_SETTLE_MS) continue;
+			this.pendingMoves.delete(slot.id);
 			if (this.moving.has(slot.id)) continue;
 			this.moving.add(slot.id);
 			void this.enqueue(slot, async () => {
@@ -360,7 +385,7 @@ export class Hub {
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
 		savePortSettings(this.home, settings);
-		this.refreshPorts();
+		this.refreshPorts(false);
 		for (const slot of this.registry.slots) void this.enqueue(slot, () => this.syncSourcemap(slot)).catch(() => undefined);
 	}
 
@@ -670,6 +695,14 @@ export class Hub {
 			const runtime = this.runtime(slot.id);
 			const tree = await this.prepareTree(slot, target);
 			const plan = this.writeFiles(slot, tree);
+			// The label from the picker's list, so no status is sent with the new target under the old branch's name.
+			const known = this.targetCache.peek(slot.repoPath)?.find((option) => sameTarget(option.target, target));
+			if (known) {
+				runtime.targetLabel = known.label;
+				runtime.branch = known.branch;
+			} else if (target.kind === "branch") {
+				runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
+			}
 			slot.target = target;
 			this.registry.save();
 			runtime.mode = plan.mode;
@@ -696,7 +729,8 @@ export class Hub {
 			// Sourcemap watchers are the service's own children; a service that takes over starts them again.
 			runtime.sourcemap?.stop();
 			runtime.sourcemap = null;
-			if (stopServing) await this.stopLocked(slot);
+			// Through the slot's queue, so a start already under way finishes first and its rojo is stopped too.
+			if (stopServing) await this.enqueue(slot, () => this.stopLocked(slot)).catch(() => undefined);
 		}
 	}
 
