@@ -1,3 +1,5 @@
+<p align="center"><img src="media/logo.png" alt="Rojo-Hub" width="360"></p>
+
 # Rojo-Hub
 
 Serve many Rojo projects at once, each on its own fixed port, and switch any of them to another
