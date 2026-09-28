@@ -1,4 +1,4 @@
-// Bundles the extension, the background service and the sidebar panel into dist/ with esbuild,
+// Bundles the extension, the background service, the uninstall hook and the sidebar panel into dist/ with esbuild,
 // and copies VS Code's codicon font next to the panel.
 import { cpSync, mkdirSync } from "node:fs";
 import { context } from "esbuild";
@@ -10,6 +10,7 @@ const shared = { bundle: true, sourcemap: true, logLevel: "info", mainFields: ["
 const builds = [
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/extension.ts"], outfile: "dist/extension.js", external: ["vscode"] },
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/service/main.ts"], outfile: "dist/service.js" },
+	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/uninstall.ts"], outfile: "dist/uninstall.js" },
 	{ ...shared, platform: "browser", target: "es2022", format: "iife", entryPoints: ["src/webview/main.ts"], outfile: "dist/webview.js" },
 ];
 

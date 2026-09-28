@@ -7,7 +7,9 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.15.1";
+export const SERVICE_VERSION = "0.16.1";
+/** Where the service answers MCP (spec 004). */
+export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made
@@ -47,6 +49,8 @@ export interface SlotView {
 	targetsAt: number;
 	/** Whether the service keeps the served worktree's sourcemap.json current, and why not (spec 003). */
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
+	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
+	claim: { label: string; until: number } | null;
 }
 
 /** What POST /slots/:id/branch made. */
@@ -130,3 +134,20 @@ export interface GroupResult {
 	kept: { id: string; because: string }[];
 	failed: { id: string; error: string }[];
 }
+
+/* Agents whose own config Rojo-Hub can add its MCP server to (spec 004). */
+export type AgentId = "claudeCode" | "codex";
+
+export interface AgentStatus {
+	id: AgentId;
+	label: string;
+	/** Its CLI was found on PATH. */
+	installed: boolean;
+	/** "connected": its user config has Rojo-Hub's entry; "other": an entry named rojohub with another URL, which is the user's own. */
+	state: "connected" | "absent" | "other";
+	/** The last add or remove that failed, until the next one. */
+	error: string | null;
+}
+
+/** true adds Rojo-Hub to that agent's config, false removes it (only if it is Rojo-Hub's), missing leaves it alone. */
+export type AgentWishes = Partial<Record<AgentId, boolean>>;

@@ -39,7 +39,11 @@ function patchNode(from: Node, to: Node): void {
 	patchAttributes(from, to);
 	patchChildren(from, to);
 	// Attributes set an input's starting value only; its live value is a property. A focused box is being typed in.
-	if ((from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement) && from !== document.activeElement) {
+	// A checkbox's ticked state is a property too, and follows the state even when focused (it was just clicked).
+	if (from instanceof HTMLInputElement && from.type === "checkbox") {
+		const checked = (to as HTMLInputElement).hasAttribute("checked");
+		if (from.checked !== checked) from.checked = checked;
+	} else if ((from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement) && from !== document.activeElement) {
 		const value = (to as HTMLInputElement).getAttribute("value") ?? "";
 		if (from.value !== value) from.value = value;
 	}

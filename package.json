@@ -1,13 +1,13 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.15.1",
+  "version": "0.16.1",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
   "repository": "https://github.com/greenviper126/RojoHub",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.101.0"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -154,6 +154,18 @@
         "title": "Stop All",
         "category": "Rojo-Hub",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "rojoHub.copyAgentCommands",
+        "title": "Copy Agent Setup Commands",
+        "category": "Rojo-Hub",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "rojoHub.copyAgentPrompt",
+        "title": "Copy Agent Setup Prompt",
+        "category": "Rojo-Hub",
+        "icon": "$(comment)"
       }
     ],
     "menus": {
@@ -308,6 +320,34 @@
           "pattern": "^\\s*\\d+\\s*-\\s*\\d+\\s*$",
           "patternErrorMessage": "Write the range as first-last, for example 34873-35872.",
           "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose `default.project.json` sets `servePort` uses that instead."
+        },
+        "rojoHub.agents": {
+          "type": "object",
+          "scope": "application",
+          "additionalProperties": false,
+          "properties": {
+            "vscode": {
+              "type": "boolean",
+              "default": true,
+              "description": "VS Code's own agents (Copilot and others). Registered with VS Code while Rojo-Hub is installed; nothing is written to disk."
+            },
+            "claudeCode": {
+              "type": "boolean",
+              "default": false,
+              "description": "Claude Code, in any terminal or Orca: adds rojohub to its user config (claude mcp add --scope user)."
+            },
+            "codex": {
+              "type": "boolean",
+              "default": false,
+              "description": "Codex: adds rojohub to ~/.codex/config.toml (codex mcp add)."
+            }
+          },
+          "default": {
+            "vscode": true,
+            "claudeCode": false,
+            "codex": false
+          },
+          "markdownDescription": "Which AI agents can use Rojo-Hub's tools (an MCP server at `http://127.0.0.1:34870/mcp`), so they can serve their own worktree to Studio, live, without restarting Rojo. Unticking takes Rojo-Hub out of that agent's config again, and so does uninstalling Rojo-Hub. An entry named `rojohub` that points elsewhere is never touched.\n\nAnother agent? [Copy setup commands](command:rojoHub.copyAgentCommands) or [copy a setup prompt](command:rojoHub.copyAgentPrompt) to paste into its chat."
         }
       }
     },
@@ -372,6 +412,12 @@
           }
         ]
       }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "rojoHub",
+        "label": "Rojo-Hub"
+      }
     ]
   },
   "scripts": {
@@ -382,12 +428,13 @@
     "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --allow-missing-repository --skip-license",
     "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim",
-    "smoke": "node tools/smoke-bundle.cjs"
+    "smoke": "node tools/smoke-bundle.cjs",
+    "vscode:uninstall": "node ./dist/uninstall.js"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.1.2",
     "@types/node": "^20.19.0",
-    "@types/vscode": "~1.90.0",
+    "@types/vscode": "~1.101.0",
     "@vscode/codicons": "^0.0.46-24",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",

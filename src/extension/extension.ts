@@ -4,10 +4,12 @@ import { dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { SERVICE_VERSION, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
+import { agentWishes, askOnce, copySetup, registerVsCodeAgents, setAgentBox, vscodeAgentsOn } from "./agents";
+import { hideAgentNudge, showAgentNudge } from "./nudge";
 import { client, ensureService } from "./client";
 import { savedState } from "./saved";
 import { findWorkspaces } from "./workspaces";
@@ -34,6 +36,7 @@ let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
+let lastAgents: AgentStatus[] = [];
 
 function pathKey(path: string): string {
 	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -127,6 +130,7 @@ async function refresh(): Promise<void> {
 		lastSlots = [];
 		lastGroups = [];
 	}
+	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
 	noticeDisconnects(health ? lastSlots : []);
 	await refreshWorkspaces();
@@ -139,6 +143,8 @@ async function refresh(): Promise<void> {
 		here: lastSlots.filter((slot) => workspaceRepos.includes(pathKey(slot.repoPath))).map((slot) => slot.id),
 		workspaces: lastWorkspaces,
 		order: lastOrder,
+		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
+		agentNudge: !!health && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 	});
 	updateStatus();
 }
@@ -264,6 +270,7 @@ async function openMenu(): Promise<void> {
 		{ label: "$(add) Add Project", run: () => addProject() },
 		{ label: "$(new-folder) New Group", description: "a set of projects to start together", run: () => newGroup() },
 		{ label: "$(gear) Port Settings", description: "range and globally excluded ports", run: () => vscode.commands.executeCommand("workbench.action.openSettings", "rojoHub") },
+		{ label: "$(robot) Agent Access", description: "which AI agents can use Rojo-Hub's tools", run: () => vscode.commands.executeCommand("workbench.action.openSettings", "rojoHub.agents") },
 		{ label: "$(debug-stop) Stop All", description: "stop every serving project", run: () => vscode.commands.executeCommand("rojoHub.stopAll") },
 	);
 	const picked = await vscode.window.showQuickPick(items, { title: "Rojo-Hub", placeHolder: "Pick a project, or an action", matchOnDescription: true });
@@ -579,6 +586,8 @@ async function pushSettings(): Promise<void> {
 			sourcemaps: config.get<boolean>("sourcemaps", true),
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
+	// Agent access (spec 004); a failure shows on that agent's row in the panel.
+	lastAgents = await client.putAgents(agentWishes()).catch(() => lastAgents);
 }
 
 function orcaRepos():Promise<{ path: string; displayName: string }[]> {
@@ -800,6 +809,16 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "walkthrough":
 			await vscode.commands.executeCommand("workbench.action.openWalkthrough", "greenviper126.rojo-hub#rojoHub.start", false);
 			return;
+		case "setAgent":
+			await act(`agent:${message.id}`, async () => {
+				if ((await setAgentBox(message.id, message.on)) && message.id !== "vscode") lastAgents = await client.putAgents(agentWishes());
+			});
+			return;
+		case "copyAgentSetup":
+			return copySetup(message.what);
+		case "agentNudge":
+			hideAgentNudge(hubHome, message.action);
+			return refresh();
 	}
 }
 
@@ -858,6 +877,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			});
 		},
 		"rojoHub.collapseAll": () => panel.post({ type: "collapse" }),
+		"rojoHub.copyAgentCommands": () => copySetup("commands"),
+		"rojoHub.copyAgentPrompt": () => copySetup("prompt"),
 		"rojoHub.stopAll": async () => {
 			await refresh();
 			const serving = lastSlots.filter((slot) => slot.state === "running" || slot.state === "starting");
@@ -896,7 +917,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (event.affectsConfiguration("rojoHub")) void pushSettings().then(refresh);
 		}),
 	);
+	registerVsCodeAgents(context, ensureRunning);
 	await refresh();
+	void askOnce(context, hubHome, lastAgents);
 
 	/*
 		The first time Rojo-Hub runs in a VS Code profile, open its sidebar so a
