@@ -450,3 +450,57 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 
 	await call("DELETE", `/slots/${slot.id}`);
 });
+
+test("project files: added by default or the only one, changed live with a restart, refused on a clash", async () => {
+	const tree = (label: string) => ({ $className: "DataModel", ServerScriptService: { $className: "ServerScriptService", Code: { $path: label } } });
+	const lib = await makeRepo("Libby");
+	write(join(lib, "tests", "Spec.server.luau"), 'print("spec")\n');
+	write(join(lib, "test.project.json"), JSON.stringify({ name: `LibbyTests-${process.pid}`, tree: tree("tests") }));
+	write(join(lib, "clash.project.json"), JSON.stringify({ name: `Solo-${process.pid}`, tree: tree("tests") }));
+
+	const only = join(root, "Solo");
+	mkdirSync(only, { recursive: true });
+	gitIn(only, "init", "-q", "-b", "main");
+	write(join(only, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	write(join(only, "src", "Main.server.luau"), 'print("solo")\n');
+	write(join(only, "test.project.json"), JSON.stringify({ name: `Solo-${process.pid}`, tree: tree("src") }));
+	gitIn(only, "add", "-A");
+	gitIn(only, "commit", "-q", "-m", "solo");
+
+	const many = join(root, "Many");
+	mkdirSync(many, { recursive: true });
+	gitIn(many, "init", "-q", "-b", "main");
+	write(join(many, "a.project.json"), JSON.stringify({ name: "A", tree: tree("src") }));
+	write(join(many, "b.project.json"), JSON.stringify({ name: "B", tree: tree("src") }));
+	await assert.rejects(call("POST", "/slots", { path: many }), /several project files/);
+	await assert.rejects(call("POST", "/slots", { path: many, projectFile: "../a.project.json" }), /file name/);
+
+	const solo = await call<SlotView>("POST", "/slots", { path: only });
+	assert.equal(solo.projectFile, "test.project.json", "a folder's only project file is used");
+
+	const slot = await call<SlotView>("POST", "/slots", { path: lib });
+	assert.equal(slot.projectFile, "default.project.json", "default.project.json without asking");
+	const started = await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	assert.equal(started.state, "running");
+
+	const changed = await call<SlotView>("PUT", `/slots/${slot.id}/project-file`, { projectFile: "test.project.json" });
+	assert.equal(changed.projectFile, "test.project.json");
+	assert.equal(changed.projectName, `LibbyTests-${process.pid}`, "takes the new file's name");
+	assert.equal(changed.state, "running", "a serving project serves the new file");
+	assert.notEqual(changed.sessionId, started.sessionId, "a new Rojo session");
+	assert.equal(changed.port, started.port, "the port comes from the repo, not the file");
+	const info = await fetch(`http://127.0.0.1:${changed.port}/api/rojo`).then((r) => r.arrayBuffer());
+	assert.match(Buffer.from(info).toString("latin1"), new RegExp(`LibbyTests-${process.pid}`), "Rojo reports the new project's name");
+
+	await assert.rejects(call("PUT", `/slots/${slot.id}/project-file`, { projectFile: "clash.project.json" }), /already named/);
+	await assert.rejects(call("PUT", `/slots/${slot.id}/project-file`, { projectFile: "..\\x.project.json" }), /file name/);
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.projectFile, "test.project.json", "a refused change keeps the file");
+
+	await call("POST", `/slots/${slot.id}/stop`);
+	const back = await call<SlotView>("PUT", `/slots/${slot.id}/project-file`, { projectFile: "default.project.json" });
+	assert.equal(back.state, "stopped", "a stopped project only records the change");
+	assert.equal(back.projectName, `Libby-${process.pid}`);
+
+	await call("DELETE", `/slots/${slot.id}`);
+	await call("DELETE", `/slots/${solo.id}`);
+});

@@ -84,6 +84,8 @@ export type FromPanel =
 	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
+	/** The card's Project file…: pick another *.project.json (spec 005). */
+	| { type: "projectFile"; id: string }
 	| { type: "remove"; id: string }
 	| { type: "candidates" }
 	| { type: "addProject"; path: string }

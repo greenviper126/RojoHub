@@ -67,7 +67,8 @@ export async function ensureService(serviceScript: string): Promise<Health> {
 export const client = {
 	health,
 	slots: () => call<SlotView[]>("GET", "/slots"),
-	add: (path: string) => call<SlotView>("POST", "/slots", { path }),
+	add: (path: string, projectFile?: string) => call<SlotView>("POST", "/slots", { path, projectFile }),
+	setProjectFile: (id: string, projectFile: string) => call<SlotView>("PUT", `/slots/${encodeURIComponent(id)}/project-file`, { projectFile }),
 	remove: (id: string) => call<{ ok: true }>("DELETE", `/slots/${encodeURIComponent(id)}`),
 	start: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/start`),
 	stop: (id: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/stop`),

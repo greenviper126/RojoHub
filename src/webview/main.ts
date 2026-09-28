@@ -341,7 +341,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
 	const isFolded = folded(key, foldedByDefault) && !pickerOpen;
-	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span></button>`;
+	const toggle = `<button class="group-toggle card-toggle" data-action="toggle-section" data-id="${escape(key)}" data-default="${foldedByDefault ? 1 : 0}" title="${isFolded ? "Show details" : "Fold"}" aria-expanded="${!isFolded}">${icon(isFolded ? "chevron-right" : "chevron-down")}${dot(slot)}<span class="name" title="${escape(slot.repoPath)}">${escape(slot.projectName)}</span>${fileTag(slot)}</button>`;
 	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
@@ -395,7 +395,7 @@ function adder(): string {
 						.join("");
 	return `<div class="card adder">
 		<div class="row"><strong>Add a project</strong><span class="grow"></span>${iconButton("close-adder", "close", "Cancel")}</div>
-		<p class="muted small">Any folder with a <code>default.project.json</code>. It gets its own port.</p>
+		<p class="muted small">Any folder with a <code>default.project.json</code> or another <code>*.project.json</code>. It gets its own port.</p>
 		<div class="list">${rows}</div>
 		<div class="row">${button("browse", "Browse…", { icon: "folder-opened", kind: "secondary" })}</div>
 	</div>`;
@@ -420,8 +420,8 @@ function memberRow(group: GroupView, kind: "project" | "group", memberId: string
 /** The card's ⋯ button and, while it is open, its menu of less frequent actions. */
 function cardMenu(slot: SlotView): string {
 	const open = ui.menu === slot.id;
-	const item = (action: string, iconName: string, label: string, extra = "") =>
-		`<button class="menu-item${extra}" role="menuitem" data-action="${action}" data-id="${escape(slot.id)}">${icon(iconName)}<span>${escape(label)}</span></button>`;
+	const item = (action: string, iconName: string, label: string, extra = "", title = "") =>
+		`<button class="menu-item${extra}" role="menuitem" data-action="${action}" data-id="${escape(slot.id)}"${title ? ` title="${escape(title)}"` : ""}>${icon(iconName)}<span>${escape(label)}</span></button>`;
 	return `<span class="menu-anchor">
 		<button class="btn ghost icon-only${open ? " open" : ""}" data-action="menu" data-id="${escape(slot.id)}" title="More actions" aria-haspopup="menu" aria-expanded="${open}">${icon("ellipsis")}</button>
 		${
@@ -432,6 +432,7 @@ function cardMenu(slot: SlotView): string {
 							? `${item("sourcemap", "file-code", "Update sourcemap.json")}<div class="menu-note ${slot.sourcemap.state}" title="${escape(slot.sourcemap.detail)}">${icon(slot.sourcemap.state === "watching" ? "sync" : slot.sourcemap.state === "error" ? "warning" : "circle-slash")}<span>${escape(slot.sourcemap.state === "watching" ? "Sourcemap kept up to date" : slot.sourcemap.detail || "Sourcemap not kept")}</span></div><div class="menu-separator"></div>`
 							: ""
 					}
+					${item("projectFile", "file-code", "Project file…", "", `Serving ${slot.projectFile}; pick another *.project.json in the folder`)}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
@@ -440,6 +441,12 @@ function cardMenu(slot: SlotView): string {
 				: ""
 		}
 	</span>`;
+}
+
+/** Names a project file other than default.project.json beside the project's name: "test" for test.project.json (spec 005). */
+function fileTag(slot: SlotView): string {
+	if (slot.projectFile === "default.project.json") return "";
+	return `<span class="file-tag" title="Serves ${escape(slot.projectFile)}">${escape(slot.projectFile.replace(/\.project\.json$/i, ""))}</span>`;
 }
 
 /** A port chip that copies localhost:<port>; it shows a tick for a moment after a copy. */
@@ -1011,6 +1018,9 @@ document.addEventListener("click", (event) => {
 		case "sourcemap":
 			ui.busy.add(`slot:${id}`);
 			send({ type: "sourcemap", id });
+			return render();
+		case "projectFile":
+			send({ type: "projectFile", id });
 			return render();
 		case "build":
 			ui.busy.add(`build:${id}`);

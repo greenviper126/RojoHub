@@ -9,7 +9,7 @@ import { git } from "./git";
 	Which port each project gets. Deterministic, so a project lands on the same
 	port on every machine and after every reinstall (spec 001, "Ports"):
 
-	1. A project whose default.project.json sets `servePort` gets exactly that.
+	1. A project whose project file sets `servePort` gets exactly that.
 	2. Every other project hashes its seed (the repo's first commit) into the
 	   range, then steps forward past excluded ports, ports claimed by
 	   `servePort`, and ports already taken by projects registered before it.

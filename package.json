@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.16.2",
+  "version": "0.17.0",
   "private": true,
   "publisher": "greenviper126",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
@@ -377,7 +377,7 @@
           "default": "34873-35872",
           "pattern": "^\\s*\\d+\\s*-\\s*\\d+\\s*$",
           "patternErrorMessage": "Write the range as first-last, for example 34873-35872.",
-          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose `default.project.json` sets `servePort` uses that instead."
+          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose project file sets `servePort` uses that instead."
         },
         "rojoHub.agents": {
           "type": "object",
@@ -418,7 +418,7 @@
           {
             "id": "add",
             "title": "Add a project",
-            "description": "Pick a folder with a default.project.json. It gets its own port, the same on every machine.\n[Add Project](command:rojoHub.addProject)",
+            "description": "Pick a folder with a default.project.json (or another *.project.json). It gets its own port, the same on every machine.\n[Add Project](command:rojoHub.addProject)",
             "media": {
               "markdown": "media/walkthrough/add.md"
             },

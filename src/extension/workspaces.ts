@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse } from "jsonc-parser";
 
 import type { WorkspaceInfo } from "../common/panel";
+import { listProjectFiles } from "../common/projectFiles";
 
 /*
 	VS Code workspaces (.code-workspace files) that Rojo-Hub projects belong to,
@@ -54,7 +55,8 @@ export interface WorkspaceInput {
 	by name.
 */
 export async function findWorkspaces(input: WorkspaceInput): Promise<WorkspaceInfo[]> {
-	const projectFile = input.projectFile ?? "default.project.json";
+	// Without one, a folder is addable when it has any *.project.json (spec 005).
+	const projectFile = input.projectFile;
 	const files = new Map<string, string>();
 	const add = (file: string) => {
 		if (existsSync(file) && !files.has(pathKey(file))) files.set(pathKey(file), file);
@@ -79,7 +81,7 @@ export async function findWorkspaces(input: WorkspaceInput): Promise<WorkspaceIn
 			const slotId = byRepo.get(pathKey(primary));
 			if (slotId) {
 				if (!slotIds.includes(slotId)) slotIds.push(slotId);
-			} else if (existsSync(join(folder, projectFile)) && !addable.some((entry) => pathKey(entry.path) === pathKey(primary))) {
+			} else if ((projectFile ? existsSync(join(folder, projectFile)) : listProjectFiles(folder).length > 0) && !addable.some((entry) => pathKey(entry.path) === pathKey(primary))) {
 				addable.push({ label: basename(primary), path: primary });
 			}
 		}

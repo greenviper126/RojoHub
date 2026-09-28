@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { DEFAULT_PORT_RANGE, MCP_URL } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
+import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import { hideAgentNudge, showAgentNudge } from "../extension/nudge";
 import { savedState } from "../extension/saved";
@@ -434,4 +435,30 @@ test("the agent notice: only with projects and an installed agent that is not se
 	assert.ok(Math.abs(until - Date.now() - 14 * 86400000) < 60000, "for 14 days");
 	hideAgentNudge(home, "never");
 	assert.equal(JSON.parse(readFileSync(join(home, "agent-notice.json"), "utf8")).until, Number.MAX_SAFE_INTEGER);
+});
+
+test("project files: listed default first, the one used without asking, and only bare *.project.json names", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-files-"));
+	for (const name of ["test.project.json", "default.project.json", "bench.project.json", "notes.json", "sourcemap.json"]) writeFileSync(join(dir, name), "{}");
+	mkdirSync(join(dir, "sub.project.json"));
+	assert.deepEqual(listProjectFiles(dir), ["default.project.json", "bench.project.json", "test.project.json"], "files only, default first, then by name");
+	assert.deepEqual(listProjectFiles(join(dir, "missing")), []);
+
+	assert.equal(defaultProjectFile(["default.project.json", "test.project.json"]), "default.project.json");
+	assert.equal(defaultProjectFile(["test.project.json"]), "test.project.json", "a folder's only file is used without asking");
+	assert.equal(defaultProjectFile(["bench.project.json", "test.project.json"]), null, "several and no default: ask");
+	assert.equal(defaultProjectFile([]), null);
+
+	assert.ok(isProjectFileName("test.project.json"));
+	for (const bad of ["../x.project.json", "sub/x.project.json", "sub\\x.project.json", "C:x.project.json", "x.json", "", 7, null]) {
+		assert.equal(isProjectFileName(bad), false, String(bad));
+	}
+
+	// a folder with only a test.project.json can be added from a workspace
+	const lib = join(dir, "OnlyTests");
+	mkdirSync(lib);
+	writeFileSync(join(lib, "test.project.json"), "{}");
+	writeFileSync(join(lib, "Lib.code-workspace"), JSON.stringify({ folders: [{ path: "." }] }));
+	const found = await findWorkspaces({ windowFile: join(lib, "Lib.code-workspace"), slots: [], primaryOf: async (folder) => folder });
+	assert.deepEqual(found[0]?.addable, [{ label: "OnlyTests", path: resolve(lib) }]);
 });

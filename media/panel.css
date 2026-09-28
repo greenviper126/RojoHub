@@ -838,6 +838,22 @@ button:focus-visible {
 	white-space: nowrap;
 }
 
+/* The project file a card serves, when it is not default.project.json. */
+.file-tag {
+	flex: 0 1 auto;
+	min-width: 2.5em;
+	padding: 0 5px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	color: var(--muted);
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.8em;
+	line-height: 15px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .group-toggle:hover .name {
 	color: var(--vscode-textLink-foreground);
 }

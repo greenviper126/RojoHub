@@ -46,7 +46,7 @@ git branches and worktrees.
 
 | Term | Meaning |
 |---|---|
-| **Project** (in code: *slot*) | One registered Rojo project: a git repo with a project file, normally `default.project.json`. Identified by its Rojo project `name`. |
+| **Project** (in code: *slot*) | One registered Rojo project: a git repo and one of the `*.project.json` files directly in it, normally `default.project.json` (see [Project files](#project-files)). Identified by that file's Rojo project `name`. |
 | **Port** | The TCP port the project's Rojo listens on, `localhost:<port>`. Fixed per project (see [Ports](#6-ports)). |
 | **Target** | What the project is currently serving: a **worktree** (served in place) or a **branch** with no worktree (served from a *view*). |
 | **Primary checkout** | The repo's main folder, the one other worktrees belong to. Registration always stores this, whichever worktree you registered from. |
@@ -152,7 +152,9 @@ the order projects were added, which reordering does not touch.
 a project). Each project is a card:
 
 - a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
-  marks the project this VS Code window is open on);
+  marks the project this VS Code window is open on). A project serving a file other than
+  `default.project.json` shows that file's name in a small tag after its own (`test` for
+  `test.project.json`);
 - the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked; it shows a
   copy icon on hover and a green tick for a moment after copying;
 - **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
@@ -168,8 +170,8 @@ a project). Each project is a card:
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for
   Studio), *Starting…*, *Stopped* or *Error*), a **⋯** menu, and **Start** or **Stop** at the right.
   The ⋯ menu has *Update sourcemap.json* with the sourcemap's status (for a project serving a
-  worktree; see [Sourcemaps](#sourcemaps)), *Build place file…*, *Show Rojo log* and *Remove from
-  Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
+  worktree; see [Sourcemaps](#sourcemaps)), *Project file…* (see [Project files](#project-files)),
+  *Build place file…*, *Show Rojo log* and *Remove from Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
 
 **Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
 borrowed project file and packages match what Studio gets. A save dialog opens on
@@ -190,7 +192,7 @@ icon. With no projects, the section explains what Rojo-Hub does and offers *Add 
 **Grouped by workspace.** When projects belong to a VS Code workspace (a `.code-workspace`
 file), the Projects list groups them under that workspace's name, with its serving count, a window icon
 for the workspace this window has open, and a **Group** button that makes a group
-of its projects. Folders the workspace lists that have a `default.project.json` but are not added
+of its projects. Folders the workspace lists that have a `*.project.json` but are not added
 yet appear under it as *not added* with an **Add** button (and *Add all* when there are several).
 Projects in no workspace are under **Other projects**. See [Workspaces](#workspaces).
 
@@ -273,15 +275,43 @@ knows about, and offers *Browse…*.
 Any folder inside a repo works; the primary checkout is what gets registered. Registration fails
 when:
 
-- the primary checkout has no `default.project.json`, or it has no `name`;
+- the primary checkout has no `*.project.json` directly in it, or the chosen one has no `name`;
 - the repo is already registered;
 - another project already uses the same Rojo project `name`. Names must be unique because the
   Studio plugin reconnects a place only to a server reporting the name it saved.
 
 A newly added project points at its primary checkout and is stopped until you start it.
 
+### Project files
+
+A project serves one of the `*.project.json` files directly in its folder. Adding a folder picks it
+this way:
+
+- `default.project.json` when the folder has one, without asking;
+- otherwise the folder's only `*.project.json` (a library with just a `test.project.json`, say);
+- otherwise a list of the folder's project files to choose from.
+
+**Project file…**, in the card's ⋯ menu and in the project's menu, lists the folder's
+`*.project.json` files with the current one ticked and changes it. The choice is saved with the
+project, so it stays after restarts and updates. That is how a library is served with its tests:
+pick `test.project.json` (or whatever builds a place with the library and its tests in it).
+
+- On a **stopped** project the change is only saved.
+- On a **serving** project it asks first: Rojo reads the project name, `servePort` and place IDs
+  once per session, so Rojo restarts on the new file and Studio disconnects. With the plugin's Auto
+  Reconnect on, Studio reconnects by itself unless the new file has a different project `name`; then
+  connect it by hand once. This is the only change that restarts Rojo on purpose; switching branches
+  never does.
+- The project takes the new file's `name`, which must not be another project's (the same rule as
+  adding).
+- The port stays the same unless the new file sets `servePort` (or the old one did), since ports
+  come from the repo's first commit.
+- Everything follows the file: what Rojo serves on every branch, `sourcemap.json` and *Build place
+  file…*. A branch or worktree without that file shows an error on the card until you switch back or
+  pick another file.
+
 **A project's menu**: Switch Branch…, Start or Stop Serving, Copy Address (`localhost:<port>`),
-Show Rojo Log, Remove Project. Any warning shows at the top of the menu.
+Project File…, Show Rojo Log, Remove Project. Any warning shows at the top of the menu.
 
 **Start Serving** runs `rojo serve` in the primary checkout's folder, with the Rojo version the
 project pins. It waits until Rojo answers with the project's name, or reports the end of the Rojo
@@ -336,7 +366,7 @@ only to arrange the Projects list; nothing about a project changes.
 
 A project's port is decided by these rules, in order, and is recomputed every few seconds:
 
-1. **`servePort`** in the project's `default.project.json`, when set. This is Rojo's own field: it is
+1. **`servePort`** in the project's project file, when set. This is Rojo's own field: it is
    committed with the repo, so everyone who clones it agrees, and plain `rojo serve` uses it too.
 2. **Otherwise a port worked out from the repo's first commit**: a hash of the oldest root commit,
    placed in the port range (default `34873-35872`). Every clone of the repo has the same first
@@ -446,7 +476,7 @@ project file. Switching rewrites that pointer. The running Rojo notices, re-read
 the new tree, and sends Studio the difference as one update over the same session. Studio stays
 connected and does not ask for confirmation (the plugin only confirms the initial sync).
 
-Because Rojo reads the served tree's **own** `default.project.json`, everything in it applies: its
+Because Rojo reads the served tree's **own** project file, everything in it applies: its
 own folder mappings, `globIgnorePaths` and `syncRules`, and edits to that file sync live.
 
 The project's `name` and place-ID settings always come from the primary checkout and never change
@@ -616,7 +646,8 @@ debugging.
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
 | `GET /slots` | | Every project with its state |
-| `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path` |
+| `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; without `projectFile`, its `default.project.json` or only `*.project.json` |
+| `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
 | `DELETE /slots/:id` | | Remove a project |
 | `POST /slots/:id/start`, `/stop` | | Start or stop serving |
 | `GET /slots/:id/targets` | | Worktrees and branches it can serve, from the service's cache |
