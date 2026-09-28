@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 
 import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
-import type { Candidate, FromPanel, WorkspaceInfo } from "../common/panel";
+import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
 import { client, ensureService } from "./client";
 import { savedState } from "./saved";
 import { findWorkspaces } from "./workspaces";
@@ -307,8 +307,17 @@ async function addToGroup(argument: unknown): Promise<void> {
 	if (!group) return;
 	await refresh();
 	const current = lastGroups.find((entry) => entry.id === group.id) ?? group;
-	type Pick = vscode.QuickPickItem & { member?: { kind: "project" | "group"; id: string } };
+	type Pick = vscode.QuickPickItem & { member?: GroupMember };
+	const workspaces = lastWorkspaces
+		.map((workspace) => ({ workspace, missing: workspace.slotIds.filter((id) => !current.slotIds.includes(id)) }))
+		.filter(({ missing }) => missing.length > 0);
 	const items: Pick[] = [
+		...(workspaces.length ? [{ label: "Workspaces · adds each of their projects", kind: vscode.QuickPickItemKind.Separator }] : []),
+		...workspaces.map(({ workspace, missing }) => ({
+			label: `$(folder-library) ${workspace.name}`,
+			description: `adds ${missing.length} project${missing.length === 1 ? "" : "s"}`,
+			member: { kind: "workspace" as const, id: workspace.file },
+		})),
 		{ label: "Projects", kind: vscode.QuickPickItemKind.Separator },
 		...lastSlots
 			.filter((slot) => !current.slotIds.includes(slot.id))
@@ -322,7 +331,7 @@ async function addToGroup(argument: unknown): Promise<void> {
 		void vscode.window.showInformationMessage(`There is nothing left to add to ${current.name}.`);
 		return;
 	}
-	const picked = await vscode.window.showQuickPick(items, { title: `Add to ${current.name}`, placeHolder: "Pick a project or group to add" });
+	const picked = await vscode.window.showQuickPick(items, { title: `Add to ${current.name}`, placeHolder: "Pick a workspace, project or group to add" });
 	if (picked?.member) await addMember(current, picked.member);
 }
 
@@ -364,13 +373,24 @@ function reportStopAll(result: { stopped: string[]; failed: { id: string; error:
 	void vscode.window.showErrorMessage(`Rojo-Hub: could not stop ${result.failed.map((entry) => `${name(entry.id)} (${entry.error.split("\n")[0]})`).join(", ")}`);
 }
 
-/** Adds a project or a group to a group; the service refuses loops with the chain that would loop. */
-async function addMember(group: GroupView, member: { kind: "project" | "group"; id: string }): Promise<void> {
-	const changes = member.kind === "project" ? { slotIds: [...group.slotIds, member.id] } : { groupIds: [...group.groupIds, member.id] };
+/*
+	Adds a project, a group, or every project of a workspace not already in the
+	group. The service refuses group loops with the chain that would loop.
+*/
+async function addMember(group: GroupView, member: GroupMember): Promise<void> {
+	let changes: { slotIds?: string[]; groupIds?: string[] };
+	if (member.kind === "workspace") {
+		const workspace = lastWorkspaces.find((entry) => entry.file === member.id);
+		if (!workspace) return;
+		changes = { slotIds: [...group.slotIds, ...workspace.slotIds.filter((id) => !group.slotIds.includes(id))] };
+	} else {
+		changes = member.kind === "project" ? { slotIds: [...group.slotIds, member.id] } : { groupIds: [...group.groupIds, member.id] };
+	}
 	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));
 }
 
-async function removeMember(group: GroupView, member: { kind: "project" | "group"; id: string }): Promise<void> {
+async function removeMember(group: GroupView, member: GroupMember): Promise<void> {
+	if (member.kind === "workspace") return; // workspaces are added as their projects, never stored
 	const changes =
 		member.kind === "project" ? { slotIds: group.slotIds.filter((id) => id !== member.id) } : { groupIds: group.groupIds.filter((id) => id !== member.id) };
 	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));

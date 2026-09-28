@@ -5,7 +5,7 @@
 */
 
 export const SERVICE_PORT = 34870;
-export const SERVICE_VERSION = "0.10.1";
+export const SERVICE_VERSION = "0.10.2";
 
 /*
 	Where a slot's files come from. A worktree is served in place, so edits made

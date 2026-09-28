@@ -238,14 +238,24 @@ function groupCard(group: GroupView): string {
 	const groupChoices = groups
 		.filter((other) => other.id !== group.id && !group.groupIds.includes(other.id))
 		.map((other) => ({ other, loop: pathBetween(groups, other.id, group.id) }));
+	const workspaceChoices = (state?.workspaces ?? [])
+		.filter((workspace) => workspace.slotIds.length > 0)
+		.map((workspace) => ({ workspace, missing: workspace.slotIds.filter((id) => !group.slotIds.includes(id)) }));
 	const nameOf = (id: string) => groups.find((entry) => entry.id === id)?.name ?? id;
+	const workspaceOption = ({ workspace, missing }: (typeof workspaceChoices)[number]) => {
+		const notAdded = workspace.addable.length ? ` · ${workspace.addable.length} folder${workspace.addable.length === 1 ? "" : "s"} not added to Rojo-Hub yet` : "";
+		return missing.length === 0
+			? `<option disabled>${escape(workspace.name)}  (all its projects are in this group)</option>`
+			: `<option value="workspace:${escape(workspace.file)}" title="${escape(workspace.file)}">${escape(workspace.name)}  (adds ${missing.length} project${missing.length === 1 ? "" : "s"}${notAdded})</option>`;
+	};
 	const adder =
-		projectChoices.length + groupChoices.length === 0
+		projectChoices.length + groupChoices.length + workspaceChoices.filter((choice) => choice.missing.length > 0).length === 0
 			? slots.length === 0
 				? `<div class="muted small pad">Add projects above first.</div>`
 				: `<div class="muted small pad">Everything is already in this group.</div>`
-			: `<div class="add-member">${icon("add")}<select data-action="add-member" data-id="${escape(group.id)}" title="Add a project or a group to ${escape(group.name)}">
-				<option value="">Add a project or group…</option>
+			: `<div class="add-member">${icon("add")}<select data-action="add-member" data-id="${escape(group.id)}" title="Add a project, a group or a workspace's projects to ${escape(group.name)}">
+				<option value="">Add a project, group or workspace…</option>
+				${workspaceChoices.length ? `<optgroup label="Workspaces · adds each of their projects">${workspaceChoices.map(workspaceOption).join("")}</optgroup>` : ""}
 				${projectChoices.length ? `<optgroup label="Projects">${projectChoices.map((slot) => `<option value="project:${escape(slot.id)}">${escape(slot.projectName)}  :${slot.port}</option>`).join("")}</optgroup>` : ""}
 				${
 					groupChoices.length
@@ -646,8 +656,9 @@ document.addEventListener("click", (event) => {
 document.addEventListener("change", (event) => {
 	const select = event.target as HTMLSelectElement;
 	if (select.dataset.action !== "add-member" || !select.value) return;
-	const [kind, ...rest] = select.value.split(":");
-	const member: GroupMember = { kind: kind === "group" ? "group" : "project", id: rest.join(":") };
+	const separator = select.value.indexOf(":");
+	const kind = select.value.slice(0, separator);
+	const member: GroupMember = { kind: kind === "group" || kind === "workspace" ? kind : "project", id: select.value.slice(separator + 1) };
 	send({ type: "addToGroup", id: select.dataset.id ?? "", member });
 	select.value = "";
 });

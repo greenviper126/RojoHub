@@ -6,9 +6,13 @@
 
 import type { GroupView, SlotView, Target, TargetOption } from "./api";
 
-/** A group member: a project or a nested group. */
+/*
+	Something to add to or take out of a group: a project, a nested group, or
+	(adding only) a workspace, which adds each of its projects not already in
+	the group. `id` is the workspace's file for a workspace.
+*/
 export interface GroupMember {
-	kind: "project" | "group";
+	kind: "project" | "group" | "workspace";
 	id: string;
 }
 

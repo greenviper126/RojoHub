@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.10.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.10.2, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -142,8 +142,8 @@ projects are serving (green when all are). Inside:
 
 - the groups inside it, then its projects, each with ✕ to take it out (clicking a name jumps to
   its card);
-- an **Add a project or group…** dropdown: projects not in it yet, then groups, with groups that
-  would make a loop greyed out;
+- an **Add a project, group or workspace…** dropdown: workspaces (adding each of their projects),
+  projects not in it yet, then groups, with groups that would make a loop greyed out;
 - **Start**, **Only this** (start this group, stop every other project; asks first, naming what it
   will stop) and **Stop** (keeps projects another running group uses);
 - a green *running* badge while the group is running;
@@ -326,8 +326,16 @@ in several groups. Groups live in the **Groups** section of the panel, below Pro
 
 - **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name and press Enter
   or *Create*.
-- **Add to it** with the group card's **Add a project or group…** dropdown. It lists the projects
-  not in the group yet, then the groups. Pick one to add it; do it again for the next.
+- **Add to it** with the group card's **Add a project, group or workspace…** dropdown. It lists:
+  - **Workspaces**: picking one adds every project of that VS Code workspace that is not in the
+    group yet (for example all three of TheLaundryShift's). They are added as ordinary projects, so
+    each can be taken out again with its ✕. Folders the workspace lists that are not added to
+    Rojo-Hub are not added to the group; the entry says when there are some. A workspace whose
+    projects are all in the group already is greyed out.
+  - **Projects** not in the group yet.
+  - **Groups**, with those that would loop greyed out.
+
+  Pick one to add it; do it again for the next.
 - **Take something out** with the ✕ next to it in the group. Nothing is deleted: a project stays
   registered, a group stays a group.
 - **Groups inside groups** are listed first in the card, with a layers icon and how many of their
