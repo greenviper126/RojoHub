@@ -15,9 +15,8 @@ import { listProjectFiles } from "../common/projectFiles";
 	and which folders in a workspace could still be added.
 */
 
-export function pathKey(path: string): string {
-	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
+export { pathKey } from "../common/paths";
+import { pathKey } from "../common/paths";
 
 /** The folders a workspace file lists, as absolute paths. Accepts VS Code's comments and trailing commas. */
 export function parseWorkspaceFile(text: string, file: string): string[] {

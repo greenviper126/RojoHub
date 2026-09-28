@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,6 +8,7 @@ import { test } from "node:test";
 import type { IncomingMessage } from "node:http";
 
 import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT } from "../common/api";
+import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
@@ -528,4 +529,17 @@ test("project files: listed default first, the one used without asking, and only
 	writeFileSync(join(lib, "Lib.code-workspace"), JSON.stringify({ folders: [{ path: "." }] }));
 	const found = await findWorkspaces({ windowFile: join(lib, "Lib.code-workspace"), slots: [], primaryOf: async (folder) => folder });
 	assert.deepEqual(found[0]?.addable, [{ label: "OnlyTests", path: resolve(lib) }]);
+});
+
+test("pathKey treats a short 8.3 path and its long form as one folder", { skip: process.platform !== "win32" }, () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo hub long name "));
+	mkdirSync(join(dir, "Game"));
+	const short = execFileSync("powershell.exe", ["-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:DIR).ShortPath"], {
+		encoding: "utf8",
+		env: { ...process.env, DIR: dir },
+	}).trim();
+	if (!short.includes("~")) return; // short names are turned off on this drive
+	assert.equal(pathKey(join(short, "Game")), pathKey(join(dir, "Game")));
+	assert.equal(pathKey(join(short, "not-made-yet")), pathKey(join(dir, "not-made-yet")), "also for a folder that does not exist yet");
+	assert.equal(pathKey(dir.toUpperCase() + "\\"), pathKey(dir), "case and a trailing slash");
 });

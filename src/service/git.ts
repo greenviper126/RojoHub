@@ -98,10 +98,8 @@ export function sameFolders(dir: string): string[] {
 	return [...new Set(keys)];
 }
 
-/** Case-insensitive, separator-insensitive key for comparing Windows paths. */
-export function pathKey(path: string): string {
-	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
+export { pathKey } from "../common/paths";
+import { pathKey } from "../common/paths";
 
 /*
 	The primary checkout of whatever repo `path` is inside, so registering from a

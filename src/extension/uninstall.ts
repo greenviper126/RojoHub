@@ -1,7 +1,8 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { SERVICE_PORT, type Health } from "../common/api";
+import { pathKey } from "../common/paths";
 import { AGENTS, agentState, runCli } from "../service/agentConfig";
 
 /*
@@ -14,7 +15,7 @@ import { AGENTS, agentState, runCli } from "../service/agentConfig";
 	left to manage them.
 */
 
-const homeKey = (path: string) => resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+const homeKey = pathKey;
 
 /*
 	Port 34870 is machine-wide: another signed-in Windows user's service can be

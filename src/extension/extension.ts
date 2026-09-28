@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { pathKey } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
@@ -66,9 +67,6 @@ let candidatesSignature = "";
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-function pathKey(path: string): string {
-	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
 
 /** Primary checkouts by folder; a folder's repo does not change while the window is open. */
 const primaries = new Map<string, Promise<string | null>>();

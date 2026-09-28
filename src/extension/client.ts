@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
+import { pathKey } from "../common/paths";
 import { compareVersions } from "../common/version";
 import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Snapshot, type Target, type TargetOption } from "../common/api";
 
@@ -40,7 +41,7 @@ export function expectedHome(): string {
 	return process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
 }
 
-const homeKey = (path: string) => resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+const homeKey = pathKey;
 
 /*
 	Port 34870 is machine-wide, so with two Windows users signed in, the other
