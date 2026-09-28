@@ -37,6 +37,52 @@ export function agentWishes(): AgentWishes {
 }
 
 /*
+	The boxes as this window last acted on them. Only a box the user changes
+	since then (here, in another window, in settings.json, or through the
+	first-run question) is sent to the service, never the whole setting: a
+	ticked box whose entry the user removed by hand must not put it back on
+	every start. See reconcileAgents.
+*/
+let acted: AgentWishes = {};
+
+/** Takes the boxes as they are at activation as acted on. */
+export function trackAgentBoxes(): void {
+	acted = agentWishes();
+}
+
+/** The boxes that changed since this window last acted on them, marked as acted on. */
+export function changedWishes(): AgentWishes {
+	const now = agentWishes();
+	const changed: AgentWishes = {};
+	for (const id of Object.keys(AGENT_CLIS) as AgentId[]) if (now[id] !== acted[id] && typeof now[id] === "boolean") changed[id] = now[id];
+	acted = now;
+	return changed;
+}
+
+/** Marks one agent's wish as acted on, for the panel's switch, which sends it itself. */
+export function actedOn(id: AgentId, on: boolean): void {
+	acted = { ...acted, [id]: on };
+}
+
+/*
+	On activation: a box that says on for an installed agent whose config has
+	no rojohub entry means the user took it out by hand. The box is turned off
+	to match, and marked as acted on first, so the change it makes is never
+	sent back to the service as a wish to add it again.
+*/
+export async function reconcileAgents(statuses: AgentStatus[]): Promise<void> {
+	if (!settingKnown()) return;
+	const boxes = chosen();
+	const removed = statuses.filter((agent) => agent.installed && agent.state === "absent" && boxes[agent.id] === true);
+	if (removed.length === 0) return;
+	for (const agent of removed) actedOn(agent.id, false);
+	await vscode.workspace
+		.getConfiguration(SECTION)
+		.update(KEY, { ...chosen(), ...Object.fromEntries(removed.map((agent) => [agent.id, false])) }, vscode.ConfigurationTarget.Global)
+		.then(undefined, () => undefined);
+}
+
+/*
 	Whether this window knows rojoHub.agents. VS Code can restart an updated
 	extension's code in a window that is not in focus without registering its
 	new settings, and writing an unregistered setting fails.

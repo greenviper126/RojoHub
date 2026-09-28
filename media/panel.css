@@ -196,7 +196,7 @@ code {
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--surface);
-	transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), background-color 0.2s var(--ease);
+	transition: border-color 0.12s var(--ease), box-shadow 0.12s var(--ease), background-color 0.12s var(--ease);
 }
 
 .card:hover {
@@ -223,6 +223,21 @@ code {
 
 .card.project.starting::before {
 	background: var(--info);
+}
+
+/*
+	Drawn before the service has confirmed it (see src/webview/pending.ts):
+	a project being added, a group being created. They take no clicks until
+	the real one arrives.
+*/
+.card.placeholder {
+	border-style: dashed;
+	opacity: 0.75;
+	pointer-events: none;
+}
+
+.card.placeholder .codicon-loading {
+	color: var(--info);
 }
 
 .card.project.error::before,
@@ -530,13 +545,18 @@ code {
 	background: var(--vscode-editorWidget-background, var(--vscode-dropdown-background));
 	box-shadow: 0 6px 18px var(--shadow);
 	overflow: hidden;
-	animation: drop-in 0.14s var(--ease);
+	animation: drop-in 0.08s var(--ease);
 }
 
+/*
+	Dropdowns open with their content already drawn, so the opening only
+	hints at where it came from: short, and never starting invisible (a list
+	that fades in from nothing reads as one that is still loading).
+*/
 @keyframes drop-in {
 	from {
-		opacity: 0;
-		transform: translateY(-4px);
+		opacity: 0.6;
+		transform: translateY(-2px);
 	}
 }
 
@@ -1034,7 +1054,7 @@ button:focus-visible {
 .card.adder {
 	border-color: color-mix(in srgb, var(--accent) 50%, transparent);
 	box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow) 50%, transparent);
-	animation: drop-in 0.14s var(--ease);
+	animation: drop-in 0.08s var(--ease);
 }
 
 .adder p {
@@ -1391,7 +1411,7 @@ button:focus-visible {
 	flex-direction: column;
 	gap: 8px;
 	padding: 8px 6px 6px;
-	animation: drop-in 0.14s var(--ease);
+	animation: drop-in 0.08s var(--ease);
 }
 
 .create-branch p {
@@ -1409,7 +1429,7 @@ button:focus-visible {
 	border: 1px solid var(--vscode-input-border, var(--border));
 	border-radius: var(--radius-sm);
 	background: var(--vscode-input-background);
-	animation: drop-in 0.14s var(--ease);
+	animation: drop-in 0.08s var(--ease);
 }
 
 .filter:focus-within {
@@ -1477,7 +1497,7 @@ button:focus-visible {
 	background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--surface-raised)));
 	color: var(--vscode-menu-foreground, var(--fg));
 	box-shadow: 0 6px 18px var(--shadow);
-	animation: drop-in 0.12s var(--ease);
+	animation: drop-in 0.08s var(--ease);
 }
 
 .menu-item {

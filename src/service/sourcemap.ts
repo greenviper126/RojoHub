@@ -1,9 +1,10 @@
-import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { SlotView } from "../common/api";
 import { git } from "./git";
+import { findRojo } from "./rojo";
 
 const RESTART_MS = 1000;
 const MAX_CRASHES_PER_MINUTE = 5;
@@ -43,15 +44,15 @@ export function writeSourcemap(binary: string, tree: string, projectFile: string
 	start: left by a service that died. Matched by the absolute output path in
 	their command line, so luau-lsp's watchers are never touched.
 */
-export function stopStrayWatchers(tree: string): void {
+export async function stopStrayWatchers(tree: string): Promise<void> {
 	if (process.platform !== "win32") return;
-	const needle = join(tree, "sourcemap.json").replace(/'/g, "''");
-	const script =
-		`$needle = '${needle}'\n` +
-		"Get-CimInstance Win32_Process -Filter \"Name='rojo.exe'\" | " +
-		"Where-Object { $_.CommandLine -and $_.CommandLine.Contains(' sourcemap ') -and $_.CommandLine.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | " +
-		"ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
-	spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 15000 });
+	for (const pid of await findRojo(join(tree, "sourcemap.json"), " -and $_.CommandLine.Contains(' sourcemap ')")) {
+		try {
+			process.kill(pid);
+		} catch {
+			// already gone
+		}
+	}
 }
 
 /*

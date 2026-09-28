@@ -1,14 +1,45 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.17.3",
+  "version": "0.18.2",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1b1f27",
+    "theme": "dark"
+  },
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
-  "repository": "https://github.com/greenviper126/RojoHub",
+  "license": "MIT",
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "roblox",
+    "rojo",
+    "luau",
+    "studio",
+    "worktree"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/greenviper126/RojoHub.git"
+  },
+  "homepage": "https://greenviper126.github.io/RojoHub/",
+  "bugs": {
+    "url": "https://github.com/greenviper126/RojoHub/issues"
+  },
   "engines": {
     "vscode": "^1.101.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Rojo-Hub runs git and Rojo in your projects' folders."
+    }
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -358,7 +389,7 @@
             "pattern": "^\\s*\\d+\\s*(-\\s*\\d+\\s*)?$",
             "patternErrorMessage": "Write a port (35000) or a range (\"35000-35010\")."
           },
-          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
+          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872 (Rojo's default) and 34870 (Rojo-Hub's service) are always excluded. A project file's `servePort` still wins. A running project whose port changes is restarted on its new port."
         },
         "rojoHub.sourcemaps": {
           "type": "boolean",
@@ -383,6 +414,7 @@
         "rojoHub.agents": {
           "type": "object",
           "scope": "application",
+          "ignoreSync": true,
           "additionalProperties": false,
           "properties": {
             "vscode": {
@@ -398,7 +430,7 @@
             "codex": {
               "type": "boolean",
               "default": false,
-              "description": "Codex: adds rojohub to ~/.codex/config.toml (codex mcp add)."
+              "description": "Codex: adds rojohub to its config.toml in CODEX_HOME, normally ~/.codex (codex mcp add)."
             }
           },
           "default": {
@@ -484,11 +516,14 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc -p . --noEmit",
     "test": "npm run build && npm run smoke && tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
-    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies",
     "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim",
     "smoke": "node tools/smoke-bundle.cjs",
-    "vscode:uninstall": "node ./dist/uninstall.js"
+    "vscode:uninstall": "node ./dist/uninstall.js",
+    "docs:dev": "vitepress dev site",
+    "docs:build": "vitepress build site",
+    "docs:preview": "vitepress preview site"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.1.2",
@@ -498,7 +533,8 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "jsonc-parser": "^3.3.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitepress": "^1.6.4"
   },
   "dependencies": {
     "smol-toml": "^1.9.0"

@@ -3,3 +3,6 @@ out/
 dist/
 *.vsix
 .vscode-test/
+site/.vitepress/dist/
+site/.vitepress/cache/
+BRIEF.md

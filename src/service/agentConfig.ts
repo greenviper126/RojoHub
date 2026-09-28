@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -55,12 +55,26 @@ function entryUrl(servers: unknown): string | null {
 	return typeof entry.url === "string" ? entry.url : "";
 }
 
+/*
+	Claude Code's user config: with CLAUDE_CONFIG_DIR set it keeps .claude.json
+	there instead of in the home folder. Checked on every read, since a Claude
+	Code run with the variable set may only just have made that file.
+*/
+function claudeConfigFile(): string {
+	const dir = process.env.CLAUDE_CONFIG_DIR;
+	if (dir) {
+		const file = join(dir, ".claude.json");
+		if (existsSync(file)) return file;
+	}
+	return join(homedir(), ".claude.json");
+}
+
 export const AGENTS: Agent[] = [
 	{
 		id: "claudeCode",
 		...AGENT_CLIS.claudeCode,
-		// User-scope servers are the top-level mcpServers of ~/.claude.json.
-		readUrl: () => entryUrl((readCached(join(homedir(), ".claude.json"), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
+		// User-scope servers are the top-level mcpServers of ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json).
+		readUrl: () => entryUrl((readCached(claudeConfigFile(), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
 	},
 	{
 		id: "codex",
@@ -70,13 +84,18 @@ export const AGENTS: Agent[] = [
 	},
 ];
 
-/** "connected", "absent" or "other" (someone else's rojohub entry). */
+/*
+	"connected", "absent", "other" (someone else's rojohub entry), or "unknown"
+	when the config file exists but cannot be read or parsed, as when the agent
+	is writing it at that moment. Unknown is never taken for absent: nothing is
+	added, removed or reconciled on it.
+*/
 export function agentState(agent: Agent): AgentStatus["state"] {
 	let url: string | null | undefined;
 	try {
 		url = agent.readUrl();
 	} catch {
-		return "absent";
+		return "unknown";
 	}
 	if (url === null || url === undefined) return "absent";
 	return url.replace(/\/+$/, "") === MCP_URL ? "connected" : "other";
@@ -135,8 +154,13 @@ export class AgentRegistrar {
 			await this.detect();
 			for (const agent of AGENTS) {
 				const wish = wishes[agent.id];
-				if (wish === undefined || !this.installed.get(agent.id)) continue;
+				if (wish === undefined) continue;
 				const state = agentState(agent);
+				if (!this.installed.get(agent.id)) {
+					// Its CLI is gone, so the entry cannot be taken out the documented way; say so instead of doing nothing.
+					if (!wish && state === "connected") this.errors.set(agent.id, `${agent.cli} is not on PATH, so Rojo-Hub cannot take its rojohub entry out. Remove it from ${agent.label}'s config by hand.`);
+					continue;
+				}
 				try {
 					if (wish && state === "absent") await runCli(agent.cli, agent.add);
 					else if (!wish && state === "connected") await runCli(agent.cli, agent.remove);

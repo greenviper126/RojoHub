@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 
 import { decode } from "@msgpack/msgpack";
 
-import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import type { GroupResult, GroupView, SlotView, Snapshot, TargetOption } from "../common/api";
+import { pathKey } from "../common/paths";
 import { parsePortSettings, preferredPort } from "../service/ports";
 
 /*
@@ -111,7 +113,7 @@ interface Packet {
 
 test("one port, live switches, one session", async () => {
 	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
-	assert.equal(slot.repoPath.toLowerCase(), repo.toLowerCase(), "registering from a worktree registers the primary");
+	assert.equal(pathKey(slot.repoPath), pathKey(repo), "registering from a worktree registers the primary");
 	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
 	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
 	assert.equal(slot.portSource, "hash");
@@ -347,7 +349,7 @@ test("branch picker: cached list kept fresh, fetch, new branch, build, and a che
 	await assert.rejects(call("POST", `/slots/${slot.id}/branch`, { name: "fine", base: "no-such-base" }), /is not a branch or commit/);
 	const made = await call<{ slot: SlotView; path: string; branch: string; via: string }>("POST", `/slots/${slot.id}/branch`, { name: "feat/new-thing", base: "main" });
 	assert.equal(made.via, "git", "a repo Orca does not know gets a git worktree");
-	assert.equal(made.path.toLowerCase(), join(root, "Branchy-worktrees", "feat-new-thing").toLowerCase());
+	assert.equal(pathKey(made.path), pathKey(join(root, "Branchy-worktrees", "feat-new-thing")));
 	assert.equal(made.branch, "feat/new-thing");
 	assert.deepEqual(made.slot.target, { kind: "worktree", path: made.path });
 	assert.equal(gitIn(made.path, "branch", "--show-current").trim(), "feat/new-thing");
@@ -420,7 +422,7 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.ok(!first.isError, first.text);
 	assert.match(first.text, /now serves .*Agenty-alpha.*Rojo is serving/s);
 	let now = await view();
-	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "any folder inside the worktree serves its root");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha), "any folder inside the worktree serves its root");
 	assert.equal(now.sessionId, sessionId, "switched live, not restarted");
 	assert.equal(now.claim?.label, "Agenty-alpha");
 
@@ -440,7 +442,7 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	const switched = await tool("switch", { project: slot.projectName, target: "alpha" });
 	assert.ok(!switched.isError, switched.text);
 	now = await view();
-	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "a branch checked out in a worktree is served from it");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha), "a branch checked out in a worktree is served from it");
 	assert.ok(now.claim);
 
 	await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: dir } });
@@ -542,4 +544,86 @@ test("removing a project that pushed another off its port says so first, then mo
 
 	await call("POST", `/slots/${a.id}/stop`);
 	await call("DELETE", `/slots/${a.id}`);
+});
+
+test("robustness: events stream, racing adds, work after a remove, a deleted served worktree, foreign Hosts", async () => {
+	const dir = await makeRepo("Sturdy");
+
+	// the panel's stream: a snapshot at once, then one on every change
+	const snapshots: Snapshot[] = [];
+	const stream = new AbortController();
+	const reading = (async () => {
+		const response = await fetch(api + "/events", { signal: stream.signal });
+		const reader = response.body!.getReader();
+		let buffer = "";
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) return;
+			buffer += new TextDecoder().decode(value);
+			let end: number;
+			while ((end = buffer.indexOf("\n\n")) >= 0) {
+				const event = buffer.slice(0, end);
+				buffer = buffer.slice(end + 2);
+				if (event.startsWith("data: ")) snapshots.push(JSON.parse(event.slice(6)) as Snapshot);
+			}
+		}
+	})().catch(() => undefined);
+	await until("first snapshot", async () => snapshots.length > 0);
+
+	// two adds of one repo at once register it once
+	const results = await Promise.allSettled([call<SlotView>("POST", "/slots", { path: dir }), call<SlotView>("POST", "/slots", { path: dir })]);
+	assert.equal(results.filter((result) => result.status === "fulfilled").length, 1, "one add wins");
+	assert.match(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason), /already registered/);
+	const slot = (results.find((result) => result.status === "fulfilled") as PromiseFulfilledResult<SlotView>).value;
+	assert.equal((await call<SlotView[]>("GET", "/slots")).filter((view) => view.repoPath === slot.repoPath).length, 1);
+	await until("the add reaches the stream", async () => snapshots.at(-1)!.slots.some((view) => view.id === slot.id));
+
+	// a start pushes starting, then running, without anyone asking
+	await call("POST", `/slots/${slot.id}/start`);
+	await until("running in the stream", async () => snapshots.at(-1)!.slots.find((view) => view.id === slot.id)?.state === "running");
+
+	// a worktree with no Packages is served borrowed; deleting it must not take the service down
+	gitIn(dir, "branch", "doomed");
+	const doomed = join(root, "wt-doomed");
+	gitIn(dir, "worktree", "add", "-q", doomed, "doomed");
+	write(join(dir, "Packages", "Dep.luau"), "return 1\n");
+	const project = JSON.parse(readFileSync(join(dir, "default.project.json"), "utf8"));
+	project.tree.ReplicatedStorage = { $className: "ReplicatedStorage", Packages: { $path: "Packages" } };
+	for (const tree of [dir, doomed]) writeFileSync(join(tree, "default.project.json"), JSON.stringify(project));
+	await call("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: doomed } });
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((view) => view.id === slot.id)!.mode, "borrowed");
+	rmSync(doomed, { recursive: true, force: true });
+	await sleep(3000);
+	assert.ok((await fetch(api + "/health")).ok, "the service is still up");
+	await call("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: dir } });
+	await call("POST", `/slots/${slot.id}/stop`);
+	await until("stopped in the stream", async () => snapshots.at(-1)!.slots.find((view) => view.id === slot.id)?.state === "stopped");
+
+	// a Start queued behind a Remove is refused rather than serving a removed project; removing a
+	// serving project takes a moment (stop rojo, wait for its port), so the Start sent just after it
+	// is queued behind it
+	await call("POST", `/slots/${slot.id}/start`);
+	const removing = call("DELETE", `/slots/${slot.id}`);
+	await sleep(50);
+	const starting = call("POST", `/slots/${slot.id}/start`);
+	await removing;
+	await assert.rejects(starting, /removed|No project/);
+	assert.equal((await call<SlotView[]>("GET", "/slots")).some((view) => view.id === slot.id), false);
+
+	// only programs on this machine: a DNS-rebinding Host or a web page's Origin is refused
+	const status = (headers: Record<string, string>) =>
+		new Promise<number>((done, fail) => {
+			const request = httpRequest({ host: "127.0.0.1", port: API_PORT, path: "/slots", headers }, (response) => {
+				response.resume();
+				done(response.statusCode ?? 0);
+			});
+			request.on("error", fail);
+			request.end();
+		});
+	assert.equal(await status({ host: `attacker.example:${API_PORT}` }), 403);
+	assert.equal(await status({ origin: "http://localhost:5173" }), 403);
+	assert.equal(await status({}), 200);
+
+	stream.abort();
+	await reading;
 });

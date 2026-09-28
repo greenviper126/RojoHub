@@ -37,10 +37,16 @@ export class TargetCache {
 	/** The cached list, reading it first only if there is none yet. */
 	async get(repo: string): Promise<TargetOption[]> {
 		const entry = this.entry(repo);
+		if (!entry.watcher) entry.watcher = this.watch(entry);
 		if (!entry.options) await this.refresh(repo);
 		else if (Date.now() - entry.at > STALE_MS) void this.refresh(repo).catch(() => undefined);
 		if (!entry.options) throw new Error(`Could not list ${repo}'s branches`);
 		return entry.options;
+	}
+
+	/** The list as it is now, without reading it; null before the first read. */
+	peek(repo: string): TargetOption[] | null {
+		return this.entries.get(pathKey(repo))?.options ?? null;
 	}
 
 	/** When the repo's list was last read, so the panel can tell that a newer one is ready. */
@@ -118,7 +124,11 @@ export class TargetCache {
 					void this.refresh(entry.repo).catch(() => undefined);
 				}, SETTLE_MS);
 			});
-			watcher.on("error", () => watcher.close());
+			// A watch that fails (the .git folder moved, a network drive dropped) is let go, so the next get() or track() makes a new one.
+			watcher.on("error", () => {
+				watcher.close();
+				if (entry.watcher === watcher) entry.watcher = null;
+			});
 			return watcher;
 		} catch {
 			return null;

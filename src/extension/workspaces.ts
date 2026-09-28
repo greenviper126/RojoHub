@@ -10,14 +10,13 @@ import { listProjectFiles } from "../common/projectFiles";
 	VS Code workspaces (.code-workspace files) that Rojo-Hub projects belong to,
 	for grouping the Projects list visually. Found in two places: the file this
 	window has open, and the top folder of every registered project (where a
-	multi-root workspace usually lives, e.g. TheLaundryShift.code-workspace).
+	multi-root workspace usually lives, e.g. MyGame.code-workspace).
 	Nothing here changes a project; it only decides where its card is drawn,
 	and which folders in a workspace could still be added.
 */
 
-export function pathKey(path: string): string {
-	return resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
+export { pathKey } from "../common/paths";
+import { pathKey } from "../common/paths";
 
 /** The folders a workspace file lists, as absolute paths. Accepts VS Code's comments and trailing commas. */
 export function parseWorkspaceFile(text: string, file: string): string[] {

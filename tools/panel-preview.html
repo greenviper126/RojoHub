@@ -4,7 +4,8 @@
 	dist/webview.js and media/panel.css with a stub VS Code API, sample state and
 	VS Code's Dark Modern (or ?theme=light Light Modern) colours. `npm run build` first.
 	?picker=1 opens the branch picker on the first project; ?width=NNN sets the sidebar width;
-	?workspaces=1, ?empty=1 and ?settings=1 change the sample; ?collapse= and ?click= are below.
+	?workspaces=1, ?empty=1, ?settings=1 and ?many=1 change the sample; ?collapse= and ?click= are below;
+	?lag=, ?fail=, ?tick= and ?noprefetch=1 change how the stand-in extension answers (see the stub).
 -->
 <html lang="en">
 <head>
@@ -118,20 +119,20 @@ const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
 const state = {
 	service: { running: true, version: "0.13.0", error: null },
 	slots: [
-		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "laundry-ui", until: Date.now() + 8 * 60000 } }),
-		slot("b", "VluxyAI", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
-		slot("c", "vluxysf", 35813, "stopped", "main", { projectName: "vluxysf Tests", projectFile: "test.project.json" }),
+		slot("a", "SkyIslands", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "sky-ui", until: Date.now() + 8 * 60000 } }),
+		slot("b", "NpcBrain", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
+		slot("c", "combatlib", 35813, "stopped", "main", { projectName: "combatlib Tests", projectFile: "test.project.json" }),
 		slot("d", "Wonderland", 35344, "error", "main", { error: ["Rojo did not come up on port 35344.", "[INFO  rojo] Rojo server listening on port 35344", "[ERROR rojo] Rojo crashed!", "[ERROR rojo] Details: called `Result::unwrap()` on an `Err` value: NotFound", "[ERROR rojo] at src/change_processor.rs:199"].join("\n") }),
 		slot("e", "Frameworks", 35120, "starting", "main"),
 	],
 	groups: [
-		{ id: "g1", name: "Laundry Shift", slotIds: ["a", "b"], groupIds: [], active: true, projectIds: ["a", "b"] },
+		{ id: "g1", name: "Sky Islands", slotIds: ["a", "b"], groupIds: [], active: true, projectIds: ["a", "b"] },
 		{ id: "g2", name: "Everything", slotIds: ["c"], groupIds: ["g1"], active: false, projectIds: ["c", "a", "b"] },
 	],
 	settings: { portRange: "34873-35872", excludedPorts: [] },
 	here: ["a"],
 	workspaces: params.get("workspaces") === "1" ? [
-		{ file: "C:\\ws\\Laundry.code-workspace", name: "Laundry", slotIds: ["a", "b"], addable: [{ label: "SharedLib", path: "C:\\dev\\SharedLib" }], isWindow: true },
+		{ file: "C:\\ws\\Sky.code-workspace", name: "Sky", slotIds: ["a", "b"], addable: [{ label: "SharedLib", path: "C:\\dev\\SharedLib" }], isWindow: true },
 	] : [],
 	order: { projects: [], groups: [] },
 	agents: {
@@ -148,31 +149,149 @@ const state = {
 if (params.get("empty") === "1") { state.slots = []; state.groups = []; }
 
 const options = [
-	{ target: { kind: "worktree", path: "C:\\Users\\dev\\TheLaundryShift" }, label: "chore/untrack-wally-lock", description: "C:\\Users\\dev\\TheLaundryShift", branch: "chore/untrack-wally-lock", isPrimary: true, committedAt: 0 },
-	{ target: { kind: "worktree", path: "C:\\orca\\laundry-ui" }, label: "laundry-ui", description: "feat/new-ui · Orca worktree", branch: "feat/new-ui", isPrimary: false, committedAt: 0 },
+	{ target: { kind: "worktree", path: "C:\\Users\\dev\\SkyIslands" }, label: "chore/untrack-wally-lock", description: "C:\\Users\\dev\\SkyIslands", branch: "chore/untrack-wally-lock", isPrimary: true, committedAt: 0 },
+	{ target: { kind: "worktree", path: "C:\\orca\\sky-ui" }, label: "sky-ui", description: "feat/new-ui · Orca worktree", branch: "feat/new-ui", isPrimary: false, committedAt: 0 },
 	{ target: { kind: "branch", ref: "refs/heads/main" }, label: "main", description: "branch · no worktree", branch: "main", isPrimary: false, committedAt: Date.now() / 1000 - 7200 },
 	{ target: { kind: "branch", ref: "refs/heads/fix/dryer" }, label: "fix/dryer", description: "branch · no worktree", branch: "fix/dryer", isPrimary: false, committedAt: Date.now() / 1000 - 3 * 86400 },
 	{ target: { kind: "branch", ref: "refs/remotes/origin/gh-pages" }, label: "origin/gh-pages", description: "remote branch · no worktree", branch: "origin/gh-pages", isPrimary: false, committedAt: Date.now() / 1000 - 40 * 86400 },
 ];
+/*
+	?many=1: 25 projects and 10 groups, for render cost. The extra projects
+	are folded, as most are in a real panel.
+*/
+if (params.get("many") === "1") {
+	for (let n = 0; n < 20; n++) state.slots.push(slot(`m${n}`, `Project${n}`, 35200 + n, n % 3 === 0 ? "running" : "stopped", n % 2 ? "main" : `feature/thing-${n}`));
+	for (let n = 0; n < 8; n++) state.groups.push({ id: `mg${n}`, name: `Group ${n}`, slotIds: [`m${n}`, `m${n + 1}`, `m${n + 2}`], groupIds: n > 0 ? ["g1"] : [], active: n % 4 === 0, projectIds: [] });
+}
+const expand = (id, seen = new Set()) => {
+	if (seen.has(id)) return [];
+	seen.add(id);
+	const group = state.groups.find((entry) => entry.id === id);
+	return group ? [...new Set([...group.slotIds, ...group.groupIds.flatMap((child) => expand(child, seen))])] : [];
+};
+const fixGroups = () => { for (const group of state.groups) group.projectIds = expand(group.id); };
+fixGroups();
+
 let stored = { v: 2, collapsed: { "card:a": false, "card:b": false, "card:c": false, "card:d": false, settings: params.get("settings") === "1" ? false : true, agents: params.get("agents") === "1" ? false : true }, closedGroups: [] };
+
+/*
+	A stand-in for the extension and the service. Actions take ?lag= ms
+	(default 1200) before the service answers with a state and busy:false,
+	so the panel's optimistic look (src/webview/pending.ts) shows first.
+	?fail=start (or stop, switch…) answers that action with busy:false and
+	no change, as a failed action does. ?tick=ms posts the state that often
+	anyway, like the extension's status stream.
+*/
+const lag = Number(params.get("lag") ?? 1200);
+const fails = (type) => (params.get("fail") ?? "").split(",").includes(type);
+const post = (data) => setTimeout(() => window.postMessage(data, "*"), 0);
+const pushState = () => { fixGroups(); post({ type: "state", state: JSON.parse(JSON.stringify(state)) }); };
+const find = (id) => state.slots.find((entry) => entry.id === id);
+const later = (ms, work) => setTimeout(work, ms);
+/* Runs `work` after the lag, then sends busy:false and the fresh state, as the extension's act() does. */
+const act = (type, key, work, extra = 0) => later(lag + extra, () => {
+	if (fails(type)) console.log(`(stub) ${type} failed: the extension would show a notification`);
+	else work();
+	post({ type: "busy", key, busy: false });
+	pushState();
+});
+const serving = (entry) => entry.state === "running" || entry.state === "starting" || entry.state === "error";
+window.preview = { state, pushState, post };
+if (params.get("tick")) setInterval(pushState, Number(params.get("tick")));
+
 window.acquireVsCodeApi = () => ({
 	getState: () => stored,
 	setState: (next) => (stored = next),
 	postMessage: (message) => {
-		console.log("panel ->", message);
-		const reply = (data) => setTimeout(() => window.postMessage(data, "*"), 0);
-		if (message.type === "ready") reply({ type: "state", state });
-		if (message.type === "targets") reply({ type: "targets", id: message.id, options });
-		if (message.type === "fetch") setTimeout(() => { reply({ type: "targets", id: message.id, options }); reply({ type: "fetched", id: message.id, ...(params.get("fetchfail") ? { error: "fatal: unable to access 'https://github.com/…': Could not resolve host" } : {}) }); }, 600);
-		if (message.type === "createBranch") setTimeout(() => reply({ type: "branchCreated", id: message.id, error: `A branch named ${message.name} already exists; pick it under Local branches.` }), 400);
-		if (message.type === "build") setTimeout(() => reply({ type: "busy", key: `build:${message.id}`, busy: false }), 1500);
-		if (message.type === "setAgent") setTimeout(() => {
-			if (message.id === "vscode") state.agents.vscode = message.on;
-			else state.agents.list.find((agent) => agent.id === message.id).state = message.on ? "connected" : "absent";
-			reply({ type: "state", state: JSON.parse(JSON.stringify(state)) });
-			reply({ type: "busy", key: `agent:${message.id}`, busy: false });
-		}, 700);
-		if (message.type === "candidates") reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
+		console.log("panel ->", JSON.stringify(message));
+		const reply = post;
+		const id = message.id;
+		switch (message.type) {
+			case "ready":
+				// The extension sends every project's branch list and the addable folders ahead of time.
+				pushState();
+				if (params.get("noprefetch") !== "1") {
+					for (const entry of state.slots) reply({ type: "targets", id: entry.id, options });
+					reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
+				}
+				return;
+			case "targets":
+				return later(params.get("noprefetch") === "1" ? 400 : 0, () => reply({ type: "targets", id, options }));
+			case "fetch":
+				return later(600, () => { reply({ type: "targets", id, options }); reply({ type: "fetched", id, ...(params.get("fetchfail") ? { error: "fatal: unable to access 'https://github.com/…': Could not resolve host" } : {}) }); });
+			case "createBranch":
+				return later(400, () => reply({ type: "branchCreated", id, error: `A branch named ${message.name} already exists; pick it under Local branches.` }));
+			case "build":
+				return later(1500, () => reply({ type: "busy", key: `build:${id}`, busy: false }));
+			case "setAgent":
+				return act("setAgent", `agent:${id}`, () => {
+					if (id === "vscode") state.agents.vscode = message.on;
+					else state.agents.list.find((agent) => agent.id === id).state = message.on ? "connected" : "absent";
+				});
+			case "candidates":
+				return later(300, () => reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] }));
+			case "start":
+				// The service says starting after the lag, running a moment later.
+				later(lag, () => { if (!fails("start")) { find(id).state = "starting"; pushState(); } });
+				return act("start", `slot:${id}`, () => (find(id).state = "running"), 800);
+			case "stop":
+				return act("stop", `slot:${id}`, () => { find(id).state = "stopped"; find(id).error = null; });
+			case "switch":
+				return act("switch", `slot:${id}`, () => Object.assign(find(id), { target: message.target, targetLabel: message.label, branch: message.label }));
+			case "setProjectFile":
+				return act("setProjectFile", `slot:${id}`, () => (find(id).projectFile = message.file));
+			case "sourcemap":
+				return act("sourcemap", `slot:${id}`, () => {});
+			case "startGroup":
+				return act("startGroup", `group:${id}`, () => {
+					const members = expand(id);
+					if (message.only) {
+						for (const group of state.groups) group.active = false;
+						for (const entry of state.slots) if (!members.includes(entry.id) && serving(entry)) entry.state = "stopped";
+					}
+					for (const entry of state.slots) if (members.includes(entry.id) && !serving(entry)) entry.state = "running";
+					state.groups.find((group) => group.id === id).active = true;
+				});
+			case "stopGroup":
+				return act("stopGroup", `group:${id}`, () => {
+					const group = state.groups.find((entry) => entry.id === id);
+					group.active = false;
+					const held = new Set(state.groups.filter((other) => other.active).flatMap((other) => expand(other.id)));
+					for (const entry of state.slots) if (expand(id).includes(entry.id) && !held.has(entry.id) && serving(entry)) entry.state = "stopped";
+				});
+			case "stopAll":
+				return act("stopAll", "stop-all", () => {
+					for (const group of state.groups) group.active = false;
+					for (const entry of state.slots) if (serving(entry)) { entry.state = "stopped"; entry.error = null; }
+				});
+			case "renameGroup":
+				return act("renameGroup", `group:${id}`, () => (state.groups.find((group) => group.id === id).name = message.name));
+			case "deleteGroup":
+				return act("deleteGroup", `group:${id}`, () => {
+					state.groups = state.groups.filter((group) => group.id !== id);
+					for (const group of state.groups) group.groupIds = group.groupIds.filter((child) => child !== id);
+					window.preview.state = state;
+				});
+			case "addToGroup":
+			case "removeFromGroup":
+				return act(message.type, `group:${id}`, () => {
+					const group = state.groups.find((entry) => entry.id === id);
+					const list = message.member.kind === "group" ? "groupIds" : "slotIds";
+					if (message.type === "removeFromGroup") group[list] = group[list].filter((entry) => entry !== message.member.id);
+					else if (message.member.kind === "workspace") group.slotIds = [...new Set([...group.slotIds, ...state.workspaces.find((entry) => entry.file === message.member.id).slotIds])];
+					else group[list] = [...group[list], message.member.id];
+				});
+			case "newGroup":
+				return act("newGroup", "group:new", () => state.groups.push({ id: `g${Date.now()}`, name: message.name, slotIds: [], groupIds: [], active: false, projectIds: [] }));
+			case "reorder":
+				return act("reorder", "reorder", () => (state.order = { projects: message.projects ?? state.order.projects, groups: message.groups ?? state.order.groups }));
+			case "addProject":
+				return act("addProject", "add", () => state.slots.push(slot(`n${Date.now()}`, message.path.split("\\").pop(), 35500 + state.slots.length, "stopped", "main", { repoPath: message.path })));
+			case "saveSettings":
+				return later(lag, () => { state.settings = { portRange: message.portRange, excludedPorts: message.excludedPorts }; pushState(); });
+			case "agentNudge":
+				return later(lag, () => { state.agentNudge = false; pushState(); });
+		}
 	},
 });
 </script>

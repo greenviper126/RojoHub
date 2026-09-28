@@ -6,13 +6,20 @@
 	Rendering is one function from (state, ui) to HTML. Each change is applied
 	to the page by morph.ts, which updates only the elements that differ, so
 	an open picker, a focused box, hover and scroll positions all survive the
-	2-second status updates without flashing.
+	status updates (which come within a moment of any change) without flashing.
+
+	Only the first state is waited for. After that every click draws its
+	result in the same frame from what the panel expects it to do
+	(pending.ts), and every list a dropdown shows is already here: the
+	extension sends each project's branch list and the addable folders ahead
+	of time, and the panel keeps them.
 */
 
-import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type TargetOption } from "../common/api";
+import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
+import * as pending from "./pending";
 
 declare function acquireVsCodeApi(): { postMessage(message: FromPanel): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -31,7 +38,16 @@ interface Persisted {
 const loaded = vscode.getState() as Partial<Persisted> | undefined;
 const saved: Persisted = loaded?.v === 2 ? (loaded as Persisted) : { v: 2, collapsed: {}, closedGroups: [] };
 
+/*
+	`real` is the last state the extension sent. `state` is what was last
+	drawn: real with the pending expectations applied (see pending.ts), so
+	click handlers see what the user sees. `stopping` and `addingNow` are the
+	parts of the drawn state that PanelState has no field for.
+*/
+let real: PanelState | null = null;
 let state: PanelState | null = null;
+let stopping = new Set<string>();
+let addingNow: Candidate[] = [];
 
 interface Picker {
 	id: string;
@@ -58,7 +74,14 @@ const ui = {
 	menuDown: false,
 	/** The Projects filter's text while the filter is open, else null. */
 	filter: null as string | null,
-	adding: null as null | { items: Candidate[] | null },
+	/** Add a project is open. */
+	adding: false,
+	/*
+		The last folders the extension offered to add, kept while Add a project
+		is closed (the extension sends them ahead of time) so it opens with its
+		list drawn. null until the first list arrives.
+	*/
+	candidates: null as Candidate[] | null,
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
 	confirmDelete: null as string | null,
@@ -73,6 +96,12 @@ const ui = {
 	/** A group member whose ✕ is waiting for Yes/No: "groupId|kind|memberId". */
 	confirmRemoveMember: null as string | null,
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
+	/*
+		Keys of actions under way (until their busy:false). Used for things
+		with no optimistic look of their own, like a place file being built;
+		Start, Stop and the group buttons show their expected result instead
+		of greying out.
+	*/
 	busy: new Set<string>(),
 	flash: null as string | null,
 	/** A project whose address was just copied: its port chips show a tick for a moment. */
@@ -170,20 +199,21 @@ const escape = (text: unknown) =>
 	String(text).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 const icon = (name: string, extra = "") => `<i class="codicon codicon-${name} ${extra}" aria-hidden="true"></i>`;
 
-function button(action: string, label: string, options: { icon?: string; data?: Record<string, string>; kind?: "primary" | "secondary" | "ghost" | "danger"; title?: string; disabled?: boolean } = {}): string {
+function button(action: string, label: string, options: { icon?: string; spin?: boolean; data?: Record<string, string>; kind?: "primary" | "secondary" | "ghost" | "danger"; title?: string; disabled?: boolean } = {}): string {
 	const data = Object.entries(options.data ?? {})
 		.map(([key, value]) => ` data-${key}="${escape(value)}"`)
 		.join("");
-	return `<button class="btn ${options.kind ?? "ghost"}" data-action="${action}"${data} title="${escape(options.title ?? label)}"${options.disabled ? " disabled" : ""}>${options.icon ? icon(options.icon) : ""}${label ? `<span>${escape(label)}</span>` : ""}</button>`;
+	return `<button class="btn ${options.kind ?? "ghost"}" data-action="${action}"${data} title="${escape(options.title ?? label)}"${options.disabled ? " disabled" : ""}>${options.icon ? icon(options.icon, options.spin ? "codicon-modifier-spin" : "") : ""}${label ? `<span>${escape(label)}</span>` : ""}</button>`;
 }
 
-function iconButton(action: string, iconName: string, title: string, data: Record<string, string> = {}): string {
-	return button(action, "", { icon: iconName, data, title, kind: "ghost" }).replace('class="btn ghost"', 'class="btn ghost icon-only"');
+function iconButton(action: string, iconName: string, title: string, data: Record<string, string> = {}, disabled = false, spin = false): string {
+	return button(action, "", { icon: iconName, data, title, kind: "ghost", disabled, spin }).replace('class="btn ghost"', 'class="btn ghost icon-only"');
 }
 
 /* ---------- pieces ---------- */
 
 function dot(slot: SlotView): string {
+	if (stopping.has(slot.id)) return `<span class="dot starting stopping" title="Stopping">${icon("loading", "codicon-modifier-spin")}</span>`;
 	if (slot.state === "starting") return `<span class="dot starting" title="Starting">${icon("loading", "codicon-modifier-spin")}</span>`;
 	const kind =
 		slot.state === "error" ? "error" : slot.state === "offline" ? "offline" : slot.state !== "running" ? "stopped" : slot.connections > 0 ? "connected" : "serving";
@@ -199,6 +229,7 @@ function dot(slot: SlotView): string {
 
 /** A small coloured pill saying what the project is doing. */
 function statusPill(slot: SlotView): string {
+	if (stopping.has(slot.id)) return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Stopping…</span></span>`;
 	if (slot.state === "running") {
 		return slot.connections > 0
 			? `<span class="pill ok" title="Serving, and Studio is connected">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
@@ -364,14 +395,22 @@ function filePicker(slot: SlotView): string {
 */
 function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): string {
 	const serving = slot.state === "running" || slot.state === "starting";
-	const busy = ui.busy.has(`slot:${slot.id}`);
+	// A project in error can be started again, or stopped so it stops retrying.
+	const failed = slot.state === "error";
+	/*
+		Stop was pressed and the service has not said stopped yet. Start stays
+		hidden until it has: starting a project that is still shutting down
+		would only be refused.
+	*/
+	const isStopping = stopping.has(slot.id);
+	const stateClass = isStopping ? "starting stopping" : slot.state;
 	const here = state?.here.includes(slot.id) ? `<span class="badge icon-badge" title="This window's project">${icon("window")}</span>` : "";
 	const targetIcon = slot.target.kind === "worktree" ? "folder" : "git-branch";
 	const pickerOpen = ui.picker?.id === slot.id;
 	const key = `card:${slot.id}`;
 	if (ui.reveal === slot.id) ui.collapsed[key] = false;
 	// A running project's file is shown, not changed: stop it first (spec 005). An erroring one can change it.
-	const fileLocked = serving;
+	const fileLocked = serving || isStopping;
 	if (fileLocked && ui.filePicker?.id === slot.id) ui.filePicker = null;
 	const filesOpen = ui.filePicker?.id === slot.id;
 	const isFolded = folded(key, foldedByDefault) && !pickerOpen && !filesOpen;
@@ -379,15 +418,17 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const port = portChip(slot);
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
-		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-			<div class="row card-head" ${foldable(key, list, true)}>${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${
-				serving
-					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
-					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
-			}</div>
+		const controls = isStopping
+			? iconButton("stop", "loading", `Stopping ${slot.projectName}…`, { id: slot.id }, true, true)
+			: `${serving || failed ? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id }) : ""}${serving ? "" : iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })}`;
+		return `<article class="card project compact ${stateClass}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
+			<div class="row card-head" ${foldable(key, list, true)}>${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${controls}</div>
 		</article>`;
 	}
-	return `<article class="card project ${slot.state}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
+	const controls = isStopping
+		? button("stop", "Stop", { icon: "loading", spin: true, data: { id: slot.id }, kind: "secondary", disabled: true, title: `Stopping ${slot.projectName}` })
+		: `${serving || failed ? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary" }) : ""}${serving ? "" : button("start", "Start", { icon: "play", data: { id: slot.id }, kind: "primary" })}`;
+	return `<article class="card project ${stateClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
 		<div class="row card-head" ${foldable(key, list, false)}>
 			${grip(list, slot.id)}${toggle}${here}
 			<span class="grow"></span>
@@ -414,18 +455,28 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			<span class="grow"></span>
 			${ui.busy.has(`build:${slot.id}`) ? `<span class="btn ghost icon-only" title="Building a place file…">${icon("loading", "codicon-modifier-spin")}</span>` : ""}
 			${cardMenu(slot)}
-			${
-				serving
-					? button("stop", "Stop", { icon: "debug-stop", data: { id: slot.id }, kind: "secondary", disabled: busy })
-					: button("start", "Start", { icon: "play", data: { id: slot.id }, kind: "primary", disabled: busy })
-			}
+			${controls}
 		</div>
 	</article>`;
 }
 
+/* Paths compared the way Windows does: case and slash direction do not matter. */
+const samePath = (a: string, b: string) => a.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase() === b.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+
+/* Projects picked in Add a project that the service has not listed yet: a row each, so the click shows. */
+function addingRows(): string {
+	return addingNow
+		.map(
+			(item) =>
+				`<article class="card project compact placeholder" id="adding-${escape(item.path)}"><div class="row card-head">${icon("loading", "codicon-modifier-spin")}<span class="name ellipsis" title="${escape(item.path)}">${escape(item.label)}</span><span class="grow"></span><span class="muted small">Adding…</span></div></article>`,
+		)
+		.join("");
+}
+
 function adder(): string {
 	if (!ui.adding) return "";
-	const items = ui.adding.items;
+	// The kept list can be older than the last add; leave out what is registered or being added.
+	const items = ui.candidates?.filter((item) => !state!.slots.some((slot) => samePath(slot.repoPath, item.path)) && !addingNow.some((adding) => samePath(adding.path, item.path))) ?? null;
 	const rows =
 		items === null
 			? `<div class="muted pad">${icon("loading", "codicon-modifier-spin")} Looking for projects…</div>`
@@ -505,6 +556,10 @@ function wouldStop(group: GroupView): SlotView[] {
 }
 
 function groupCard(group: GroupView): string {
+	// A group just created here, before the service has given it an id: its name, nothing to click yet.
+	if (group.id.startsWith(PENDING_GROUP)) {
+		return `<article class="card group placeholder" id="group-${escape(group.id)}"><div class="row head">${icon("loading", "codicon-modifier-spin")}${icon("layers")}<span class="name">${escape(group.name)}</span><span class="grow"></span><span class="muted small">Creating…</span></div></article>`;
+	}
 	const slots = state?.slots ?? [];
 	const groups = state?.groups ?? [];
 	const members = group.slotIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
@@ -512,7 +567,6 @@ function groupCard(group: GroupView): string {
 	const everyProject = group.projectIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
 	const serving = everyProject.filter((slot) => slot.state === "running").length;
 	const open = !ui.closedGroups.has(group.id);
-	const busy = ui.busy.has(`group:${group.id}`);
 	const renaming = ui.renaming?.id === group.id;
 	const running = group.active ? `<span class="pill ok dense" title="Started, and not stopped since">Running</span>` : "";
 	const head = renaming
@@ -618,10 +672,10 @@ function groupCard(group: GroupView): string {
 		<div class="row actions">
 			${
 				group.active
-					? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", disabled: busy, title: "Stop this group's projects, except ones another running group uses" })
-					: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: busy || everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })
+					? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", title: "Stop this group's projects, except ones another running group uses" })
+					: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })
 			}
-			${button("solo-group", "Singleton", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: busy || everyProject.length === 0, title: "Serve only this group: stop every other project (asks first)" })}
+			${button("solo-group", "Singleton", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: everyProject.length === 0, title: "Serve only this group: stop every other project (asks first)" })}
 		</div>
 		${onlyConfirm}
 	</article>`;
@@ -631,7 +685,7 @@ function newGroupForm(): string {
 	if (!ui.newGroup) return "";
 	return `<div class="card adder">
 		<div class="row"><strong>New group</strong><span class="grow"></span>${iconButton("close-new-group", "close", "Cancel")}</div>
-		<div class="row"><input data-key="new-group" data-input="new-group" placeholder="Group name, e.g. Laundry Shift" value="${escape(ui.newGroup.name)}" spellcheck="false"></div>
+		<div class="row"><input data-key="new-group" data-input="new-group" placeholder="Group name, e.g. My Game" value="${escape(ui.newGroup.name)}" spellcheck="false"></div>
 		<div class="row">${button("create-group", "Create", { icon: "check", kind: "primary", disabled: !ui.newGroup.name.trim() })}<span class="muted small">Then add projects with its dropdown.</span></div>
 	</div>`;
 }
@@ -656,7 +710,7 @@ function settingsBody(): string {
 		${resetConfirm}
 		<p class="muted small">Projects get a port in this range, worked out from their repo's first commit, unless their project file sets <code>servePort</code>.${isDefault ? " This is the default." : ` The default is ${DEFAULT_PORT_RANGE}.`}</p>
 		<label>Excluded ports<input data-key="excluded" data-input="excluded" value="${escape(draft.excluded)}" placeholder="35000, 35100-35110" spellcheck="false"></label>
-		<p class="muted small">Never given to any project. 34872 (Rojo's default) is always excluded.</p>
+		<p class="muted small">Never given to any project. 34872 (Rojo's default) and 34870 (Rojo-Hub's service) are always excluded; a project file's servePort still wins.</p>
 		${draft.error ? `<div class="notice error">${icon("error")}<span>${escape(draft.error)}</span></div>` : ""}
 		<div class="row">${button("save-settings", "Save", { icon: "check", kind: "primary", disabled: !changed })}${changed ? button("reset-settings", "Undo", { kind: "secondary" }) : ""}</div>
 	</div>`;
@@ -683,12 +737,14 @@ function agentsBody(): string {
 			? { text: "Connected", tone: "ok", title: `Rojo-Hub is in ${agent.label}'s user config. Turn off to take it out.` }
 			: agent.state === "other"
 				? { text: "Set up by you", tone: "info", title: `${agent.label}'s config already has a rojohub entry pointing elsewhere; Rojo-Hub leaves it alone.` }
+				: agent.state === "unknown"
+					? { text: "Can't read config", tone: "", title: `${agent.label}'s config could not be read just now (it may be being written). Rojo-Hub leaves it alone and looks again.` }
 				: agent.installed
 					? { text: "Off", tone: "", title: `Turn on to add Rojo-Hub to ${agent.label}'s user config.` }
 					: { text: "Not installed", tone: "", title: `${agent.label} was not found on PATH.` };
 	const rows = [
 		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? { text: "Connected", tone: "ok", title: "Copilot and other agents in VS Code. Nothing is written to disk." } : { text: "Off", tone: "", title: "Turn on to let Copilot and other agents in VS Code use Rojo-Hub." }, false, null),
-		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || (!agent.installed && agent.state !== "connected"), agent.error)),
+		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && agent.state !== "connected"), agent.error)),
 	].join("");
 	const manual = ui.agentsManual
 		? `<div class="agents-manual">
@@ -792,7 +848,7 @@ function projectsList(slots: SlotView[], filtering = false): string {
 					(slot) => `<div class="member">${dot(slot)}<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">shown above</span></div>`,
 				)
 				.join("");
-			const addableRows = (filtering ? [] : workspace.addable)
+			const addableRows = (filtering ? [] : workspace.addable.filter((folder) => !addingNow.some((item) => samePath(item.path, folder.path))))
 				.map(
 					(folder) => `<div class="member addable">${icon("folder")}<span class="grow ellipsis" title="${escape(folder.path)}">${escape(folder.label)}</span><span class="sub">not added</span>${button("add", "Add", { icon: "add", kind: "secondary", data: { path: folder.path }, title: `Add ${folder.label} to Rojo-Hub` })}</div>`,
 				)
@@ -850,7 +906,12 @@ function activePorts(serving: SlotView[]): string {
 
 function render(): void {
 	const app = document.getElementById("app")!;
-	if (!state || ui.drag) return;
+	if (!real || ui.drag) return;
+	const drawn = pending.view(real);
+	state = drawn.state;
+	stopping = drawn.stopping;
+	addingNow = drawn.adding;
+	dropStale(state);
 
 	const active = document.activeElement as HTMLInputElement | null;
 	const focusKey = active?.dataset?.key;
@@ -868,8 +929,11 @@ function render(): void {
 	const projectsBody =
 		filterRow +
 		adder() +
+		addingRows() +
 		(slots.length === 0
-			? `<div class="empty">
+			? addingNow.length > 0
+				? ""
+				: `<div class="empty">
 				${icon("server-environment", "empty-icon")}
 				<p class="empty-title">No projects yet</p>
 				<p class="muted small">Each project gets its own Rojo port. Switch it to any branch while Studio stays connected.</p>
@@ -895,13 +959,15 @@ function render(): void {
 				})());
 
 	const serving = slots.filter((slot) => slot.state === "running" || slot.state === "starting");
+	// Stop all also stops projects in error, which may still be retrying.
+	const stoppable = slots.filter((slot) => slot.state === "running" || slot.state === "starting" || slot.state === "error");
 	const agentCount = state.agents.list.filter((agent) => agent.state === "connected").length + (state.agents.vscode ? 1 : 0);
 	const footer = ui.confirmStopAll
-		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${serving.length} serving project${serving.length === 1 ? "" : "s"}: <strong>${serving
+		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${stoppable.length} serving project${stoppable.length === 1 ? "" : "s"}: <strong>${stoppable
 				.map((slot) => escape(slot.projectName))
 				.join(", ")}</strong>? Studio places connected to them disconnect.</span></div>
 			<div class="row">${button("stop-all-yes", "Yes, stop all", { icon: "debug-stop", kind: "danger" })}${button("stop-all-no", "Cancel", { kind: "secondary" })}</div>`
-		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `<span class="wide-only">${serving.length} of ${slots.length} serving</span><span class="narrow-only">${serving.length}/${slots.length}</span>`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: serving.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
+		: `<div class="row"><span class="summary${serving.length ? " live" : ""}">${serving.length === 0 ? "Nothing serving" : `<span class="wide-only">${serving.length} of ${slots.length} serving</span><span class="narrow-only">${serving.length}/${slots.length}</span>`}</span><span class="grow"></span>${button("stop-all", "Stop all", { icon: "debug-stop", kind: "secondary", disabled: stoppable.length === 0, title: "Stop every serving project (asks first)" })}${iconButton("refresh", "refresh", "Refresh")}</div>`;
 
 	// The service is invisible unless it could not be started at all.
 	const banner = state.service.error
@@ -937,6 +1003,41 @@ function render(): void {
 		ui.reveal = null;
 		persist();
 	}
+	whenExpectationEnds();
+}
+
+/*
+	Closes what the user had open only when what it is about is gone: a
+	state update (they come within a moment of any change now) must never
+	close a menu, picker, rename box or question that is still being used.
+*/
+function dropStale(drawn: PanelState): void {
+	const slot = (id: string) => drawn.slots.some((entry) => entry.id === id);
+	const group = (id: string) => drawn.groups.find((entry) => entry.id === id);
+	if (ui.picker && !slot(ui.picker.id)) ui.picker = null;
+	if (ui.filePicker && !slot(ui.filePicker.id)) ui.filePicker = null;
+	if (ui.menu && !slot(ui.menu)) ui.menu = null;
+	if (ui.renaming && !group(ui.renaming.id)) ui.renaming = null;
+	if (ui.confirmDelete && !group(ui.confirmDelete)) ui.confirmDelete = null;
+	if (ui.confirmOnly && !group(ui.confirmOnly)) ui.confirmOnly = null;
+	if (ui.confirmRemoveMember) {
+		const [groupId, kind, memberId] = ui.confirmRemoveMember.split("|");
+		const holder = group(groupId);
+		if (!holder || !(kind === "group" ? holder.groupIds : holder.slotIds).includes(memberId)) ui.confirmRemoveMember = null;
+	}
+	if (ui.confirmStopAll && !drawn.slots.some((entry) => entry.state === "running" || entry.state === "starting" || entry.state === "error")) ui.confirmStopAll = false;
+}
+
+/* Draws again when the next expectation runs out, so a click the service never answered falls back to the real state. */
+let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+function whenExpectationEnds(): void {
+	clearTimeout(expiryTimer);
+	const next = pending.nextDeadline();
+	if (next === null) return;
+	expiryTimer = setTimeout(() => {
+		pending.expire();
+		render();
+	}, Math.max(0, next - Date.now()) + 10);
 }
 
 /* ---------- events ---------- */
@@ -974,9 +1075,8 @@ function pick(index: number): void {
 	const open = ui.picker;
 	const option = open?.options?.[index];
 	if (!open || !option) return;
-	send({ type: "switch", id: open.id, target: option.target, label: option.label });
 	ui.picker = null;
-	render();
+	switchTarget(open.id, option);
 }
 
 function createBranch(): void {
@@ -992,9 +1092,8 @@ function createBranch(): void {
 function createGroup(): void {
 	const name = ui.newGroup?.name.trim();
 	if (!name) return;
-	send({ type: "newGroup", name });
 	ui.newGroup = null;
-	render();
+	newGroup(name);
 }
 
 function saveSettings(): void {
@@ -1009,9 +1108,266 @@ function saveSettings(): void {
 		draft.error = `“${excluded.bad}” is not a port or a range like 35000-35010.`;
 		return render();
 	}
-	send({ type: "saveSettings", portRange: draft.portRange.replace(/\s+/g, ""), excludedPorts: excluded.values });
+	const settings = { portRange: draft.portRange.replace(/\s+/g, ""), excludedPorts: excluded.values };
+	expectSettings(settings);
+	send({ type: "saveSettings", ...settings });
 	ui.settings = null;
 	render();
+}
+
+/* ---------- actions, each drawn at once from what it is expected to do (pending.ts) ---------- */
+
+/** Group ids of groups made here that the service has not listed yet. */
+const PENDING_GROUP = "pending-group:";
+
+/** Sends an action the extension answers with busy:false for `key` once it is done. */
+function sendTracked(key: string, message: FromPanel): void {
+	ui.busy.add(key);
+	pending.sent(key);
+	send(message);
+}
+
+/*
+	Start and Stop swap places the moment one is pressed, so the second click
+	of a double click would land on the other and undo the first. A second
+	press on the same project or group this soon after the first is dropped.
+*/
+const lastPress = new Map<string, number>();
+function bounced(subject: string): boolean {
+	const now = Date.now();
+	const last = lastPress.get(subject) ?? 0;
+	lastPress.set(subject, now);
+	return now - last < 400;
+}
+
+const sameTarget = (a: Target, b: Target) =>
+	a.kind === "worktree" ? b.kind === "worktree" && samePath(a.path, b.path) : b.kind === "branch" && a.ref === b.ref;
+
+function startSlot(id: string): void {
+	if (bounced(`slot:${id}`)) return;
+	pending.starting(id, `slot:${id}`);
+	sendTracked(`slot:${id}`, { type: "start", id });
+	render();
+}
+
+function stopSlot(id: string): void {
+	if (bounced(`slot:${id}`)) return;
+	pending.stopping(id, `slot:${id}`);
+	sendTracked(`slot:${id}`, { type: "stop", id });
+	render();
+}
+
+/* A switch keeps Rojo running; only what the card says it serves changes, so that changes at once. */
+function switchTarget(id: string, option: TargetOption): void {
+	pending.expect(`target:${id}`, {
+		busy: `slot:${id}`,
+		ttl: 30_000,
+		apply: (view) => pending.patchSlot(view, id, { target: option.target, targetLabel: option.label, branch: option.branch }),
+		done: (next) => {
+			const slot = next.slots.find((entry) => entry.id === id);
+			return !slot || sameTarget(slot.target, option.target);
+		},
+	});
+	sendTracked(`slot:${id}`, { type: "switch", id, target: option.target, label: option.label });
+	render();
+}
+
+function setProjectFile(id: string, file: string): void {
+	// Picking the current file is no change, and the extension answers nothing for it.
+	if (state?.slots.find((slot) => slot.id === id)?.projectFile === file) return render();
+	pending.expect(`file:${id}`, {
+		busy: `slot:${id}`,
+		ttl: 15_000,
+		apply: (view) => pending.patchSlot(view, id, { projectFile: file }),
+		done: (next) => (next.slots.find((slot) => slot.id === id)?.projectFile ?? file) === file,
+	});
+	sendTracked(`slot:${id}`, { type: "setProjectFile", id, file });
+	render();
+}
+
+/*
+	Start and Singleton, as the service does them: every project in the group
+	that is stopped starts; Singleton also stops every serving project outside
+	it and marks every other group stopped.
+*/
+function startGroup(id: string, only: boolean): void {
+	const group = state?.groups.find((entry) => entry.id === id);
+	if (!state || !group || bounced(`group:${id}`)) return;
+	const key = `group:${id}`;
+	for (const slot of state.slots) {
+		const member = group.projectIds.includes(slot.id);
+		if (member && (slot.state === "stopped" || stopping.has(slot.id))) pending.starting(slot.id, key);
+		else if (!member && only && (slot.state === "running" || slot.state === "starting" || slot.state === "error")) pending.stopping(slot.id, key);
+	}
+	if (only) for (const other of state.groups) if (other.id !== id && other.active) pending.groupActive(other.id, false, key);
+	pending.groupActive(id, true, key);
+	sendTracked(key, { type: "startGroup", id, only });
+	render();
+}
+
+/* Stop, as the service does it: the group's projects stop, except ones another running group holds. */
+function stopGroup(id: string): void {
+	const group = state?.groups.find((entry) => entry.id === id);
+	if (!state || !group || bounced(`group:${id}`)) return;
+	const key = `group:${id}`;
+	const held = new Set(state.groups.filter((other) => other.active && other.id !== id).flatMap((other) => other.projectIds));
+	for (const slot of state.slots) {
+		if (group.projectIds.includes(slot.id) && !held.has(slot.id) && (slot.state === "running" || slot.state === "starting" || slot.state === "error")) pending.stopping(slot.id, key);
+	}
+	pending.groupActive(id, false, key);
+	sendTracked(key, { type: "stopGroup", id });
+	render();
+}
+
+function stopAll(): void {
+	if (!state) return;
+	for (const slot of state.slots) if (slot.state === "running" || slot.state === "starting" || slot.state === "error") pending.stopping(slot.id, "stop-all");
+	for (const group of state.groups) if (group.active) pending.groupActive(group.id, false, "stop-all");
+	sendTracked("stop-all", { type: "stopAll" });
+	render();
+}
+
+function renameGroup(id: string, name: string): void {
+	pending.expect(`name:${id}`, {
+		busy: `group:${id}`,
+		ttl: 15_000,
+		apply: (view) => pending.patchGroup(view, id, { name }),
+		done: (next) => (next.groups.find((group) => group.id === id)?.name ?? name) === name,
+	});
+	sendTracked(`group:${id}`, { type: "renameGroup", id, name });
+	render();
+}
+
+function deleteGroup(id: string): void {
+	pending.expect(`deleted:${id}`, {
+		busy: `group:${id}`,
+		ttl: 15_000,
+		apply: (view) => {
+			view.state.groups = view.state.groups
+				.filter((group) => group.id !== id)
+				.map((group) => (group.groupIds.includes(id) ? { ...group, groupIds: group.groupIds.filter((child) => child !== id) } : group));
+		},
+		done: (next) => !next.groups.some((group) => group.id === id),
+	});
+	sendTracked(`group:${id}`, { type: "deleteGroup", id });
+	render();
+}
+
+/* A workspace adds its projects that are not in the group yet; which ones is worked out now, as the extension does. */
+function addMember(id: string, member: GroupMember): void {
+	const group = state?.groups.find((entry) => entry.id === id);
+	if (!state || !group) return;
+	const slotIds =
+		member.kind === "workspace"
+			? (state.workspaces.find((workspace) => workspace.file === member.id)?.slotIds ?? []).filter((slot) => !group.slotIds.includes(slot))
+			: member.kind === "project"
+				? [member.id]
+				: [];
+	const groupIds = member.kind === "group" ? [member.id] : [];
+	pending.expect(`member:${id}:${member.kind}:${member.id}`, {
+		busy: `group:${id}`,
+		ttl: 15_000,
+		apply: (view) => {
+			const now = view.state.groups.find((entry) => entry.id === id);
+			if (now) pending.patchGroup(view, id, { slotIds: [...new Set([...now.slotIds, ...slotIds])], groupIds: [...new Set([...now.groupIds, ...groupIds])] });
+		},
+		done: (next) => {
+			const now = next.groups.find((entry) => entry.id === id);
+			return !now || (slotIds.every((slot) => now.slotIds.includes(slot)) && groupIds.every((child) => now.groupIds.includes(child)));
+		},
+	});
+	sendTracked(`group:${id}`, { type: "addToGroup", id, member });
+	render();
+}
+
+function removeMember(id: string, member: GroupMember): void {
+	const list = member.kind === "group" ? "groupIds" : "slotIds";
+	pending.expect(`member:${id}:${member.kind}:${member.id}`, {
+		busy: `group:${id}`,
+		ttl: 15_000,
+		apply: (view) => {
+			const now = view.state.groups.find((entry) => entry.id === id);
+			if (now) pending.patchGroup(view, id, { [list]: now[list].filter((entry) => entry !== member.id) });
+		},
+		done: (next) => !next.groups.find((entry) => entry.id === id)?.[list].includes(member.id),
+	});
+	sendTracked(`group:${id}`, { type: "removeFromGroup", id, member });
+	render();
+}
+
+/* A new group shows at once under its name; the service gives it its id, so it takes clicks once that arrives. */
+function newGroup(name: string, slotIds: string[] = [], message: FromPanel = { type: "newGroup", name }): void {
+	const before = new Set(state?.groups.map((group) => group.id));
+	const placeholder: GroupView = { id: `${PENDING_GROUP}${name}`, name, slotIds, groupIds: [], active: false, projectIds: slotIds };
+	pending.expect(`new-group:${name}`, {
+		busy: "group:new",
+		ttl: 15_000,
+		apply: (view) => {
+			view.state.groups = [...view.state.groups, placeholder];
+		},
+		done: (next) => next.groups.some((group) => !before.has(group.id) && group.name === name),
+	});
+	sendTracked("group:new", message);
+	render();
+}
+
+/* A drop redraws in the new order at once, and keeps it until the saved order comes back. */
+function reorder(kind: "groups" | "projects", order: string[]): void {
+	const same = (next: string[]) => next.length === order.length && next.every((key, index) => key === order[index]);
+	pending.expect(`order:${kind}`, {
+		busy: "reorder",
+		ttl: 15_000,
+		apply: (view) => {
+			view.state.order = { ...view.state.order, [kind]: order };
+		},
+		done: (next) => same(next.order[kind]),
+	});
+	sendTracked("reorder", { type: "reorder", [kind]: order });
+}
+
+/* An agent's switch shows its new position at once; its chip says Working… until the config is written. */
+function setAgent(id: AgentStatus["id"] | "vscode", on: boolean): void {
+	pending.expect(`agent:${id}`, {
+		busy: `agent:${id}`,
+		ttl: 15_000,
+		apply: (view) => {
+			if (id === "vscode") view.state.agents.vscode = on;
+			else view.state.agents.list = view.state.agents.list.map((agent) => (agent.id === id ? { ...agent, state: on ? "connected" : "absent", error: null } : agent));
+		},
+		done: (next) => (id === "vscode" ? next.agents.vscode : next.agents.list.find((agent) => agent.id === id)?.state === "connected") === on,
+	});
+	sendTracked(`agent:${id}`, { type: "setAgent", id, on });
+	render();
+}
+
+/* Saving settings has no busy key; the new values show until the state carries them. */
+function expectSettings(settings: PanelState["settings"]): void {
+	const text = JSON.stringify(settings);
+	pending.expect("settings", {
+		busy: null,
+		ttl: 10_000,
+		apply: (view) => {
+			view.state.settings = settings;
+		},
+		done: (next) => JSON.stringify(next.settings) === text,
+	});
+}
+
+/*
+	Add a project: a row saying it is being added until the service lists it.
+	The extension may still ask which project file to use, and says nothing
+	if that is cancelled, so the row gives up after a while.
+*/
+function addProject(path: string, label: string): void {
+	pending.expect(`add:${path.toLowerCase()}`, {
+		busy: "add",
+		ttl: 20_000,
+		apply: (view) => {
+			view.adding.push({ label, path, source: "workspace" });
+		},
+		done: (next) => next.slots.some((slot) => samePath(slot.repoPath, path)),
+	});
+	sendTracked("add", { type: "addProject", path });
 }
 
 document.addEventListener("click", (event) => {
@@ -1040,8 +1396,7 @@ document.addEventListener("click", (event) => {
 			return openFilePicker(id);
 		case "pick-file":
 			ui.filePicker = null;
-			send({ type: "setProjectFile", id, file: target.dataset.file ?? "" });
-			return render();
+			return setProjectFile(id, target.dataset.file ?? "");
 		case "browse-file":
 			ui.filePicker = null;
 			send({ type: "browseProjectFile", id });
@@ -1077,12 +1432,10 @@ document.addEventListener("click", (event) => {
 		case "create-branch":
 			return createBranch();
 		case "sourcemap":
-			ui.busy.add(`slot:${id}`);
-			send({ type: "sourcemap", id });
+			sendTracked(`slot:${id}`, { type: "sourcemap", id });
 			return render();
 		case "build":
-			ui.busy.add(`build:${id}`);
-			send({ type: "build", id });
+			sendTracked(`build:${id}`, { type: "build", id });
 			return render();
 		case "toggle-filter":
 			ui.filter = ui.filter === null ? "" : null;
@@ -1091,10 +1444,9 @@ document.addEventListener("click", (event) => {
 			document.querySelector<HTMLInputElement>('[data-key="filter"]')?.focus();
 			return;
 		case "start":
+			return startSlot(id);
 		case "stop":
-			ui.busy.add(`slot:${id}`);
-			send({ type: action, id });
-			return render();
+			return stopSlot(id);
 		case "copy":
 			send({ type: "copy", id });
 			ui.copied = id;
@@ -1111,19 +1463,27 @@ document.addEventListener("click", (event) => {
 		case "remove":
 			return send({ type: "remove", id });
 		case "open-adder":
+			// Opens with the list the extension sent ahead of time; a fresh one is asked for and replaces it quietly.
 			ui.collapsed.projects = false;
-			ui.adding = { items: null };
+			ui.adding = true;
 			send({ type: "candidates" });
 			return render();
 		case "close-adder":
-			ui.adding = null;
+			ui.adding = false;
 			return render();
-		case "add":
-			ui.adding = null;
-			send({ type: "addProject", path: path ?? "" });
+		case "add": {
+			ui.adding = false;
+			const folder = path ?? "";
+			const label =
+				ui.candidates?.find((item) => samePath(item.path, folder))?.label ??
+				state?.workspaces.flatMap((workspace) => workspace.addable).find((item) => samePath(item.path, folder))?.label ??
+				folder.split(/[\\/]/).filter(Boolean).pop() ??
+				folder;
+			addProject(folder, label);
 			return render();
+		}
 		case "browse":
-			ui.adding = null;
+			ui.adding = false;
 			send({ type: "browse" });
 			return render();
 		case "open-new-group":
@@ -1153,12 +1513,9 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "remove-member-yes":
 			ui.confirmRemoveMember = null;
-			send({ type: "removeFromGroup", id, member: { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" } });
-			return render();
+			return removeMember(id, { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" });
 		case "start-group":
-			ui.busy.add(`group:${id}`);
-			send({ type: "startGroup", id, only: false });
-			return render();
+			return startGroup(id, false);
 		case "solo-group":
 			ui.confirmOnly = id;
 			return render();
@@ -1167,13 +1524,9 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "solo-group-yes":
 			ui.confirmOnly = null;
-			ui.busy.add(`group:${id}`);
-			send({ type: "startGroup", id, only: true });
-			return render();
+			return startGroup(id, true);
 		case "stop-group":
-			ui.busy.add(`group:${id}`);
-			send({ type: "stopGroup", id });
-			return render();
+			return stopGroup(id);
 		case "rename": {
 			const group = state?.groups.find((entry) => entry.id === id);
 			if (!group) return;
@@ -1184,10 +1537,13 @@ document.addEventListener("click", (event) => {
 			input?.select();
 			return;
 		}
-		case "rename-save":
-			if (ui.renaming?.name.trim()) send({ type: "renameGroup", id: ui.renaming.id, name: ui.renaming.name.trim() });
+		case "rename-save": {
+			const renaming = ui.renaming;
 			ui.renaming = null;
+			const group = state?.groups.find((entry) => entry.id === renaming?.id);
+			if (renaming && renaming.name.trim() && renaming.name.trim() !== group?.name) return renameGroup(renaming.id, renaming.name.trim());
 			return render();
+		}
 		case "rename-cancel":
 			ui.renaming = null;
 			return render();
@@ -1199,8 +1555,7 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "delete-group":
 			ui.confirmDelete = null;
-			send({ type: "deleteGroup", id });
-			return render();
+			return deleteGroup(id);
 		case "save-settings":
 			return saveSettings();
 		case "reset-range":
@@ -1212,6 +1567,7 @@ document.addEventListener("click", (event) => {
 		case "reset-range-yes":
 			ui.confirmResetRange = false;
 			ui.settings = null;
+			if (state) expectSettings({ ...state.settings, portRange: DEFAULT_PORT_RANGE });
 			send({ type: "resetPortRange" });
 			return render();
 		case "reset-settings":
@@ -1219,12 +1575,35 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "refresh":
 			return send({ type: "refresh" });
-		case "add-workspace":
-			return send({ type: "addWorkspace", file: target.dataset.file ?? "" });
-		case "group-workspace":
+		case "add-workspace": {
+			const workspace = state?.workspaces.find((entry) => entry.file === target.dataset.file);
+			if (!workspace) return;
+			// The extension adds each folder with an action of its own, so each answers with a busy:false for "add".
+			for (const folder of workspace.addable) {
+				pending.expect(`add:${folder.path.toLowerCase()}`, {
+					busy: "add",
+					ttl: 20_000,
+					apply: (view) => {
+						view.adding.push({ label: folder.label, path: folder.path, source: "workspace" });
+					},
+					done: (next) => next.slots.some((slot) => samePath(slot.repoPath, folder.path)),
+				});
+				pending.sent("add");
+			}
+			send({ type: "addWorkspace", file: workspace.file });
+			return render();
+		}
+		case "group-workspace": {
+			const workspace = state?.workspaces.find((entry) => entry.file === target.dataset.file);
+			if (!workspace) return;
 			ui.collapsed.groups = false;
 			persist();
-			return send({ type: "groupWorkspace", file: target.dataset.file ?? "" });
+			// Named as the extension names it: the workspace's name, numbered when a group already has it.
+			const taken = new Set(state!.groups.map((group) => group.name.toLowerCase()));
+			let name = workspace.name;
+			for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${workspace.name} ${n}`;
+			return newGroup(name, workspace.slotIds, { type: "groupWorkspace", file: workspace.file });
+		}
 		case "stop-all":
 			ui.confirmStopAll = true;
 			return render();
@@ -1233,9 +1612,7 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "stop-all-yes":
 			ui.confirmStopAll = false;
-			ui.busy.add("stop-all");
-			send({ type: "stopAll" });
-			return render();
+			return stopAll();
 		case "walkthrough":
 			return send({ type: "walkthrough" });
 		case "toggle-agents-manual":
@@ -1250,7 +1627,14 @@ document.addEventListener("click", (event) => {
 		case "nudge-later":
 		case "nudge-never":
 			send({ type: "agentNudge", action: action === "nudge-later" ? "later" : "never" });
-			if (state) state.agentNudge = false;
+			pending.expect("nudge", {
+				busy: null,
+				ttl: 10_000,
+				apply: (view) => {
+					view.state.agentNudge = false;
+				},
+				done: (next) => !next.agentNudge,
+			});
 			return render();
 		case "copy-agent-commands":
 			return send({ type: "copyAgentSetup", what: "commands" });
@@ -1262,18 +1646,15 @@ document.addEventListener("click", (event) => {
 document.addEventListener("change", (event) => {
 	const box = event.target as HTMLInputElement;
 	if (box.dataset.agent) {
-		const id = box.dataset.agent as AgentStatus["id"] | "vscode";
-		ui.busy.add(`agent:${id}`);
-		send({ type: "setAgent", id, on: box.checked });
-		return render();
+		return setAgent(box.dataset.agent as AgentStatus["id"] | "vscode", box.checked);
 	}
 	const select = event.target as HTMLSelectElement;
 	if (select.dataset.action !== "add-member" || !select.value) return;
 	const separator = select.value.indexOf(":");
 	const kind = select.value.slice(0, separator);
 	const member: GroupMember = { kind: kind === "group" || kind === "workspace" ? kind : "project", id: select.value.slice(separator + 1) };
-	send({ type: "addToGroup", id: select.dataset.id ?? "", member });
 	select.value = "";
+	addMember(select.dataset.id ?? "", member);
 });
 
 document.addEventListener("input", (event) => {
@@ -1323,7 +1704,7 @@ document.addEventListener("keydown", (event) => {
 		else if (kind === "filter") ui.filter = null;
 		else if (kind === "new-group") ui.newGroup = null;
 		else if (kind === "rename") ui.renaming = null;
-		else if (ui.adding) ui.adding = null;
+		else if (ui.adding) ui.adding = false;
 		else return;
 		event.preventDefault();
 		return render();
@@ -1425,16 +1806,9 @@ document.addEventListener("drop", (event) => {
 	if (at >= 0) {
 		keys.splice(dropMark.after ? at + 1 : at, 0, key);
 		ui.lists.set(list, keys);
-		if (list === "groups") send({ type: "reorder", groups: keys });
-		else {
-			// Projects' order holds workspace blocks and every block's cards together.
-			const projects = [...(ui.lists.get("blocks") ?? []), ...[...ui.lists.entries()].filter(([name]) => name.startsWith("cards:")).flatMap(([, entries]) => entries)];
-			send({ type: "reorder", projects });
-		}
-		if (state) {
-			if (list === "groups") state.order = { ...state.order, groups: keys };
-			else state.order = { ...state.order, projects: [...(ui.lists.get("blocks") ?? []), ...[...ui.lists.entries()].filter(([name]) => name.startsWith("cards:")).flatMap(([, entries]) => entries)] };
-		}
+		// Projects' order holds workspace blocks and every block's cards together.
+		if (list === "groups") reorder("groups", keys);
+		else reorder("projects", [...(ui.lists.get("blocks") ?? []), ...[...ui.lists.entries()].filter(([name]) => name.startsWith("cards:")).flatMap(([, entries]) => entries)]);
 	}
 	clearDropMark();
 });
@@ -1450,11 +1824,11 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 	const message = event.data;
 	switch (message.type) {
 		case "state":
-			state = message.state;
-			if (ui.picker && !state.slots.some((slot) => slot.id === ui.picker!.id)) ui.picker = null;
+			real = message.state;
+			pending.confirm(real);
 			if (ui.picker) {
 				// The service read a newer list (a branch, a fetch, a new worktree): ask for it quietly.
-				const stamp = state.slots.find((slot) => slot.id === ui.picker!.id)?.targetsAt ?? 0;
+				const stamp = real.slots.find((slot) => slot.id === ui.picker!.id)?.targetsAt ?? 0;
 				if (stamp !== ui.picker.at) {
 					ui.picker.at = stamp;
 					send({ type: "targets", id: ui.picker.id });
@@ -1462,6 +1836,7 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			}
 			return render();
 		case "targets":
+			// Every project's list comes ahead of time, so a picker opens with it drawn; only an open picker redraws.
 			if (message.options) ui.targets.set(message.id, message.options);
 			if (ui.picker?.id === message.id) {
 				ui.picker.options = message.options ?? ui.picker.options;
@@ -1486,10 +1861,9 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			}
 			return;
 		case "candidates":
-			if (ui.adding) {
-				ui.adding.items = message.items;
-				render();
-			}
+			// Kept while Add a project is closed, so it opens with this list.
+			ui.candidates = message.items;
+			if (ui.adding) render();
 			return;
 		case "focus":
 			return flash(message.id);
@@ -1498,8 +1872,21 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 		case "fold":
 			return foldFromMenu(message.key, message.list, message.how);
 		case "busy":
-			if (message.busy) ui.busy.add(message.key);
-			else ui.busy.delete(message.key);
+			if (message.busy) {
+				ui.busy.add(message.key);
+				return render();
+			}
+			/*
+				The action is over. Its expectations end with the state the
+				extension sends right after; if none comes (nothing changed, so
+				the extension had nothing new to send), they end a moment later.
+			*/
+			if (pending.settle(message.key)) {
+				ui.busy.delete(message.key);
+				setTimeout(() => {
+					if (pending.dropSettled()) render();
+				}, 1000);
+			}
 			return render();
 	}
 });

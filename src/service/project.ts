@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { longPath } from "../common/paths";
+
 /*
 	How a slot's project file is generated. See spec 001, "Live-switch
 	measurement", for why each rule here exists.
@@ -31,9 +33,14 @@ const PACKAGE_PATHS = new Set(["Packages", "ServerPackages", "DevPackages"]);
 
 export type ProjectJson = Record<string, unknown> & { name?: string; tree?: unknown };
 
-/** Prefix that makes Rojo register a path the way it canonicalizes change events on Windows. */
+/*
+	Prefix that makes Rojo register a path the way it canonicalizes change
+	events on Windows. The path is made long first: Rojo's events carry long
+	names, so a watch registered under an 8.3 short name (C:\Users\JOHNSM~1)
+	never matches them, and a switch would not reach Studio.
+*/
 export function verbatim(path: string): string {
-	const absolute = resolve(path);
+	const absolute = longPath(path);
 	if (process.platform !== "win32" || absolute.startsWith("\\\\?\\")) return absolute;
 	if (absolute.startsWith("\\\\")) return "\\\\?\\UNC\\" + absolute.slice(2);
 	return "\\\\?\\" + absolute;

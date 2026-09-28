@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.17.3";
+export const SERVICE_VERSION = "0.18.2";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -63,6 +63,16 @@ export interface SlotView {
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
 	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
 	claim: { label: string; until: number } | null;
+}
+
+/*
+	Everything the panel draws from the service, as GET /events sends it: once
+	when a window subscribes, then each time any of it changes.
+*/
+export interface Snapshot {
+	slots: SlotView[];
+	groups: GroupView[];
+	order: DisplayOrder;
 }
 
 /** What POST /slots/:id/branch made. */
@@ -156,7 +166,7 @@ export interface AgentStatus {
 	/** Its CLI was found on PATH. */
 	installed: boolean;
 	/** "connected": its user config has Rojo-Hub's entry; "other": an entry named rojohub with another URL, which is the user's own. */
-	state: "connected" | "absent" | "other";
+	state: "connected" | "absent" | "other" | "unknown";
 	/** The last add or remove that failed, until the next one. */
 	error: string | null;
 }

@@ -101,9 +101,14 @@ export class Groups {
 		this.registry.save();
 	}
 
+	/*
+		Serving, or meant to be: a project in error (its rojo crashed and could
+		not be started again, say) still wants to serve, so Stop, a group's Stop
+		and Stop all must reach it, or it would be started again with the service.
+	*/
 	private serving(slotId: string): boolean {
 		const state = this.hub.view(this.registry.get(slotId)).state;
-		return state === "running" || state === "starting";
+		return state === "running" || state === "starting" || state === "error";
 	}
 
 	/*

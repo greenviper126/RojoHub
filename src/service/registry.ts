@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 import type { DisplayOrder, Target } from "../common/api";
@@ -50,22 +50,66 @@ export class Registry {
 	slots: SlotRecord[] = [];
 	groups: GroupRecord[] = [];
 	order: DisplayOrder = { projects: [], groups: [] };
+	/** What happened when registry.json could not be read, for service.log; null when it read fine. */
+	readonly recovered: string | null = null;
 
+	/*
+		Reads registry.json, or the copy of the one before the last save
+		(registry.json.bak) when it is damaged: a power cut mid-write, a hand edit.
+		The damaged file is kept beside it for the user, never thrown away, and the
+		service starts either way; failing here would leave Rojo-Hub unable to
+		start until the file was deleted by hand.
+	*/
 	constructor(readonly home: string) {
 		this.file = join(home, "registry.json");
 		mkdirSync(home, { recursive: true });
-		if (existsSync(this.file)) {
-			const parsed = JSON.parse(readFileSync(this.file, "utf8")) as RegistryFile;
-			this.slots = parsed.slots ?? [];
-			this.groups = parsed.groups ?? [];
-			this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
+		if (!existsSync(this.file)) return;
+		const parsed = readRegistry(this.file);
+		if (parsed) {
+			this.load(parsed);
+			return;
 		}
+		const kept = join(home, `registry.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
+		renameSync(this.file, kept);
+		const backup = existsSync(this.file + ".bak") ? readRegistry(this.file + ".bak") : null;
+		if (backup) this.load(backup);
+		this.recovered = `registry.json could not be read; kept it as ${kept} and ${backup ? "restored the previous save from registry.json.bak" : "started with no projects"}.`;
+		this.save();
 	}
 
+	/*
+		Takes only records that have what the service relies on, so a hand edit
+		that breaks one project or group costs that one, not every status the
+		service sends.
+	*/
+	private load(parsed: RegistryFile): void {
+		this.slots = Array.isArray(parsed.slots) ? parsed.slots.filter(validSlot) : [];
+		this.groups = Array.isArray(parsed.groups) ? parsed.groups.filter(validGroup) : [];
+		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
+	}
+
+	/*
+		Writes a temporary file, flushes it to disk, keeps the current file as
+		registry.json.bak, then renames the new one into place, so a crash or power
+		cut at any point leaves one whole registry to start from.
+	*/
 	save(): void {
 		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order };
 		const temporary = this.file + ".tmp";
-		writeFileSync(temporary, JSON.stringify(body, null, "\t") + "\n");
+		const fd = openSync(temporary, "w");
+		try {
+			writeSync(fd, JSON.stringify(body, null, "\t") + "\n");
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		if (existsSync(this.file)) {
+			try {
+				copyFileSync(this.file, this.file + ".bak");
+			} catch {
+				// the backup is a convenience; the save itself matters
+			}
+		}
 		renameSync(temporary, this.file);
 	}
 
@@ -79,6 +123,40 @@ export class Registry {
 		const group = this.groups.find((entry) => entry.id === id);
 		if (!group) throw new NotFound(`No group with id "${id}"`);
 		return group;
+	}
+}
+
+const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+function validSlot(slot: SlotRecord): boolean {
+	const target = slot?.target as { kind?: unknown; path?: unknown; ref?: unknown } | undefined;
+	return (
+		!!slot &&
+		text(slot.id) &&
+		text(slot.projectName) &&
+		text(slot.repoPath) &&
+		text(slot.projectFile) &&
+		Number.isInteger(slot.port) &&
+		(target?.kind === "worktree" ? text(target.path) : target?.kind === "branch" && text(target.ref))
+	);
+}
+
+function validGroup(group: GroupRecord): boolean {
+	return !!group && text(group.id) && typeof group.name === "string" && Array.isArray(group.slotIds);
+}
+
+/*
+	A registry file's contents, or null when it is damaged (not JSON, not an
+	object). A file that cannot be opened at all throws instead: that is a
+	locked or unreadable file, not a damaged one, and must not be set aside.
+*/
+function readRegistry(file: string): RegistryFile | null {
+	const text = readFileSync(file, "utf8");
+	try {
+		const parsed = JSON.parse(text) as RegistryFile | null;
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+	} catch {
+		return null;
 	}
 }
 
