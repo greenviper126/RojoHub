@@ -111,13 +111,30 @@ function setFold(key: string, fold: boolean): void {
 	if (fold && ui.picker && key === `card:${ui.picker.id}`) ui.picker = null;
 }
 
+/*
+	Expand and Expand All open everything inside too (workspaces, project
+	cards), not just the header. What is inside a folded header is not drawn,
+	so this opens one level, draws, and looks again until nothing is left.
+*/
 function foldFromMenu(key: string, list: string, how: "expand" | "collapse" | "others" | "all"): void {
-	if (how === "expand" || how === "collapse") setFold(key, how === "collapse");
-	else
-		for (const element of document.querySelectorAll<HTMLElement>(`[data-fold-list="${CSS.escape(list)}"]`)) {
-			const other = element.dataset.foldKey ?? "";
-			setFold(other, how === "others" && other !== key);
+	const siblings = [...document.querySelectorAll<HTMLElement>(`[data-fold-list="${CSS.escape(list)}"]`)].map((element) => element.dataset.foldKey ?? "");
+	if (how === "collapse") setFold(key, true);
+	else if (how === "others") for (const other of siblings) setFold(other, other !== key);
+	else {
+		let opening = how === "all" ? siblings : [key];
+		const seen = new Set<string>();
+		while (opening.length > 0) {
+			for (const each of opening) {
+				setFold(each, false);
+				seen.add(each);
+			}
+			render();
+			opening = opening
+				.flatMap((each) => [...(document.querySelector(`[data-fold-key="${CSS.escape(each)}"]`)?.parentElement?.querySelectorAll<HTMLElement>("[data-fold-key]") ?? [])])
+				.map((element) => element.dataset.foldKey ?? "")
+				.filter((inner) => !seen.has(inner));
 		}
+	}
 	persist();
 	render();
 }
