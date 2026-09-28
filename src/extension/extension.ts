@@ -288,7 +288,7 @@ async function projectMenu(id: string): Promise<void> {
 		serving
 			? { label: "$(debug-stop) Stop Serving", run: () => vscode.commands.executeCommand("rojoHub.stop", slot.id) }
 			: { label: "$(play) Start Serving", description: `on port ${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.start", slot.id) },
-		{ label: "$(copy) Copy Address", description: `localhost:${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
+		{ label: "$(copy) Copy Port", description: `${slot.port}`, run: () => vscode.commands.executeCommand("rojoHub.copyAddress", slot.id) },
 		fileLocked(slot)
 			? { label: "$(lock) Project File", description: `${slot.projectFile} · stop the project to change it` }
 			: { label: "$(file-code) Project File…", description: `now ${slot.projectFile}`, run: () => changeProjectFile(slot, null) },
@@ -838,8 +838,8 @@ async function onPanel(message: FromPanel): Promise<void> {
 		}
 		case "copy":
 			if (!slot) return;
-			await vscode.env.clipboard.writeText(`localhost:${slot.port}`);
-			void vscode.window.setStatusBarMessage(`$(copy) Copied localhost:${slot.port}`, 2500);
+			await vscode.env.clipboard.writeText(String(slot.port));
+			void vscode.window.setStatusBarMessage(`$(copy) Copied port ${slot.port}`, 2500);
 			return;
 		case "log":
 			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
@@ -962,10 +962,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 		},
 		"rojoHub.copyAddress": async (argument) => {
-			const slot = await pickSlot(argument, "Copy whose address?");
+			const slot = await pickSlot(argument, "Copy whose port?");
 			if (!slot) return;
-			await vscode.env.clipboard.writeText(`localhost:${slot.port}`);
-			void vscode.window.setStatusBarMessage(`Copied localhost:${slot.port}`, 2000);
+			await vscode.env.clipboard.writeText(String(slot.port));
+			void vscode.window.setStatusBarMessage(`Copied port ${slot.port}`, 2000);
 		},
 		"rojoHub.refresh": async () => {
 			await run("Connecting to Rojo-Hub", async () => {
