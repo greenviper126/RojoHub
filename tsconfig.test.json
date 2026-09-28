@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": false, "outDir": "out", "sourceMap": true },
+  "include": ["src/common", "src/service", "src/extension/saved.ts", "src/extension/workspaces.ts", "src/test"]
+}

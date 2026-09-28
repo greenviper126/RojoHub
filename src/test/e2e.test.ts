@@ -1,0 +1,310 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, test } from "node:test";
+
+import { decode } from "@msgpack/msgpack";
+
+import type { GroupResult, GroupView, SlotView, TargetOption } from "../common/api";
+import { parsePortSettings, preferredPort } from "../service/ports";
+
+/*
+	Drives the real service against a real `rojo serve` and a throwaway git repo,
+	with a websocket client standing in for the Studio plugin. Needs git and a
+	Rokit-installed rojo 7.7 on PATH.
+*/
+
+const API_PORT = 34869;
+const api = `http://127.0.0.1:${API_PORT}`;
+const root = mkdtempSync(join(tmpdir(), "rojo-hub-e2e-"));
+const repo = join(root, "Game");
+const featureTree = join(root, "wt-feature");
+const home = join(root, "home");
+const projectName = `HubE2E-${process.pid}`;
+let service: ChildProcess;
+
+function gitIn(cwd: string, ...args: string[]): string {
+	return execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], { cwd, encoding: "utf8" });
+}
+
+function write(file: string, text: string): void {
+	mkdirSync(join(file, ".."), { recursive: true });
+	writeFileSync(file, text);
+}
+
+async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+	const response = await fetch(api + path, {
+		method,
+		headers: { "content-type": "application/json" },
+		body: body === undefined ? undefined : JSON.stringify(body),
+	});
+	const payload = (await response.json()) as T & { error?: string };
+	if (!response.ok) throw new Error(`${method} ${path}: ${payload.error}`);
+	return payload;
+}
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+async function until<T>(what: string, probe: () => Promise<T | undefined | null | false>, ms = 15000): Promise<T> {
+	const deadline = Date.now() + ms;
+	while (Date.now() < deadline) {
+		const value = await probe();
+		if (value) return value;
+		await sleep(150);
+	}
+	throw new Error(`timed out waiting for ${what}`);
+}
+
+before(async () => {
+	mkdirSync(repo, { recursive: true });
+	gitIn(repo, "init", "-q", "-b", "main");
+	write(join(repo, ".gitignore"), "Packages/\n");
+	write(join(repo, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	write(
+		join(repo, "default.project.json"),
+		JSON.stringify({
+			name: projectName,
+			servePlaceIds: [123],
+			globIgnorePaths: ["**/*.ignored.luau"],
+			tree: {
+				$className: "DataModel",
+				ServerScriptService: { $className: "ServerScriptService", Game: { $path: "src/Server" } },
+				ReplicatedStorage: { $className: "ReplicatedStorage", Packages: { $path: "Packages" } },
+			},
+		}),
+	);
+	write(join(repo, "src", "Server", "Foo.server.luau"), 'print("main")\n');
+	write(join(repo, "src", "Server", "Skip.ignored.luau"), "return 0\n");
+	gitIn(repo, "add", "-A");
+	gitIn(repo, "commit", "-q", "-m", "main");
+	write(join(repo, "Packages", "Dep.luau"), "return 'dep'\n");
+
+	gitIn(repo, "checkout", "-q", "-b", "feature");
+	write(join(repo, "src", "Server", "Foo.server.luau"), 'print("feature")\n');
+	gitIn(repo, "commit", "-q", "-am", "feature");
+	gitIn(repo, "checkout", "-q", "-b", "other", "main");
+	write(join(repo, "src", "Server", "Other.server.luau"), 'print("other")\n');
+	gitIn(repo, "add", "-A");
+	gitIn(repo, "commit", "-q", "-m", "other");
+	gitIn(repo, "checkout", "-q", "main");
+	gitIn(repo, "worktree", "add", "-q", featureTree, "feature");
+
+	service = spawn(process.execPath, [join(__dirname, "..", "service", "main.js")], {
+		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT) },
+		stdio: "inherit",
+	});
+	await until("service", () => fetch(api + "/health").then((r) => r.ok).catch(() => false));
+});
+
+after(async () => {
+	await fetch(api + "/shutdown", { method: "POST", body: JSON.stringify({ stopServing: true }) }).catch(() => undefined);
+	await sleep(500);
+	service?.kill();
+});
+
+interface Packet {
+	sessionId: string;
+	body: { messages: { added: Record<string, { Name: string; Properties: { Source?: { String: string } } }>; removed: string[]; updated: { changedProperties: { Source?: { String: string } } }[] }[] };
+}
+
+test("one port, live switches, one session", async () => {
+	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
+	assert.equal(slot.repoPath.toLowerCase(), repo.toLowerCase(), "registering from a worktree registers the primary");
+	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
+	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
+	assert.equal(slot.portSource, "hash");
+	await assert.rejects(call("POST", "/slots", { path: repo }), /already registered/);
+
+	const started = await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	assert.equal(started.state, "running");
+	assert.equal(started.mode, "native");
+
+	const info = decode(new Uint8Array(await (await fetch(`http://localhost:${slot.port}/api/rojo`)).arrayBuffer())) as {
+		sessionId: string;
+		projectName: string;
+		rootInstanceId: string;
+		expectedPlaceIds: number[];
+	};
+	assert.equal(info.projectName, projectName);
+	assert.deepEqual(info.expectedPlaceIds, [123]);
+	const read = decode(new Uint8Array(await (await fetch(`http://localhost:${slot.port}/api/read/${info.rootInstanceId}`)).arrayBuffer())) as {
+		messageCursor: number;
+		instances: Record<string, { Name: string }>;
+	};
+	const names = Object.values(read.instances).map((i) => i.Name);
+	assert.ok(names.includes("Dep"), "packages served");
+	assert.ok(!names.includes("Skip"), "globIgnorePaths honoured natively");
+
+	const packets: Packet[] = [];
+	let closed = false;
+	const socket = new WebSocket(`ws://localhost:${slot.port}/api/socket/${read.messageCursor}`);
+	socket.binaryType = "arraybuffer";
+	socket.onmessage = (event) => packets.push(decode(new Uint8Array(event.data as ArrayBuffer)) as Packet);
+	socket.onclose = () => (closed = true);
+	await new Promise((done) => (socket.onopen = done));
+	await until("connection count 1", async () => (await call<SlotView[]>("GET", "/slots"))[0].connections === 1);
+
+	const sources = () => packets.flatMap((p) => p.body.messages.flatMap((m) => [...m.updated.map((u) => u.changedProperties.Source?.String), ...Object.values(m.added).map((a) => a.Properties.Source?.String)])).filter(Boolean);
+
+	const targets = await call<TargetOption[]>("GET", `/slots/${slot.id}/targets`);
+	assert.ok(targets.some((t) => t.target.kind === "worktree" && t.branch === "feature"));
+	assert.ok(targets.some((t) => t.target.kind === "branch" && t.branch === "other"));
+	assert.ok(!targets.some((t) => t.target.kind === "branch" && t.branch === "feature"), "a checked-out branch is offered as its worktree");
+
+	// worktree without Packages: borrowed mode, still one patch on the same session
+	let switched = await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: featureTree } });
+	assert.equal(switched.mode, "borrowed");
+	assert.equal(switched.branch, "feature");
+	await until("feature source", async () => sources().some((s) => s!.includes("feature")));
+
+	// edit in the served worktree
+	packets.length = 0;
+	writeFileSync(join(featureTree, "src", "Server", "Foo.server.luau"), 'print("feature edited")\n');
+	await until("edit", async () => sources().some((s) => s!.includes("feature edited")));
+
+	// branch with no worktree: checked out into a view
+	packets.length = 0;
+	switched = await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "branch", ref: "refs/heads/other" } });
+	assert.equal(switched.branch, "other");
+	await until("other source", async () => sources().some((s) => s!.includes("other")));
+	assert.equal(readdirSync(join(home, "views", slot.id)).length, 1, "one view, named after the commit");
+
+	// back to the primary: views cleaned up
+	packets.length = 0;
+	switched = await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: repo } });
+	assert.equal(switched.mode, "native");
+	// "other" branched from main, so the only difference is its extra script going away
+	await until("Other removed", async () => packets.some((p) => p.body.messages.some((m) => m.removed.length > 0)));
+	assert.equal(readdirSync(join(home, "views", slot.id)).length, 1, "views are kept while rojo runs (rojo-rbx/rojo#1305)");
+
+	// the primary's own project file changes sync live when served natively
+	packets.length = 0;
+	const project = JSON.parse(readFileSync(join(repo, "default.project.json"), "utf8"));
+	project.tree.ServerScriptService.Extra = { $path: "src/Server" };
+	writeFileSync(join(repo, "default.project.json"), JSON.stringify(project));
+	await until("project edit", async () => packets.some((p) => p.body.messages.some((m) => Object.values(m.added).some((a) => a.Name === "Extra"))));
+
+	for (const packet of packets) assert.equal(packet.sessionId, info.sessionId);
+	const after = decode(new Uint8Array(await (await fetch(`http://localhost:${slot.port}/api/rojo`)).arrayBuffer())) as { sessionId: string };
+	assert.equal(after.sessionId, info.sessionId, "same session throughout");
+	assert.equal(closed, false, "socket never closed");
+	assert.equal((await call<SlotView[]>("GET", "/slots"))[0].state, "running");
+
+	socket.close();
+	await until("connection count 0", async () => (await call<SlotView[]>("GET", "/slots"))[0].connections === 0);
+
+	// deleting a served subfolder crashes rojo 7.7 (rojo-rbx/rojo#1305); the Hub brings the port back
+	mkdirSync(join(repo, "src", "Server", "Doomed", "Deeper"), { recursive: true });
+	writeFileSync(join(repo, "src", "Server", "Doomed", "Deeper", "X.luau"), "return 1\n");
+	await sleep(800);
+	rmSync(join(repo, "src", "Server", "Doomed"), { recursive: true, force: true });
+	const restarted = await until("restart after crash", async () => {
+		const [view] = await call<SlotView[]>("GET", "/slots");
+		return view.state === "running" && view.sessionId !== info.sessionId && view;
+	}, 30000);
+	assert.match(restarted.warnings.join("\n"), /crashed .* restarted/);
+	assert.equal(readdirSync(join(home, "views", slot.id)).length, 0, "restart collected the unused view");
+
+	// a servePort in the project file wins; the running slot moves to it
+	const movedTo = slot.port === 35500 ? 35501 : 35500;
+	const withPort = JSON.parse(readFileSync(join(repo, "default.project.json"), "utf8"));
+	withPort.servePort = movedTo;
+	writeFileSync(join(repo, "default.project.json"), JSON.stringify(withPort));
+	const moved = await until("move to servePort", async () => {
+		const [view] = await call<SlotView[]>("GET", "/slots");
+		return view.port === movedTo && view.state === "running" && view;
+	}, 30000);
+	assert.equal(moved.portSource, "servePort");
+	assert.match(moved.warnings.join("\n"), new RegExp(`Port moved from ${slot.port} to ${movedTo}`));
+	const answer = decode(new Uint8Array(await (await fetch(`http://localhost:${movedTo}/api/rojo`)).arrayBuffer())) as { projectName: string };
+	assert.equal(answer.projectName, projectName);
+
+	const stopped = await call<SlotView>("POST", `/slots/${slot.id}/stop`);
+	assert.equal(stopped.state, "stopped");
+	await call("DELETE", `/slots/${slot.id}`);
+	assert.deepEqual(await call("GET", "/slots"), []);
+});
+
+async function makeRepo(name: string): Promise<string> {
+	const dir = join(root, name);
+	mkdirSync(dir, { recursive: true });
+	gitIn(dir, "init", "-q", "-b", "main");
+	write(join(dir, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+	write(
+		join(dir, "default.project.json"),
+		JSON.stringify({ name: `${name}-${process.pid}`, tree: { $className: "DataModel", ServerScriptService: { $className: "ServerScriptService", Code: { $path: "src" } } } }),
+	);
+	write(join(dir, "src", "Main.server.luau"), `print("${name}")\n`);
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", name);
+	return dir;
+}
+
+test("groups nest without loops, serve only, and stop without taking shared projects down", async () => {
+	const [one, two] = await Promise.all([makeRepo("GroupOne"), makeRepo("GroupTwo")]);
+	const a = await call<SlotView>("POST", "/slots", { path: one });
+	const b = await call<SlotView>("POST", "/slots", { path: two });
+	const state = async (id: string) => (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === id)!.state;
+
+	const both = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
+	const onlyA = await call<GroupView>("POST", "/groups", { name: "Just One", slotIds: [a.id] });
+	await assert.rejects(call("POST", "/groups", { name: "both", slotIds: [] }), /already a group/);
+	await assert.rejects(call("POST", "/groups", { name: "Ghost", slotIds: ["nope"] }), /No project/);
+
+	let result = await call<GroupResult>("POST", `/groups/${both.id}/start`, {});
+	assert.deepEqual(result.failed, []);
+	assert.deepEqual(result.started.sort(), [a.id, b.id].sort());
+	assert.equal(await state(a.id), "running");
+	assert.equal(await state(b.id), "running");
+	const sessionA = (await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId;
+
+	result = await call<GroupResult>("POST", `/groups/${onlyA.id}/start`, { only: true });
+	assert.deepEqual(result.stopped, [b.id], "serve-only stops projects outside the group");
+	assert.deepEqual(result.started, [], "members already serving are left alone");
+	assert.equal(await state(b.id), "stopped");
+	assert.equal((await call<SlotView[]>("GET", "/slots")).find((slot) => slot.id === a.id)!.sessionId, sessionA, "same session kept");
+
+	// Just One is running (Only this), so stopping Both must keep A: another running group uses it
+	result = await call<GroupResult>("POST", `/groups/${both.id}/stop`);
+	assert.deepEqual(result.kept, [{ id: a.id, because: "Just One" }]);
+	assert.equal(await state(a.id), "running");
+	result = await call<GroupResult>("POST", `/groups/${onlyA.id}/stop`);
+	assert.deepEqual(result.stopped, [a.id]);
+	assert.equal(await state(a.id), "stopped");
+
+	// nesting: Outer holds Both; Both can't then hold Outer, nor itself
+	const outer = await call<GroupView>("POST", "/groups", { name: "Outer", groupIds: [both.id] });
+	assert.deepEqual(outer.projectIds.sort(), [a.id, b.id].sort(), "nested projects count");
+	await assert.rejects(call("PUT", `/groups/${both.id}`, { groupIds: [outer.id] }), /would loop.*Outer → Both|Outer → Both.*would loop/);
+	await assert.rejects(call("PUT", `/groups/${both.id}`, { groupIds: [both.id] }), /can't contain itself/);
+	result = await call<GroupResult>("POST", `/groups/${outer.id}/start`, {});
+	assert.deepEqual(result.started.sort(), [a.id, b.id].sort(), "starting Outer starts the nested group's projects");
+	assert.equal((await call<GroupView[]>("GET", "/groups")).find((group) => group.id === outer.id)!.active, true);
+	result = await call<GroupResult>("POST", `/groups/${outer.id}/stop`);
+	assert.deepEqual(result.stopped.sort(), [a.id, b.id].sort());
+	await call("DELETE", `/groups/${both.id}`);
+	assert.deepEqual((await call<GroupView[]>("GET", "/groups")).find((group) => group.id === outer.id)!.groupIds, [], "deleted group leaves the groups holding it");
+	await call("DELETE", `/groups/${outer.id}`);
+	const again = await call<GroupView>("POST", "/groups", { name: "Both", slotIds: [a.id, b.id] });
+
+	// Stop all stops every serving project and marks every group stopped
+	await call<GroupResult>("POST", `/groups/${again.id}/start`, {});
+	assert.equal(await state(a.id), "running");
+	const all = await call<{ stopped: string[]; failed: unknown[] }>("POST", "/stop-all");
+	assert.deepEqual(all.stopped.sort(), [a.id, b.id].sort());
+	assert.deepEqual(all.failed, []);
+	assert.equal(await state(b.id), "stopped");
+	assert.equal((await call<GroupView[]>("GET", "/groups")).every((group) => !group.active), true, "no group left running");
+
+	await call("PUT", `/groups/${again.id}`, { name: "Renamed" });
+	await call("DELETE", `/slots/${b.id}`);
+	const groups = await call<GroupView[]>("GET", "/groups");
+	assert.deepEqual(groups.find((group) => group.id === again.id)!.slotIds, [a.id], "removed project leaves its groups");
+	assert.equal(groups.find((group) => group.id === again.id)!.name, "Renamed");
+	await call("DELETE", `/groups/${again.id}`);
+	await call("DELETE", `/groups/${onlyA.id}`);
+	await call("DELETE", `/slots/${a.id}`);
+	assert.deepEqual(await call("GET", "/groups"), []);
+});

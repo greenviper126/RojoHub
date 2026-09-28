@@ -1,0 +1,369 @@
+{
+  "name": "rojo-hub",
+  "displayName": "Rojo-Hub",
+  "version": "0.10.0",
+  "private": true,
+  "publisher": "greenviper126",
+  "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
+  "repository": "https://github.com/greenviper126/RojoHub",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rojoHub",
+          "title": "Rojo-Hub",
+          "icon": "media/hub.svg"
+        }
+      ]
+    },
+    "views": {
+      "rojoHub": [
+        {
+          "id": "rojoHub.panel",
+          "name": "Rojo-Hub",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "rojoHub.openMenu",
+        "title": "Open Menu",
+        "category": "Rojo-Hub",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "rojoHub.projectMenu",
+        "title": "Project Menu",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.addProject",
+        "title": "Add Project",
+        "category": "Rojo-Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rojoHub.removeProject",
+        "title": "Remove Project",
+        "category": "Rojo-Hub",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "rojoHub.start",
+        "title": "Start Serving",
+        "category": "Rojo-Hub",
+        "icon": "$(play)"
+      },
+      {
+        "command": "rojoHub.stop",
+        "title": "Stop Serving",
+        "category": "Rojo-Hub",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "rojoHub.switch",
+        "title": "Switch Branch",
+        "category": "Rojo-Hub",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "rojoHub.showLog",
+        "title": "Show Rojo Log",
+        "category": "Rojo-Hub",
+        "icon": "$(output)"
+      },
+      {
+        "command": "rojoHub.copyAddress",
+        "title": "Copy Address",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.refresh",
+        "title": "Refresh",
+        "category": "Rojo-Hub",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "rojoHub.newGroup",
+        "title": "New Group",
+        "category": "Rojo-Hub",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "rojoHub.editGroup",
+        "title": "Rename Group",
+        "category": "Rojo-Hub",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "rojoHub.deleteGroup",
+        "title": "Delete Group",
+        "category": "Rojo-Hub",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "rojoHub.startGroup",
+        "title": "Start Group",
+        "category": "Rojo-Hub",
+        "icon": "$(play)"
+      },
+      {
+        "command": "rojoHub.soloGroup",
+        "title": "Serve Only This Group",
+        "category": "Rojo-Hub",
+        "icon": "$(target)"
+      },
+      {
+        "command": "rojoHub.stopGroup",
+        "title": "Stop Group",
+        "category": "Rojo-Hub",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "rojoHub.groupMenu",
+        "title": "Group Menu",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.addToGroup",
+        "title": "Add Project to Group",
+        "category": "Rojo-Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "rojoHub.focusProject",
+        "title": "Show Project in Panel",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.stopAll",
+        "title": "Stop All",
+        "category": "Rojo-Hub",
+        "icon": "$(debug-stop)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "rojoHub.openMenu",
+          "when": "view == rojoHub.panel",
+          "group": "navigation@0"
+        },
+        {
+          "command": "rojoHub.refresh",
+          "when": "view == rojoHub.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rojoHub.addProject",
+          "when": "view == rojoHub.panel",
+          "group": "1@1"
+        },
+        {
+          "command": "rojoHub.newGroup",
+          "when": "view == rojoHub.panel",
+          "group": "1@2"
+        },
+        {
+          "command": "rojoHub.stopAll",
+          "when": "view == rojoHub.panel",
+          "group": "zz"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "rojoHub.projectMenu",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.addProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.removeProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.start",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stop",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.switch",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.showLog",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.copyAddress",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.refresh",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.newGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.editGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.deleteGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.startGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.soloGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stopGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.groupMenu",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.addToGroup",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.focusProject",
+          "when": "false"
+        },
+        {
+          "command": "rojoHub.stopAll",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Rojo-Hub",
+      "properties": {
+        "rojoHub.excludedPorts": {
+          "type": "array",
+          "scope": "application",
+          "default": [],
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "pattern": "^\\s*\\d+\\s*(-\\s*\\d+\\s*)?$",
+            "patternErrorMessage": "Write a port (35000) or a range (\"35000-35010\")."
+          },
+          "markdownDescription": "Ports Rojo-Hub never gives to any project, across all projects. Each entry is a port (`35000`) or a range (`\"35000-35010\"`). Port 34872, Rojo's default, is always excluded. A running project whose port changes is restarted on its new port."
+        },
+        "rojoHub.portRange": {
+          "type": "string",
+          "scope": "application",
+          "default": "34873-35872",
+          "pattern": "^\\s*\\d+\\s*-\\s*\\d+\\s*$",
+          "patternErrorMessage": "Write the range as first-last, for example 34873-35872.",
+          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose `default.project.json` sets `servePort` uses that instead."
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "rojoHub.start",
+        "title": "Get Started with Rojo-Hub",
+        "description": "Serve several Roblox projects at once, and switch branches without Studio disconnecting.",
+        "steps": [
+          {
+            "id": "add",
+            "title": "Add a project",
+            "description": "Pick a folder with a default.project.json. It gets its own port, the same on every machine.\n[Add Project](command:rojoHub.addProject)",
+            "media": {
+              "markdown": "media/walkthrough/add.md"
+            },
+            "completionEvents": [
+              "onCommand:rojoHub.addProject"
+            ]
+          },
+          {
+            "id": "start",
+            "title": "Start serving",
+            "description": "Rojo-Hub runs rojo serve for the project in the background, so it keeps serving when VS Code windows close.\n[Open Menu](command:rojoHub.openMenu)",
+            "media": {
+              "markdown": "media/walkthrough/start.md"
+            },
+            "completionEvents": [
+              "onCommand:rojoHub.start",
+              "onCommand:rojoHub.startGroup"
+            ]
+          },
+          {
+            "id": "studio",
+            "title": "Connect Studio once",
+            "description": "In Studio, connect the Rojo plugin to localhost and the project's port. Turn on the plugin's Auto Reconnect so the place reconnects by itself next time.",
+            "media": {
+              "markdown": "media/walkthrough/studio.md"
+            }
+          },
+          {
+            "id": "switch",
+            "title": "Switch branches live",
+            "description": "Pick any worktree or branch. The same Rojo keeps running and Studio receives the difference.\n[Switch Branch](command:rojoHub.switch)",
+            "media": {
+              "markdown": "media/walkthrough/switch.md"
+            },
+            "completionEvents": [
+              "onCommand:rojoHub.switch"
+            ]
+          },
+          {
+            "id": "groups",
+            "title": "Group projects",
+            "description": "Groups hold projects and other groups. Start runs them all; Only this runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
+            "media": {
+              "markdown": "media/walkthrough/groups.md"
+            },
+            "completionEvents": [
+              "onCommand:rojoHub.newGroup"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
+    "package": "npm run typecheck && npm run build && vsce package --no-dependencies --allow-missing-repository --skip-license",
+    "service": "node dist/service.js",
+    "probe:headless": "node tools/live-switch-headless.mjs verbatim"
+  },
+  "devDependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "@types/node": "^20.19.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/codicons": "^0.0.46-24",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "jsonc-parser": "^3.3.1",
+    "typescript": "^7.0.2"
+  }
+}

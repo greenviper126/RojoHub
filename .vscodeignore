@@ -1,0 +1,8 @@
+**
+!dist/extension.js
+!dist/service.js
+!dist/webview.js
+!dist/codicons/**
+!media/**
+!package.json
+!README.md
