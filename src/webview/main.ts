@@ -9,7 +9,7 @@
 	2-second status updates without flashing.
 */
 
-import { DEFAULT_PORT_RANGE, type GroupView, type SlotView, type TargetOption } from "../common/api";
+import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type TargetOption } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
@@ -169,6 +169,18 @@ function notices(slot: SlotView): string {
 	return rows.join("");
 }
 
+function claimText(claim: NonNullable<SlotView["claim"]>): string {
+	const until = new Date(claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	return `An agent working in ${claim.label} is using this project until ${until}. Other agents cannot switch it until then; switching it yourself still works.`;
+}
+
+/* Who holds the project (spec 004): shown so a switch by hand is not a surprise to the agent's user. */
+function claimNote(slot: SlotView): string {
+	if (!slot.claim) return "";
+	const until = new Date(slot.claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	return `<div class="claim muted small" title="${escape(claimText(slot.claim))}">${icon("robot")}<span class="grow ellipsis">Agent in <strong>${escape(slot.claim.label)}</strong> until ${escape(until)}</span></div>`;
+}
+
 /** "3 days ago" for a unix time in seconds. */
 function ago(seconds: number): string {
 	const minutes = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
@@ -281,7 +293,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 	const attentionClass = slot.error ? " has-error" : slot.warnings.length ? " has-warning" : "";
 	if (isFolded) {
 		return `<article class="card project compact ${slot.state}${attentionClass}${ui.flash === slot.id ? " flash" : ""}" id="slot-${escape(slot.id)}" ${dropAttributes(list, slot.id)}>
-			<div class="row card-head">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${here}<span class="grow"></span>${port}${
+			<div class="row card-head">${grip(list, slot.id)}${toggle}${slot.error ? icon("error", "bad") : slot.warnings.length ? icon("warning", "warn") : ""}${slot.claim ? `<span class="claim-icon" title="${escape(claimText(slot.claim))}">${icon("robot")}</span>` : ""}${here}<span class="grow"></span>${port}${
 				serving
 					? iconButton("stop", "debug-stop", `Stop ${slot.projectName}`, { id: slot.id })
 					: iconButton("start", "play", `Start ${slot.projectName}`, { id: slot.id })
@@ -298,6 +310,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${icon(targetIcon)}<span class="grow ellipsis">${escape(slot.targetLabel || "—")}</span>${icon(pickerOpen ? "chevron-up" : "chevron-down")}
 		</button>
 		${picker(slot)}
+		${claimNote(slot)}
 		${notices(slot)}
 		<div class="row card-foot">
 			${statusPill(slot)}
@@ -545,9 +558,44 @@ function settingsBody(): string {
 	</div>`;
 }
 
-/** Top-level sections are open by default, except Port settings. */
+/*
+	Agent access (spec 004). Each box does what ticking it in rojoHub.agents
+	does; Claude Code's and Codex's show what their own config says, read back
+	by the service, so an entry removed by hand shows unticked.
+*/
+function agentsBody(): string {
+	const agents = state!.agents;
+	const row = (id: string, label: string, on: boolean, detail: string, disabled: boolean, error: string | null) => {
+		const busy = ui.busy.has(`agent:${id}`);
+		return `<label class="agent-row${disabled ? " disabled" : ""}">
+			<input type="checkbox" data-agent="${escape(id)}"${on ? " checked" : ""}${disabled || busy ? " disabled" : ""}>
+			<span class="grow"><span class="label">${escape(label)}</span><span class="sub">${escape(detail)}</span></span>
+			${busy ? icon("loading", "codicon-modifier-spin") : ""}
+		</label>${error ? `<div class="notice error">${icon("error")}<span>${escape(error)}</span></div>` : ""}`;
+	};
+	const detail = (agent: AgentStatus) =>
+		agent.state === "connected"
+			? "Added to its user config"
+			: agent.state === "other"
+				? "Its config already has a rojohub entry with another URL; Rojo-Hub leaves it alone"
+				: agent.installed
+					? "Not added"
+					: "Not installed";
+	const rows = [
+		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? "Copilot and other agents in VS Code; nothing is written to disk" : "Off", false, null),
+		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", detail(agent), agent.state === "other" || (!agent.installed && agent.state !== "connected"), agent.error)),
+	].join("");
+	return `<div class="card settings agents">
+		<p class="muted small">Agents can serve their own worktree to Studio, live, without restarting Rojo. Rojo-Hub's MCP server: <code>${escape(agents.url)}</code>${state!.service.running ? "" : " (not running)"}</p>
+		${rows}
+		<p class="muted small">Another agent? Copy the commands, or a prompt to paste into its chat.</p>
+		<div class="row">${button("copy-agent-commands", "Copy commands", { icon: "terminal", kind: "secondary", title: "Shell commands for Claude Code and Codex, and a JSON entry for other agents" })}${button("copy-agent-prompt", "Copy prompt", { icon: "comment", kind: "secondary", title: "A paragraph for any agent's chat; the agent adds Rojo-Hub to its own config" })}</div>
+	</div>`;
+}
+
+/** Top-level sections are open by default, except the settings ones. */
 function section(key: string, title: string, iconName: string, count: string, extra: string, body: string): string {
-	const byDefault = key === "settings";
+	const byDefault = key === "settings" || key === "agents";
 	const collapsed = folded(key, byDefault);
 	return `<section class="section${collapsed ? " collapsed" : ""}">
 		<div class="section-head">
@@ -716,6 +764,7 @@ function render(): void {
 				})());
 
 	const serving = slots.filter((slot) => slot.state === "running" || slot.state === "starting");
+	const agentCount = state.agents.list.filter((agent) => agent.state === "connected").length + (state.agents.vscode ? 1 : 0);
 	const footer = ui.confirmStopAll
 		? `<div class="notice warning">${icon("warning")}<span class="grow">Stop all ${serving.length} serving project${serving.length === 1 ? "" : "s"}: <strong>${serving
 				.map((slot) => escape(slot.projectName))
@@ -740,6 +789,7 @@ function render(): void {
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
+		${section("agents", "Agent access", "robot", agentCount ? String(agentCount) : "", "", agentsBody())}
 		<footer class="footer">${footer}</footer>`,
 	);
 
@@ -1038,10 +1088,21 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "walkthrough":
 			return send({ type: "walkthrough" });
+		case "copy-agent-commands":
+			return send({ type: "copyAgentSetup", what: "commands" });
+		case "copy-agent-prompt":
+			return send({ type: "copyAgentSetup", what: "prompt" });
 	}
 });
 
 document.addEventListener("change", (event) => {
+	const box = event.target as HTMLInputElement;
+	if (box.dataset.agent) {
+		const id = box.dataset.agent as AgentStatus["id"] | "vscode";
+		ui.busy.add(`agent:${id}`);
+		send({ type: "setAgent", id, on: box.checked });
+		return render();
+	}
 	const select = event.target as HTMLSelectElement;
 	if (select.dataset.action !== "add-member" || !select.value) return;
 	const separator = select.value.indexOf(":");

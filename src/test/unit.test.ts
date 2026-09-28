@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { DEFAULT_PORT_RANGE } from "../common/api";
+import { DEFAULT_PORT_RANGE, MCP_URL } from "../common/api";
 import { expandGroup, pathBetween } from "../common/groups";
 import { compareVersions } from "../common/version";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
+import { AGENTS, agentState } from "../service/agentConfig";
 import { headFile, parseWorktrees, readHead } from "../service/git";
+import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
@@ -360,4 +362,59 @@ test("headFile and readHead find a worktree's HEAD, primary or linked", () => {
 	mkdirSync(join(dir, "wt"), { recursive: true });
 	writeFileSync(join(dir, "wt", ".git"), `gitdir: ${join(dir, "main", ".git", "worktrees", "wt")}\n`);
 	assert.equal(readHead(headFile(join(dir, "wt"))!), "01234567", "a detached HEAD reads as the short commit");
+});
+
+test("MCP: initialize, tools/list, notifications and unknown methods", async () => {
+	const mcp = new Mcp(null as never);
+	const init = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })) as { result: { protocolVersion: string; instructions: string; capabilities: object } };
+	assert.equal(init.result.protocolVersion, "2025-06-18", "a version it knows is echoed");
+	assert.match(init.result.instructions, /serve_here/);
+	assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
+	const unknownVersion = (await mcp.handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "1999-01-01" } })) as { result: { protocolVersion: string } };
+	assert.equal(unknownVersion.result.protocolVersion, "2025-11-25", "otherwise its newest");
+	assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null, "notifications get no answer");
+	const list = (await mcp.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
+	assert.deepEqual(list.result.tools.map((tool) => tool.name), ["status", "serve_here", "switch", "release", "build", "sourcemap"]);
+	assert.ok(!TOOLS.some((tool) => /^(start|stop|add|remove)/.test(tool.name)), "no tool starts, stops, adds or removes projects");
+	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 4, method: "nope" })) as { error: { code: number } }).error.code, -32601);
+	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "start" } })) as { error: { code: number } }).error.code, -32602);
+	assert.deepEqual(await mcp.handle({ jsonrpc: "2.0", id: 6, method: "ping" }), { jsonrpc: "2.0", id: 6, result: {} });
+});
+
+test("agent config: Rojo-Hub's entry, another rojohub entry, or none", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-agents-"));
+	const saved = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME };
+	Object.assign(process.env, { USERPROFILE: home, HOME: home, CODEX_HOME: home });
+	try {
+		const [claude, codex] = AGENTS;
+		assert.equal(agentState(claude), "absent", "no config file at all");
+		writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { rojohub: { type: "http", url: MCP_URL } }, projects: {} }));
+		assert.equal(agentState(claude), "connected");
+		writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { rojohub: { type: "http", url: "http://example.com/mcp" } } }));
+		assert.equal(agentState(claude), "other", "someone else's rojohub is left alone");
+		writeFileSync(join(home, "config.toml"), `model = "x"
+
+[mcp_servers.rojohub]
+url = "${MCP_URL}"
+`);
+		assert.equal(agentState(codex), "connected");
+		writeFileSync(join(home, "config.toml"), `[mcp_servers.other]
+command = "x"
+`);
+		assert.equal(agentState(codex), "absent");
+	} finally {
+		for (const [key, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+});
+
+test("every bundle package.json runs is packaged (the uninstall hook once was not)", () => {
+	const root = resolve(__dirname, "..", "..");
+	const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { main: string; scripts: Record<string, string> };
+	const packaged = readFileSync(join(root, ".vscodeignore"), "utf8");
+	for (const file of [manifest.main, manifest.scripts["vscode:uninstall"].replace(/^node\s+/, "")]) {
+		assert.ok(packaged.includes(`!${file.replace(/^\.\//, "")}`), `${file} is in .vscodeignore's allowlist`);
+	}
 });

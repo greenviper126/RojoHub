@@ -45,6 +45,20 @@ interface Runtime {
 }
 
 /*
+	An agent's hold on a slot (spec 004): what it serves, a label for people,
+	and when the hold runs out. `key` is claimKey() of the target.
+*/
+export interface Claim {
+	key: string;
+	label: string;
+	until: number;
+}
+
+export function claimKey(target: Target): string {
+	return target.kind === "worktree" ? `worktree:${pathKey(target.path)}` : `branch:${target.ref}`;
+}
+
+/*
 	Owns the slots: their files, their rojo processes, and switching them. All
 	mutations of one slot run one at a time through that slot's queue.
 */
@@ -57,6 +71,9 @@ export class Hub {
 	private portProblems: string[] = [];
 	/** Slots with a port move queued, so a slow restart is not queued twice. */
 	private readonly moving = new Set<string>();
+
+	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
+	private readonly claims = new Map<string, Claim>();
 
 	/** The branch picker's lists, kept warm in the background (spec 002). */
 	readonly targetCache: TargetCache;
@@ -260,8 +277,21 @@ export class Hub {
 		for (const slot of this.registry.slots) void this.enqueue(slot.id, () => this.syncSourcemap(slot)).catch(() => undefined);
 	}
 
+	/** The slot's claim, or null when there is none or it ran out. */
+	claimOf(id: string): Claim | null {
+		const claim = this.claims.get(id);
+		if (claim && claim.until <= Date.now()) this.claims.delete(id);
+		return this.claims.get(id) ?? null;
+	}
+
+	setClaim(id: string, claim: Claim | null): void {
+		if (claim) this.claims.set(id, claim);
+		else this.claims.delete(id);
+	}
+
 	view(slot: SlotRecord): SlotView {
 		const runtime = this.runtime(slot.id);
+		const claim = this.claimOf(slot.id);
 		return {
 			id: slot.id,
 			projectName: slot.projectName,
@@ -287,6 +317,7 @@ export class Hub {
 			logFile: this.logFile(slot.id),
 			targetsAt: this.targetCache.stamp(slot.repoPath),
 			sourcemap: runtime.sourcemap?.status ?? { state: "off", detail: runtime.sourcemapOff },
+			claim: claim ? { label: claim.label, until: claim.until } : null,
 		};
 	}
 
@@ -350,6 +381,7 @@ export class Hub {
 			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
 			this.registry.save();
 			this.runtimes.delete(id);
+			this.claims.delete(id);
 			this.trackRepos();
 		});
 	}

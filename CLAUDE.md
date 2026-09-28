@@ -12,7 +12,7 @@ npm run typecheck
 npm test              # build, load the bundles (smoke), unit + end-to-end against a real rojo 7.7 and a temp git repo
 npm run build         # esbuild -> dist/extension.js, dist/service.js
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.15.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.16.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
@@ -26,7 +26,8 @@ the running service.
 ## Rules that come from mistakes
 
 - Test the bundles, not just the sources: `npm run smoke` loads `dist/extension.js` with a stub
-  `vscode` and starts `dist/service.js`. 0.10.0 shipped broken because `jsonc-parser`'s UMD build
+  `vscode`, starts `dist/service.js`, and runs `dist/uninstall.js` against a throwaway home (never the
+  real one: it removes agent config entries). 0.10.0 shipped broken because `jsonc-parser`'s UMD build
   cannot be bundled; `build.mjs` prefers ES module builds (`mainFields`) for that reason.
 
 ## Rules that come from measurements (do not "simplify" them away)

@@ -20,10 +20,16 @@ const extension = require(path.join(dist, "extension.js"));
 if (typeof extension.activate !== "function") throw new Error("dist/extension.js has no activate()");
 console.log("dist/extension.js loads and exports activate()");
 
-// The service bundle: start it on a spare port with a throwaway home, ask /health, shut it down.
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const { mkdtempSync } = require("node:fs");
 const { tmpdir } = require("node:os");
+
+// The uninstall hook, with a throwaway home so it cannot touch the real Claude Code or Codex config.
+const fakeHome = mkdtempSync(path.join(tmpdir(), "rojo-hub-smoke-home-"));
+execFileSync(process.execPath, [path.join(dist, "uninstall.js")], { env: { ...process.env, USERPROFILE: fakeHome, HOME: fakeHome, CODEX_HOME: fakeHome }, stdio: "inherit" });
+console.log("dist/uninstall.js runs");
+
+// The service bundle: start it on a spare port with a throwaway home, ask /health, shut it down.
 const port = 34868;
 const home = mkdtempSync(path.join(tmpdir(), "rojo-hub-smoke-"));
 const child = spawn(process.execPath, [path.join(dist, "service.js")], {

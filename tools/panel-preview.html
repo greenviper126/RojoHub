@@ -113,12 +113,12 @@ if (params.get("width")) document.body.style.width = params.get("width") + "px";
 const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
 	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", port, portSource: "hash",
 	state, connections: 0, target: { kind: "worktree", path: `C:\\Users\\dev\\${projectName}` }, targetLabel, branch: targetLabel,
-	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, ...extra,
+	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, claim: null, ...extra,
 });
 const state = {
 	service: { running: true, version: "0.13.0", error: null },
 	slots: [
-		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1 }),
+		slot("a", "TheLaundryShift", 35045, "running", "chore/untrack-wally-lock", { connections: 1, claim: { label: "laundry-ui", until: Date.now() + 8 * 60000 } }),
 		slot("b", "VluxyAI", 35761, "running", "feature/fsm", { target: { kind: "branch", ref: "refs/heads/feature/fsm" }, warnings: ["Packages, ServerPackages come from the primary checkout (not present in this tree)."] }),
 		slot("c", "vluxysf", 35813, "stopped", "main"),
 		slot("d", "Wonderland", 35344, "error", "main", { error: ["Rojo did not come up on port 35344.", "[INFO  rojo] Rojo server listening on port 35344", "[ERROR rojo] Rojo crashed!", "[ERROR rojo] Details: called `Result::unwrap()` on an `Err` value: NotFound", "[ERROR rojo] at src/change_processor.rs:199"].join("\n") }),
@@ -134,6 +134,14 @@ const state = {
 		{ file: "C:\\ws\\Laundry.code-workspace", name: "Laundry", slotIds: ["a", "b"], addable: [{ label: "SharedLib", path: "C:\\dev\\SharedLib" }], isWindow: true },
 	] : [],
 	order: { projects: [], groups: [] },
+	agents: {
+		url: "http://127.0.0.1:34870/mcp",
+		vscode: true,
+		list: [
+			{ id: "claudeCode", label: "Claude Code", installed: true, state: "connected", error: null },
+			{ id: "codex", label: "Codex", installed: true, state: "absent", error: params.get("agenterror") ? "codex mcp: could not write config.toml" : null },
+		],
+	},
 };
 if (params.get("empty") === "1") { state.slots = []; state.groups = []; }
 
@@ -144,7 +152,7 @@ const options = [
 	{ target: { kind: "branch", ref: "refs/heads/fix/dryer" }, label: "fix/dryer", description: "branch · no worktree", branch: "fix/dryer", isPrimary: false, committedAt: Date.now() / 1000 - 3 * 86400 },
 	{ target: { kind: "branch", ref: "refs/remotes/origin/gh-pages" }, label: "origin/gh-pages", description: "remote branch · no worktree", branch: "origin/gh-pages", isPrimary: false, committedAt: Date.now() / 1000 - 40 * 86400 },
 ];
-let stored = { v: 2, collapsed: { "card:a": false, "card:b": false, "card:c": false, "card:d": false, settings: params.get("settings") === "1" ? false : true }, closedGroups: [] };
+let stored = { v: 2, collapsed: { "card:a": false, "card:b": false, "card:c": false, "card:d": false, settings: params.get("settings") === "1" ? false : true, agents: params.get("agents") === "1" ? false : true }, closedGroups: [] };
 window.acquireVsCodeApi = () => ({
 	getState: () => stored,
 	setState: (next) => (stored = next),
@@ -156,6 +164,12 @@ window.acquireVsCodeApi = () => ({
 		if (message.type === "fetch") setTimeout(() => { reply({ type: "targets", id: message.id, options }); reply({ type: "fetched", id: message.id, ...(params.get("fetchfail") ? { error: "fatal: unable to access 'https://github.com/…': Could not resolve host" } : {}) }); }, 600);
 		if (message.type === "createBranch") setTimeout(() => reply({ type: "branchCreated", id: message.id, error: `A branch named ${message.name} already exists; pick it under Local branches.` }), 400);
 		if (message.type === "build") setTimeout(() => reply({ type: "busy", key: `build:${message.id}`, busy: false }), 1500);
+		if (message.type === "setAgent") setTimeout(() => {
+			if (message.id === "vscode") state.agents.vscode = message.on;
+			else state.agents.list.find((agent) => agent.id === message.id).state = message.on ? "connected" : "absent";
+			reply({ type: "state", state: JSON.parse(JSON.stringify(state)) });
+			reply({ type: "busy", key: `agent:${message.id}`, busy: false });
+		}, 700);
 		if (message.type === "candidates") reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
 	},
 });

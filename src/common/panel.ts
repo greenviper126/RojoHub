@@ -4,7 +4,7 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { DisplayOrder, GroupView, SlotView, Target, TargetOption } from "./api";
+import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption } from "./api";
 
 /*
 	Something to add to or take out of a group: a project, a nested group, or
@@ -47,6 +47,8 @@ export interface PanelState {
 	workspaces: WorkspaceInfo[];
 	/** The user's arrangement of projects, workspace blocks and groups. */
 	order: DisplayOrder;
+	/** Agent access (spec 004): VS Code's own agents' box, and Claude Code's and Codex's state read from their config. */
+	agents: { url: string; vscode: boolean; list: AgentStatus[] };
 }
 
 export type ToPanel =
@@ -92,4 +94,6 @@ export type FromPanel =
 	| { type: "reorder"; projects?: string[]; groups?: string[] }
 	| { type: "addWorkspace"; file: string }
 	| { type: "groupWorkspace"; file: string }
-	| { type: "walkthrough" };
+	| { type: "walkthrough" }
+	| { type: "setAgent"; id: AgentId | "vscode"; on: boolean }
+	| { type: "copyAgentSetup"; what: "commands" | "prompt" };

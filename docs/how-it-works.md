@@ -16,12 +16,13 @@ measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-ro
 7. [Connecting Studio](#7-connecting-studio)
 8. [Switching branches](#8-switching-branches)
 9. [Groups](#9-groups)
-10. [The background service](#10-the-background-service)
-11. [Files on disk](#11-files-on-disk)
-12. [Settings](#12-settings)
-13. [Commands](#13-commands)
-14. [Known limits and troubleshooting](#14-known-limits-and-troubleshooting)
-15. [For developers](#15-for-developers)
+10. [Agents](#10-agents)
+11. [The background service](#11-the-background-service)
+12. [Files on disk](#12-files-on-disk)
+13. [Settings](#13-settings)
+14. [Commands](#14-commands)
+15. [Known limits and troubleshooting](#15-known-limits-and-troubleshooting)
+16. [For developers](#16-for-developers)
 
 ---
 
@@ -35,6 +36,8 @@ projects, or several branches of one project, at the same time.
 - **Any project can be switched to another branch or worktree while it is serving**, and Studio
   stays connected: it receives the difference as one update instead of disconnecting.
 - **Projects can be grouped** so a set of them starts, stops, or takes over as a profile, together.
+- **AI agents can serve their own worktree to Studio** through Rojo-Hub's MCP server, taking turns
+  when several work in one repo (see [Agents](#10-agents)).
 
 It works with Orca worktrees, showing them under Orca's names, and with plain
 git branches and worktrees.
@@ -90,7 +93,8 @@ running through this, so Studio stays connected, and the new service adopts them
 (each project's toolchain file picks its Rojo version, see [Projects](#5-projects)); Rojo 7.7 for
 everything to work as described. Orca is optional.
 
-**Uninstall**: press *Stop all*, uninstall the extension, then end the background service with
+**Uninstall**: press *Stop all*, uninstall the extension (its Claude Code and Codex entries, if you
+ticked them, are removed the next time VS Code starts), then end the background service with
 `curl -X POST http://127.0.0.1:34870/shutdown` (or sign out). Delete `%LOCALAPPDATA%\RojoHub\` to
 remove its state and views.
 
@@ -199,12 +203,15 @@ port first, with its status light, name and branch, its address `localhost:<port
 which copies it when clicked. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
 serving* when nothing is.
 
+**Agent access** (folded by default): which AI agents can use Rojo-Hub's tools, and buttons to copy
+setup commands or a setup prompt for others. See [Agents](#10-agents).
+
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
 *Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
 puts back the default range (34873–35872) after asking: it says how many projects get their port from
 the range, since their ports may change and serving ones restart. Reset is greyed out when the range
 is already the default; excluded ports have no reset. These edit the VS Code user settings described
-in [Settings](#12-settings).
+in [Settings](#13-settings).
 
 **Footer**: how many projects are serving, **Stop all**, and Refresh. *Stop all* stops every
 serving project and marks every group not running; it asks first, on the panel, naming what it will
@@ -318,7 +325,7 @@ A project's port is decided by these rules, in order, and is recomputed every fe
 4. **34872 is never used.** It is Rojo's default port, used by a plain `rojo serve` (and by
    TheLaundryShift's `/JumpTo`).
 
-**Excluding ports** for all projects: the `rojoHub.excludedPorts` setting (see [Settings](#12-settings)).
+**Excluding ports** for all projects: the `rojoHub.excludedPorts` setting (see [Settings](#13-settings)).
 
 **When a port changes** (you add a `servePort`, or exclude the port a project is on), a serving
 project is restarted on its new port. That is a new session: reconnect Studio to the new port. The
@@ -404,7 +411,7 @@ luau-lsp extension is open, so an Orca agent editing a worktree with no window g
 check out another branch *inside* a worktree that is being served (in a terminal, Source Control or
 Orca), Studio gets that branch, and the card says so: *‹branch› was checked out in ‹folder› while it
 was being served*. If the checkout removed a folder, Rojo 7.7 crashes (see
-[Known limits](#14-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
+[Known limits](#15-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
 card says the checkout caused it, and that Studio needs reconnecting.
 
 ### What happens on a switch
@@ -436,7 +443,7 @@ Serving a branch with no worktree creates a view: `git worktree add --detach` of
 current commit into `views\<project>\<commit>\`. A view is never modified after it is created: a
 branch that gets new commits gets a new view the next time you switch to it. Views are deleted only
 while the project's Rojo is stopped (when you stop it, restart it, or remove the project), because
-of the Rojo crash in [Known limits](#14-known-limits-and-troubleshooting). Views do not appear in
+of the Rojo crash in [Known limits](#15-known-limits-and-troubleshooting). Views do not appear in
 the Worktrees list.
 
 ## 9. Groups
@@ -497,7 +504,60 @@ If some projects fail to start or stop, the rest still go ahead, and one message
 failures. Groups remember what they hold, not branches: each project serves whatever it was last
 switched to. Removing a project removes it from every group. Group names are unique, ignoring case.
 
-## 10. The background service
+## 10. Agents
+
+AI agents (Claude Code in a terminal or an Orca worktree, Codex, Copilot and other agents in VS Code)
+can use Rojo-Hub themselves: serve their own worktree to Studio before checking their changes there,
+switch a project to a branch, build a place file, write `sourcemap.json`. They get this from an MCP
+server that the background service runs at `http://127.0.0.1:34870/mcp`, so the agent needs no
+extra files, scripts or instructions: the server tells the agent what it is for when it connects.
+
+**Turning it on.** The panel's **Agent access** section (folded by default) and the
+`rojoHub.agents` setting have one box per agent. Both change the same setting.
+
+| Box | Default | What ticking it does |
+|---|---|---|
+| VS Code agents | on | Registers the server with VS Code itself. Nothing is written to disk; it goes with the extension. |
+| Claude Code | off | Runs `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
+| Codex | off | Runs `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
+
+Unticking runs the matching `mcp remove`. The boxes show what each agent's own config says
+(`~/.claude.json`, `~/.codex/config.toml`), so an entry removed by hand shows unticked. An agent
+that is not installed is greyed out. If an agent's config already has an entry named `rojohub` with
+another URL, Rojo-Hub never changes or removes it, and says so. The first time Rojo-Hub finds Claude
+Code or Codex installed, it asks once: *Let … use Rojo-Hub's tools?* Yes ticks their boxes, No
+unticks them.
+
+**Another agent?** *Copy commands* (also **Rojo-Hub: Copy Agent Setup Commands**) copies the two
+commands and a JSON entry for agents that read a JSON MCP config. *Copy prompt* (**Rojo-Hub: Copy
+Agent Setup Prompt**) copies a paragraph to paste into any agent's chat; the agent then adds Rojo-Hub
+to its own config.
+
+**The tools.** Agents cannot start, stop, add or remove projects: starting Rojo is a new Studio
+session, and that stays yours. When a project is not serving, or a repo is not registered, the
+agent is told to ask you.
+
+| Tool | Does |
+|---|---|
+| `status` | Every project: port, serving or not, Studio connected or not, what it serves, who claimed it. Given the agent's folder, also whether its worktree is the one served. |
+| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it. |
+| `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. |
+| `release` | Drops the agent's claim. The project keeps serving what it serves. |
+| `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
+| `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
+
+**Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them.
+So `serve_here` and `switch` claim the project for what they serve, for 10 minutes; any Rojo-Hub
+call from the same worktree renews it. While another worktree holds the claim, those tools refuse
+and say who holds it and until when (the agent can pass `force`, and is told to only when you say
+so). The project's card shows the claim (*Agent in laundry-ui until 14:05*), and a folded card shows
+a robot icon. **Your own switches always go through** (panel, picker, menu) and clear the claim.
+Claims are kept in memory, so restarting the service forgets them.
+
+**Uninstalling** Rojo-Hub removes its Claude Code and Codex entries (only ones pointing at
+Rojo-Hub), the next time VS Code starts after the extension is gone from every profile.
+
+## 11. The background service
 
 VS Code extensions stop when their window closes, and you keep several windows open, so Rojo-Hub
 runs a separate background service that owns every project and its Rojo.
@@ -520,7 +580,8 @@ runs a separate background service that owns every project and its Rojo.
   marked unavailable. It is not retried on every refresh, only on *Try again* or the next action,
   so a broken install does not spawn a process every two seconds.
 - Projects and groups are never lost when the service stops: they live in `registry.json`.
-- Only listens on `127.0.0.1`; nothing is reachable from other machines.
+- Only listens on `127.0.0.1`; nothing is reachable from other machines. Requests from web pages
+  (an `Origin` other than localhost) are refused, so a site open in a browser cannot drive it.
 
 ### Local API
 
@@ -549,10 +610,13 @@ debugging.
 | `GET /order` | | The panel's display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save a new display order (never changes a port) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
-| `PUT /settings` | `{ portRange?, excludedPorts? }` | Port settings (sent by the extension) |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps? }` | Settings (sent by the extension) |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
+| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`, last error |
+| `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` takes it out |
+| `POST /mcp` | JSON-RPC | The MCP server for agents (see [Agents](#10-agents)) |
 
-## 11. Files on disk
+## 12. Files on disk
 
 Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
@@ -566,10 +630,13 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `slots\<id>\rojo.log` | This Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |
 | `views\<id>\<commit>\` | Views: detached worktrees for branches with no worktree |
 
+Outside that folder, Rojo-Hub writes only the agent entries you tick in *Agent access* (through
+Claude Code's and Codex's own CLIs, into `~/.claude.json` and `~/.codex/config.toml`).
+
 Rojo-Hub writes nothing into your projects or worktrees. The only change to a repo is the
 view worktrees it registers with git (visible in `git worktree list`) and removes again.
 
-## 12. Settings
+## 13. Settings
 
 All are **user settings that apply to every project and window**; a workspace cannot override them.
 
@@ -578,6 +645,7 @@ All are **user settings that apply to every project and window**; a workspace ca
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to any project: numbers (`35000`) or ranges (`"35000-35010"`). 34872 is always excluded. |
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
+| `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents can use Rojo-Hub's MCP server (see [Agents](#10-agents)). Shown as checkboxes. |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |
 
 The panel's **Port settings** section edits the two port settings, as does *Open Menu → Port Settings*. Changes apply
@@ -589,13 +657,15 @@ user `settings.json` (`%APPDATA%\Code\User\settings.json`) and every profile sha
 removes `rojoHub.portRange` from that file, so the default applies again. The service keeps a copy of
 the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projects with no window open.
 
-## 13. Commands
+## 14. Commands
 
-Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). Only **Rojo-Hub:
-Open Menu** appears in the command palette; it offers the same actions as menus. The panel's title
+Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). The command
+palette has **Rojo-Hub: Open Menu**, which offers the same actions as menus (including *Agent
+Access*), and **Rojo-Hub: Copy Agent Setup Commands** / **Copy Agent Setup Prompt** (see
+[Agents](#10-agents)). The panel's title
 bar has Open Menu, Refresh and Collapse All, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
 
-## 14. Known limits and troubleshooting
+## 15. Known limits and troubleshooting
 
 **Deleting a folder under a served project crashes Rojo 7.7** (a Rojo bug, not Rojo-Hub's: rojo-rbx/rojo#1305,
 fix pending in PR #1319). It happens with plain `rojo serve` too. Anything that removes a folder
@@ -630,7 +700,7 @@ the branch's own packages.
 **Windows only for now.** The live switch depends on a Windows path detail in Rojo (see the spec);
 other platforms are untested.
 
-## 15. For developers
+## 16. For developers
 
 Source layout, commands and the rules that must not be simplified away are in
 [`CLAUDE.md`](../CLAUDE.md). In short: `src/service` is the background service, `src/extension`

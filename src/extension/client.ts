@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortSettings, type SlotView, type Target, type TargetOption } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -87,5 +87,7 @@ export const client = {
 	putOrder: (order: Partial<DisplayOrder>) => call<DisplayOrder>("PUT", "/order", order),
 	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
 	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
+	agents: () => call<AgentStatus[]>("GET", "/agents"),
+	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };

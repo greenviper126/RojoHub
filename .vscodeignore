@@ -1,6 +1,7 @@
 **
 !dist/extension.js
 !dist/service.js
+!dist/uninstall.js
 !dist/webview.js
 !dist/codicons/**
 !media/**

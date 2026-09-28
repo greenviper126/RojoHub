@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { SERVICE_VERSION, type Health, type Target } from "../common/api";
+import { SERVICE_VERSION, type AgentId, type AgentWishes, type Health, type Target } from "../common/api";
+import { AGENTS, AgentRegistrar } from "./agentConfig";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
+import { Mcp } from "./mcp";
 import { Conflict, NotFound } from "./registry";
 
 /*
@@ -19,7 +21,7 @@ import { Conflict, NotFound } from "./registry";
 	POST   /slots/:id/branch      { name, base }     a new branch in its own worktree, and switch to it
 	POST   /slots/:id/build       { output }         rojo build of what the slot serves
 	POST   /slots/:id/sourcemap                      write the served worktree's sourcemap.json once
-	POST   /slots/:id/switch      { target }
+	POST   /slots/:id/switch      { target }             a user's switch, which also clears an agent's claim
 	GET    /groups
 	POST   /groups                { name, slotIds?, groupIds? }
 	PUT    /groups/:id            { name?, slotIds?, groupIds? }   groupIds that would loop are refused (409)
@@ -31,7 +33,18 @@ import { Conflict, NotFound } from "./registry";
 	POST   /stop-all                                 stop every serving project, mark every group stopped
 	PUT    /settings              { portRange?, excludedPorts?, sourcemaps? }
 	POST   /shutdown              { stopServing? }
+	GET    /agents                                   Claude Code's and Codex's MCP registration (spec 004)
+	PUT    /agents                { claudeCode?, codex? }   true adds Rojo-Hub to that agent's config, false takes it out
+	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
+
+	A request from a web page (an Origin that is not localhost) is refused, so a
+	site open in a browser cannot drive the service (DNS rebinding included).
 */
+
+function localOrigin(request: IncomingMessage): boolean {
+	const origin = request.headers.origin;
+	return !origin || /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(origin);
+}
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
 	const chunks: Buffer[] = [];
@@ -57,11 +70,39 @@ function isIdList(value: unknown): value is string[] {
 
 export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void) {
 	const groups = new Groups(hub);
+	const mcp = new Mcp(hub);
+	const agents = new AgentRegistrar();
 	const server = createServer(async (request, response) => {
 		try {
 			const url = new URL(request.url ?? "/", "http://localhost");
 			const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
 			const method = request.method ?? "GET";
+
+			if (!localOrigin(request)) return send(response, 403, { error: "Requests from web pages are refused" });
+			if (url.pathname === "/mcp") {
+				if (method !== "POST") {
+					response.writeHead(405, { allow: "POST" });
+					return response.end();
+				}
+				const answer = await mcp.handle(await body(request).catch(() => null));
+				if (!answer) {
+					response.writeHead(202);
+					return response.end();
+				}
+				return send(response, 200, answer);
+			}
+			if (url.pathname === "/agents") {
+				if (method === "GET") return send(response, 200, await agents.status());
+				if (method === "PUT") {
+					const input = await body(request);
+					const wishes: AgentWishes = {};
+					for (const agent of AGENTS) {
+						const wish = input[agent.id as AgentId];
+						if (typeof wish === "boolean") wishes[agent.id] = wish;
+					}
+					return send(response, 200, await agents.apply(wishes));
+				}
+			}
 
 			if (method === "GET" && url.pathname === "/health") {
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
@@ -167,7 +208,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (method === "POST" && action === "switch") {
 					const input = await body(request);
 					if (!isTarget(input.target)) return send(response, 400, { error: "target must be {kind:'worktree',path} or {kind:'branch',ref}" });
-					return send(response, 200, await hub.switch(id, input.target));
+					const switched = await hub.switch(id, input.target);
+					hub.setClaim(id, null);
+					return send(response, 200, { ...switched, claim: null });
 				}
 			}
 			send(response, 404, { error: `No route for ${method} ${url.pathname}` });

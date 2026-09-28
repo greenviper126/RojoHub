@@ -390,3 +390,63 @@ test("branch picker: cached list kept fresh, fetch, new branch, build, and a che
 
 	await call("DELETE", `/slots/${slot.id}`);
 });
+
+/** Calls one of the service's MCP tools (spec 004) the way an agent does. */
+async function tool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+	const response = await fetch(api + "/mcp", {
+		method: "POST",
+		headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+	});
+	const payload = (await response.json()) as { result: { content: { text: string }[]; isError?: boolean } };
+	return { text: payload.result.content[0].text, isError: payload.result.isError === true };
+}
+
+test("agents over MCP: serve_here switches live and claims, other worktrees wait, a user switch clears the claim", async () => {
+	const dir = await makeRepo("Agenty");
+	const alpha = join(root, "Agenty-alpha");
+	const beta = join(root, "Agenty-beta");
+	gitIn(dir, "worktree", "add", "-q", "-b", "alpha", alpha);
+	gitIn(dir, "worktree", "add", "-q", "-b", "beta", beta);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+
+	const stranger = await makeRepo("Stranger");
+	assert.match((await tool("serve_here", { path: stranger })).text, /does not serve/, "an unregistered repo is explained");
+	assert.match((await tool("serve_here", { path: "relative/path" })).text, /must be absolute/);
+
+	const { sessionId } = await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	const first = await tool("serve_here", { path: join(alpha, "src") });
+	assert.ok(!first.isError, first.text);
+	assert.match(first.text, /now serves .*Agenty-alpha.*Rojo is serving/s);
+	let now = await view();
+	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "any folder inside the worktree serves its root");
+	assert.equal(now.sessionId, sessionId, "switched live, not restarted");
+	assert.equal(now.claim?.label, "Agenty-alpha");
+
+	const refused = await tool("serve_here", { path: beta });
+	assert.ok(refused.isError);
+	assert.match(refused.text, /claimed by an agent working in Agenty-alpha/);
+	assert.match((await tool("status", { path: beta })).text, /NOT being served/);
+	assert.match((await tool("status", { path: alpha })).text, /your worktree is the one being served/);
+
+	const forced = await tool("serve_here", { path: beta, force: true });
+	assert.ok(!forced.isError, forced.text);
+	assert.equal((await view()).claim?.label, "Agenty-beta");
+	assert.ok((await tool("release", { path: alpha })).isError, "only the holder releases");
+	assert.match((await tool("release", { path: beta })).text, /Released/);
+	assert.equal((await view()).claim, null);
+
+	const switched = await tool("switch", { project: slot.projectName, target: "alpha" });
+	assert.ok(!switched.isError, switched.text);
+	now = await view();
+	assert.equal(now.target.kind === "worktree" && now.target.path.toLowerCase(), alpha.toLowerCase(), "a branch checked out in a worktree is served from it");
+	assert.ok(now.claim);
+
+	await call<SlotView>("POST", `/slots/${slot.id}/switch`, { target: { kind: "worktree", path: dir } });
+	assert.equal((await view()).claim, null, "a switch by the user clears the claim");
+	assert.equal((await view()).sessionId, sessionId);
+	assert.ok((await tool("build", { project: slot.projectName, output: "out.rbxl" })).isError, "a relative output is refused");
+
+	await call("DELETE", `/slots/${slot.id}`);
+});
