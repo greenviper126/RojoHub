@@ -139,6 +139,24 @@ function notices(slot: SlotView): string {
 	return rows.join("");
 }
 
+/** "3 days ago" for a unix time in seconds. */
+function ago(seconds: number): string {
+	const minutes = Math.max(0, Math.round((Date.now() / 1000 - seconds) / 60));
+	const steps: [number, string][] = [
+		[60 * 24 * 365, "year"],
+		[60 * 24 * 30, "month"],
+		[60 * 24 * 7, "week"],
+		[60 * 24, "day"],
+		[60, "hour"],
+		[1, "minute"],
+	];
+	for (const [size, unit] of steps) {
+		const count = Math.floor(minutes / size);
+		if (count >= 1) return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
+	}
+	return "just now";
+}
+
 function picker(slot: SlotView): string {
 	const open = ui.picker;
 	if (!open || open.id !== slot.id) return "";
@@ -153,17 +171,25 @@ function picker(slot: SlotView): string {
 		const isCurrent = (option: TargetOption) =>
 			(option.target.kind === "worktree" && slot.target.kind === "worktree" && option.target.path.toLowerCase() === slot.target.path.toLowerCase()) ||
 			(option.target.kind === "branch" && slot.target.kind === "branch" && option.target.ref === slot.target.ref);
-		const list = (kind: "worktree" | "branch", heading: string) => {
-			const rows = matches.filter(({ option }) => option.target.kind === kind);
+		// Like Source Control's branch picker: worktrees, then local branches, then remote ones.
+		const sectionOf = (option: TargetOption) =>
+			option.target.kind === "worktree" ? "worktree" : option.target.ref.startsWith("refs/remotes/") ? "remote" : "local";
+		const list = (section: "worktree" | "local" | "remote", heading: string, iconName: string, title: string) => {
+			const rows = matches.filter(({ option }) => sectionOf(option) === section);
 			if (rows.length === 0) return "";
-			return `<div class="list-heading">${escape(heading)}</div>${rows
-				.map(
-					({ option, index }) =>
-						`<button class="list-item${isCurrent(option) ? " current" : ""}" data-action="pick" data-index="${index}">${icon(kind === "worktree" ? "folder" : "git-branch")}<span class="grow"><span class="label">${escape(option.label)}</span><span class="sub">${escape(option.description)}</span></span>${isCurrent(option) ? icon("check") : ""}</button>`,
-				)
+			return `<div class="list-heading" title="${escape(title)}">${escape(heading)}<span class="list-count">${rows.length}</span></div>${rows
+				.map(({ option, index }) => {
+					const sub = section === "worktree" || !option.committedAt ? option.description : `last commit ${ago(option.committedAt)}`;
+					return `<button class="list-item${isCurrent(option) ? " current" : ""}" data-action="pick" data-index="${index}">${icon(iconName)}<span class="grow"><span class="label">${escape(option.label)}</span><span class="sub">${escape(sub)}</span></span>${isCurrent(option) ? icon("check") : ""}</button>`;
+				})
 				.join("")}`;
 		};
-		body = matches.length === 0 ? `<div class="muted pad">Nothing matches “${escape(open.search)}”.</div>` : list("worktree", "Worktrees") + list("branch", "Branches · served from a Hub copy");
+		body =
+			matches.length === 0
+				? `<div class="muted pad">Nothing matches “${escape(open.search)}”.</div>`
+				: list("worktree", "Worktrees", "folder", "Folders checked out on this repo; served in place") +
+					list("local", "Local branches", "git-branch", "Branches on this machine with no worktree; served from a Hub copy") +
+					list("remote", "Remote branches", "cloud", "Branches on the remote with no local branch of the same name; served from a Hub copy");
 	}
 	return `<div class="picker">
 		<div class="search">${icon("search")}<input data-key="search-${escape(slot.id)}" data-input="search" placeholder="Search worktrees and branches" value="${escape(open.search)}" spellcheck="false"></div>

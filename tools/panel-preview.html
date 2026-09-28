@@ -140,8 +140,9 @@ if (params.get("empty") === "1") { state.slots = []; state.groups = []; }
 const options = [
 	{ target: { kind: "worktree", path: "C:\\Users\\dev\\TheLaundryShift" }, label: "chore/untrack-wally-lock", description: "C:\\Users\\dev\\TheLaundryShift", branch: "chore/untrack-wally-lock", isPrimary: true, committedAt: 0 },
 	{ target: { kind: "worktree", path: "C:\\orca\\laundry-ui" }, label: "laundry-ui", description: "feat/new-ui · Orca worktree", branch: "feat/new-ui", isPrimary: false, committedAt: 0 },
-	{ target: { kind: "branch", ref: "refs/heads/main" }, label: "main", description: "2 hours ago", branch: "main", isPrimary: false, committedAt: 0 },
-	{ target: { kind: "branch", ref: "refs/heads/fix/dryer" }, label: "fix/dryer", description: "3 days ago", branch: "fix/dryer", isPrimary: false, committedAt: 0 },
+	{ target: { kind: "branch", ref: "refs/heads/main" }, label: "main", description: "branch · no worktree", branch: "main", isPrimary: false, committedAt: Date.now() / 1000 - 7200 },
+	{ target: { kind: "branch", ref: "refs/heads/fix/dryer" }, label: "fix/dryer", description: "branch · no worktree", branch: "fix/dryer", isPrimary: false, committedAt: Date.now() / 1000 - 3 * 86400 },
+	{ target: { kind: "branch", ref: "refs/remotes/origin/gh-pages" }, label: "origin/gh-pages", description: "remote branch · no worktree", branch: "origin/gh-pages", isPrimary: false, committedAt: Date.now() / 1000 - 40 * 86400 },
 ];
 let stored = { v: 2, collapsed: { "card:a": false, "card:b": false, "card:c": false, "card:d": false, settings: params.get("settings") === "1" ? false : true }, closedGroups: [] };
 window.acquireVsCodeApi = () => ({

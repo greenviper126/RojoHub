@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.14.0, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.14.1, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -130,8 +130,10 @@ card:
 - the **port** (`:35045`) at the top right, which copies `localhost:35045` when clicked; it shows a
   copy icon on hover and a green tick for a moment after copying;
 - **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
-  the branch picker inside the card: a search box, then *Worktrees* (under Orca's names) and
-  *Branches*, with the current one ticked. Clicking one switches; Enter picks the first match,
+  the branch picker inside the card: a search box, then, like Source Control's branch picker,
+  *Worktrees* (under Orca's names), *Local branches* and *Remote branches* (a cloud icon; only those
+  with no local branch of the same name), each with how many it holds. Branches show when they last
+  had a commit. The current one is ticked. Clicking one switches; Enter picks the first match,
   Escape closes it. Studio stays connected;
 - **warnings** (yellow) and **errors** (red), in full;
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected), *Serving* (waiting for

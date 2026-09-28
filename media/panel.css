@@ -560,6 +560,13 @@ code {
 	text-transform: uppercase;
 }
 
+.list-heading .list-count {
+	margin-left: 6px;
+	font-weight: 600;
+	letter-spacing: 0;
+	opacity: 0.7;
+}
+
 .list-item {
 	display: flex;
 	align-items: center;
