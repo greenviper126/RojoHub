@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.11.3, 2026-09-27. For why each design choice was made, with the
+documentation. Version 0.12.0, 2026-09-27. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -107,7 +107,7 @@ menus pop up at the top of the window.
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
 
-It has three sections that fold open and closed (the panel remembers which are folded), and a
+It has four sections that fold open and closed (the panel remembers which are folded), and a
 footer:
 
 **Projects** (the header shows how many are serving, and `+` adds a project). Each project is a
@@ -144,8 +144,9 @@ project's card is highlighted once it is added.
 Enter or *Create* makes it. Each group is a card that folds open and closed, showing how many of its
 projects are serving (green when all are). Inside:
 
-- the groups inside it, then its projects, each with ✕ to take it out (clicking a name jumps to
-  its card);
+- the groups inside it, then its projects, each project with its port (click to copy
+  `localhost:<port>`) and ✕ to take it out, which asks *Take … out of …?* first (clicking a name
+  jumps to its card);
 - an **Add a project, group or workspace…** dropdown: workspaces (adding each of their projects),
   projects not in it yet, then groups, with groups that would make a loop greyed out;
 - **Start**, **Only this** (start this group, stop every other project; asks first, naming what it
@@ -153,6 +154,11 @@ projects are serving (green when all are). Inside:
 - a green *running* badge while the group is running;
 - ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete?* in
   place; the projects stay).
+
+**Active ports** (below Groups; the header shows how many): every project serving right now, lowest
+port first, with its status light, name and branch, its address `localhost:<port>` (click to copy)
+and a copy button. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
+serving* when nothing is.
 
 **Port settings** (folded by default): the port range and excluded ports as text boxes, with
 *Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
@@ -362,8 +368,9 @@ in several groups. Groups live in the **Groups** section of the panel, below Pro
   - **Groups**, with those that would loop greyed out.
 
   Pick one to add it; do it again for the next.
-- **Take something out** with the ✕ next to it in the group. Nothing is deleted: a project stays
-  registered, a group stays a group.
+- **Take something out** with the ✕ next to it in the group. It asks first, in place (*Take VluxyAI
+  out of Laundry Shift? Yes / No*). Nothing is deleted: a project stays registered, a group stays a
+  group.
 - **Groups inside groups** are listed first in the card, with a layers icon and how many of their
   projects are serving. Clicking one scrolls to its own card.
 

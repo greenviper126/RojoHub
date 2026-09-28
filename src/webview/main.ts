@@ -37,6 +37,8 @@ const ui = {
 	confirmStopAll: false,
 	/** Resetting the port range is waiting for Yes/No. */
 	confirmResetRange: false,
+	/** A group member whose ✕ is waiting for Yes/No: "groupId|kind|memberId". */
+	confirmRemoveMember: null as string | null,
 	settings: null as null | { portRange: string; excluded: string; error: string | null },
 	busy: new Set<string>(),
 	flash: null as string | null,
@@ -184,6 +186,27 @@ function adder(): string {
 	</div>`;
 }
 
+/*
+	A row inside a group card. Its ✕ asks first, in place: taking something
+	out of a group is easy to do by accident and does not undo itself.
+*/
+function memberRow(group: GroupView, kind: "project" | "group", memberId: string, name: string, body: string): string {
+	const key = `${group.id}|${kind}|${memberId}`;
+	if (ui.confirmRemoveMember === key) {
+		return `<div class="member confirm-row">
+			${icon("warning")}<span class="grow">Take <strong>${escape(name)}</strong> out of ${escape(group.name)}?</span>
+			${button("remove-member-yes", "Yes", { kind: "danger", data: { id: group.id, kind, member: memberId }, title: kind === "group" ? "The group itself stays" : "The project stays in Rojo-Hub" })}
+			${button("remove-member-no", "No", { kind: "secondary" })}
+		</div>`;
+	}
+	return `<div class="member">${body}${iconButton("remove-member", "close", `Take ${name} out of ${group.name} (asks first)`, { id: group.id, kind, member: memberId })}</div>`;
+}
+
+/** A port chip that copies localhost:<port>, the same as on a project card. */
+function portChip(slot: SlotView): string {
+	return `<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}">:${slot.port}</button>`;
+}
+
 /** Serving projects that "Only this" would stop for a group. */
 function wouldStop(group: GroupView): SlotView[] {
 	return (state?.slots ?? []).filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
@@ -217,22 +240,29 @@ function groupCard(group: GroupView): string {
 		.map((child) => {
 			const childSlots = child.projectIds.map((id) => slots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
 			const childServing = childSlots.filter((slot) => slot.state === "running").length;
-			return `<div class="member">
-				${icon("layers")}
+			return memberRow(
+				group,
+				"group",
+				child.id,
+				child.name,
+				`${icon("layers")}
 				<button class="link grow ellipsis" data-action="goto-group" data-id="${escape(child.id)}" title="Show ${escape(child.name)}">${escape(child.name)}</button>
-				<span class="sub ellipsis">group · ${childServing}/${childSlots.length}</span>
-				${iconButton("remove-member", "close", `Take ${child.name} out of ${group.name}`, { id: group.id, kind: "group", member: child.id })}
-			</div>`;
+				<span class="sub ellipsis">group · ${childServing}/${childSlots.length}</span>`,
+			);
 		})
 		.join("");
 	const projectRows = members
 		.map(
-			(slot) => `<div class="member">
-				${dot(slot)}
-				<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button>
-				<span class="sub ellipsis">:${slot.port} · ${escape(slot.targetLabel)}</span>
-				${iconButton("remove-member", "close", `Take ${slot.projectName} out of ${group.name}`, { id: group.id, kind: "project", member: slot.id })}
-			</div>`,
+			(slot) =>
+				memberRow(
+					group,
+					"project",
+					slot.id,
+					slot.projectName,
+					`${dot(slot)}
+				<button class="link grow ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)} (${escape(slot.targetLabel)})">${escape(slot.projectName)}</button>
+				${portChip(slot)}`,
+				),
 		)
 		.join("");
 
@@ -399,6 +429,26 @@ function projectsList(slots: SlotView[]): string {
 	return blocks.join("");
 }
 
+/*
+	Every project serving right now, with its address to copy: the quickest way
+	to get a port into Studio's Rojo plugin.
+*/
+function activePorts(serving: SlotView[]): string {
+	if (serving.length === 0) return `<div class="empty"><p class="muted small">Nothing serving. Start a project or a group and its port shows here.</p></div>`;
+	const rows = [...serving]
+		.sort((a, b) => a.port - b.port)
+		.map(
+			(slot) => `<div class="member active-port">
+				${dot(slot)}
+				<span class="grow two-line"><button class="link ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">${escape(slot.targetLabel)}</span></span>
+				<button class="port" data-action="copy" data-id="${escape(slot.id)}" title="Copy localhost:${slot.port}">localhost:${slot.port}</button>
+				${iconButton("copy", "copy", `Copy localhost:${slot.port}`, { id: slot.id })}
+			</div>`,
+		)
+		.join("");
+	return `<div class="card ports">${rows}</div>`;
+}
+
 /* ---------- whole panel ---------- */
 
 function render(): void {
@@ -455,6 +505,7 @@ function render(): void {
 		${banner}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
+		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
 		<footer class="footer">${footer}</footer>`;
 
@@ -591,7 +642,15 @@ document.addEventListener("click", (event) => {
 			document.getElementById(`group-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 			return;
 		case "remove-member":
-			return send({ type: "removeFromGroup", id, member: { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" } });
+			ui.confirmRemoveMember = `${id}|${target.dataset.kind === "group" ? "group" : "project"}|${target.dataset.member ?? ""}`;
+			return render();
+		case "remove-member-no":
+			ui.confirmRemoveMember = null;
+			return render();
+		case "remove-member-yes":
+			ui.confirmRemoveMember = null;
+			send({ type: "removeFromGroup", id, member: { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" } });
+			return render();
 		case "start-group":
 			ui.busy.add(`group:${id}`);
 			send({ type: "startGroup", id, only: false });
