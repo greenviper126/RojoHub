@@ -57,3 +57,7 @@ npm run typecheck
 npm test            # unit tests plus an end-to-end run against a real rojo (needs rokit's rojo 7.7 on PATH)
 npm run build       # dist/extension.js and dist/service.js
 ```
+
+## License
+
+[MIT](LICENSE)

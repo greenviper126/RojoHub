@@ -6,6 +6,7 @@
   "publisher": "greenviper126",
   "icon": "media/icon.png",
   "description": "Serve many Rojo projects on fixed ports and switch each one between branches without dropping Studio's connection.",
+  "license": "MIT",
   "categories": [
     "Other"
   ],
@@ -510,7 +511,7 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc -p . --noEmit",
     "test": "npm run build && npm run smoke && tsc -p tsconfig.test.json && node --test \"out/test/*.test.js\"",
-    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies --skip-license",
+    "package": "npm run typecheck && npm run build && npm run smoke && vsce package --no-dependencies",
     "service": "node dist/service.js",
     "probe:headless": "node tools/live-switch-headless.mjs verbatim",
     "smoke": "node tools/smoke-bundle.cjs",

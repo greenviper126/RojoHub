@@ -89,4 +89,4 @@ below.
 
 - macOS/Linux. The Unix code paths stay but are untested; activation says Windows only.
 - Rojo installed by Aftman, Foreman, cargo or the Rojo extension.
-- A licence: the owner picks one before publishing.
+- Rewriting git history. It holds no secrets (checked for keys, tokens and passwords; the author address is GitHub's noreply one), only local paths and project names, so it is kept as is.
