@@ -111,7 +111,7 @@ if (params.get("theme") === "light") {
 if (params.get("width")) document.body.style.width = params.get("width") + "px";
 
 const slot = (id, projectName, port, state, targetLabel, extra = {}) => ({
-	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", port, portSource: "hash",
+	id, projectName, repoPath: `C:\\Users\\dev\\${projectName}`, projectFile: "default.project.json", projectFiles: ["default.project.json", "bench.project.json", "test.project.json"], port, portSource: "hash",
 	state, connections: 0, target: { kind: "worktree", path: `C:\\Users\\dev\\${projectName}` }, targetLabel, branch: targetLabel,
 	mode: "native", warnings: [], error: null, sessionId: null, logFile: "", targetsAt: 1, sourcemap: state === "running" ? { state: "watching", detail: "Kept up to date in " + projectName } : { state: "off", detail: "Kept up to date while the project is serving" }, claim: null, ...extra,
 });
@@ -172,7 +172,6 @@ window.acquireVsCodeApi = () => ({
 			reply({ type: "state", state: JSON.parse(JSON.stringify(state)) });
 			reply({ type: "busy", key: `agent:${message.id}`, busy: false });
 		}, 700);
-		if (message.type === "projectFiles") setTimeout(() => reply({ type: "projectFiles", id: message.id, files: ["default.project.json", "bench.project.json", "test.project.json"] }), 150);
 		if (message.type === "candidates") reply({ type: "candidates", items: [{ label: "SharedLib", path: "C:\\dev\\SharedLib", source: "workspace" }] });
 	},
 });

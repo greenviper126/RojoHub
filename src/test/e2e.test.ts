@@ -480,6 +480,11 @@ test("project files: added by default or the only one, changed live with a resta
 
 	const slot = await call<SlotView>("POST", "/slots", { path: lib });
 	assert.equal(slot.projectFile, "default.project.json", "default.project.json without asking");
+	assert.deepEqual(slot.projectFiles, ["default.project.json", "clash.project.json", "test.project.json"], "the folder's project files come with the status");
+	write(join(lib, "bench.project.json"), JSON.stringify({ name: `LibbyBench-${process.pid}`, tree: tree("tests") }));
+	await until("a new project file in the list", async () =>
+		(await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.projectFiles.includes("bench.project.json"),
+	);
 	const started = await call<SlotView>("POST", `/slots/${slot.id}/start`);
 	assert.equal(started.state, "running");
 

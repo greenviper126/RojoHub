@@ -33,6 +33,9 @@ it afterwards.
       ticked, then **Browse…**, a file dialog starting in the project's folder ("an option to select
       a json file manually"), which takes only a `*.project.json` directly in that folder. *Project
       File…* in the project's quick pick lists the same files.
+- [x] Like the branch list, the file list is kept in the background and updates by itself ("it
+      should store whats available to select in the background and auto update"): each project's
+      status carries its folder's `*.project.json` files, read again at most every 2 seconds.
 - [x] Changing it on a stopped project only saves it. On a serving project it asks first, since Rojo
       reads the project name, `servePort` and place IDs once per session (001): Rojo is restarted on
       the new file, and Studio reconnects. This is the one deliberate exception to "switching never

@@ -16,6 +16,8 @@ const READY_TIMEOUT_MS = 30000;
 const PORT_FREE_TIMEOUT_MS = 5000;
 /** A crash this soon after a checkout in the served worktree is put down to that checkout. */
 const CHECKOUT_CRASH_MS = 120000;
+/** How long a project's list of *.project.json files is reused before its folder is read again. */
+const PROJECT_FILES_MS = 2000;
 
 interface Runtime {
 	state: SlotView["state"];
@@ -75,6 +77,9 @@ export class Hub {
 
 	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
 	private readonly claims = new Map<string, Claim>();
+
+	/** Each repo's *.project.json files and when they were read, so every status has them without a read each time (spec 005). */
+	private readonly projectFiles = new Map<string, { at: number; files: string[] }>();
 
 	/** The branch picker's lists, kept warm in the background (spec 002). */
 	readonly targetCache: TargetCache;
@@ -290,6 +295,20 @@ export class Hub {
 		else this.claims.delete(id);
 	}
 
+	/*
+		The project file list for a slot's folder. Read at most every two seconds,
+		about as often as the panel asks for status, so a file added or removed
+		shows up in the open list by itself.
+	*/
+	private filesOf(repoPath: string): string[] {
+		const key = pathKey(repoPath);
+		const cached = this.projectFiles.get(key);
+		if (cached && Date.now() - cached.at < PROJECT_FILES_MS) return cached.files;
+		const files = listProjectFiles(repoPath);
+		this.projectFiles.set(key, { at: Date.now(), files });
+		return files;
+	}
+
 	view(slot: SlotRecord): SlotView {
 		const runtime = this.runtime(slot.id);
 		const claim = this.claimOf(slot.id);
@@ -298,6 +317,7 @@ export class Hub {
 			projectName: slot.projectName,
 			repoPath: slot.repoPath,
 			projectFile: slot.projectFile,
+			projectFiles: this.filesOf(slot.repoPath),
 			port: slot.port,
 			state: runtime.state,
 			connections: runtime.state === "running" ? runtime.log.connections : 0,

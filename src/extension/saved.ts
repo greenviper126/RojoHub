@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { listProjectFiles } from "../common/projectFiles";
 import type { DisplayOrder, GroupView, SlotView } from "../common/api";
 import { expandGroup } from "../common/groups";
 
@@ -32,6 +33,7 @@ export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: Slo
 			projectName: record.projectName,
 			repoPath: record.repoPath,
 			projectFile: record.projectFile,
+			projectFiles: known?.projectFiles ?? listProjectFiles(record.repoPath),
 			port: record.port,
 			portSource: known?.portSource ?? "hash",
 			state: "offline",

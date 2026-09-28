@@ -51,8 +51,8 @@ const ui = {
 	picker: null as null | Picker,
 	/** Each project's last branch-picker list, so the picker opens with it drawn while a newer one is asked for. */
 	targets: new Map<string, TargetOption[]>(),
-	/** The project whose project file list is open, and the files in its folder once the extension says (spec 005). */
-	filePicker: null as null | { id: string; files: string[] | null },
+	/** The project whose project file list is open; the files come with its status (spec 005). */
+	filePicker: null as null | { id: string },
 	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
 	menuDown: false,
@@ -339,18 +339,17 @@ function picker(slot: SlotView): string {
 function filePicker(slot: SlotView): string {
 	const open = ui.filePicker;
 	if (!open || open.id !== slot.id) return "";
+	const files = slot.projectFiles;
 	const rows =
-		open.files === null
-			? `<div class="muted pad">${icon("loading", "codicon-modifier-spin")} Reading the project's folder…</div>`
-			: open.files.length === 0
-				? `<div class="muted pad">No *.project.json directly in the project's folder.</div>`
-				: open.files
-						.map((file) => {
-							const current = file === slot.projectFile;
-							const sub = current ? "Serving now" : file === "default.project.json" ? "The default" : "";
-							return `<button class="list-item${current ? " current" : ""}" data-action="pick-file" data-id="${escape(slot.id)}" data-file="${escape(file)}">${icon("file-code")}<span class="grow"><span class="label">${escape(file)}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</span>${current ? icon("check") : ""}</button>`;
-						})
-						.join("");
+		files.length === 0
+			? `<div class="muted pad">No *.project.json directly in the project's folder.</div>`
+			: files
+					.map((file) => {
+						const current = file === slot.projectFile;
+						const sub = current ? "Serving now" : file === "default.project.json" ? "The default" : "";
+						return `<button class="list-item${current ? " current" : ""}" data-action="pick-file" data-id="${escape(slot.id)}" data-file="${escape(file)}">${icon("file-code")}<span class="grow"><span class="label">${escape(file)}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</span>${current ? icon("check") : ""}</button>`;
+					})
+					.join("");
 	const browse = `<button class="list-item create" data-action="browse-file" data-id="${escape(slot.id)}">${icon("folder-opened")}<span class="grow"><span class="label">Browse…</span><span class="sub">Pick a *.project.json in the project's folder</span></span></button>`;
 	const serving = slot.state !== "stopped";
 	return `<div class="picker file-picker">
@@ -945,11 +944,7 @@ function parseExcluded(text: string): { values: (number | string)[]; bad: string
 
 function openFilePicker(id: string): void {
 	ui.picker = null;
-	if (ui.filePicker?.id === id) ui.filePicker = null;
-	else {
-		ui.filePicker = { id, files: null };
-		send({ type: "projectFiles", id });
-	}
+	ui.filePicker = ui.filePicker?.id === id ? null : { id };
 	render();
 	document.querySelector<HTMLElement>(".file-picker .list-item")?.focus();
 }
@@ -1489,12 +1484,6 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 			return;
 		case "focus":
 			return flash(message.id);
-		case "projectFiles":
-			if (ui.filePicker?.id === message.id) {
-				ui.filePicker.files = message.files;
-				render();
-			}
-			return;
 		case "collapse":
 			return collapseAll();
 		case "fold":

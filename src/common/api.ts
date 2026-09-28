@@ -29,6 +29,8 @@ export interface SlotView {
 	projectName: string;
 	repoPath: string;
 	projectFile: string;
+	/** The *.project.json files directly in the project's folder, default first; kept current by the service (spec 005). */
+	projectFiles: string[];
 	port: number;
 	/** "servePort" when the project file sets it, otherwise "hash" (spec 001, "Ports"). */
 	portSource: "servePort" | "hash";

@@ -66,8 +66,6 @@ export type ToPanel =
 	 */
 	| { type: "fold"; key: string; list: string; how: "expand" | "collapse" | "others" | "all" }
 	| { type: "busy"; key: string; busy: boolean }
-	/** The *.project.json files directly in a project's folder, default.project.json first. */
-	| { type: "projectFiles"; id: string; files: string[] }
 	/** A picker's Fetch finished; `error` when it failed (the list is unchanged then). */
 	| { type: "fetched"; id: string; error?: string }
 	/** A picker's New branch finished; `error` keeps the form open with the reason. */
@@ -86,8 +84,7 @@ export type FromPanel =
 	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
-	/** The card's project file list (spec 005): its files, one of them picked, or Browse…. */
-	| { type: "projectFiles"; id: string }
+	/** The card's project file list (spec 005): one of its files picked, or Browse…. */
 	| { type: "setProjectFile"; id: string; file: string }
 	| { type: "browseProjectFile"; id: string }
 	| { type: "remove"; id: string }

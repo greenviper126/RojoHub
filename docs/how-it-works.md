@@ -301,7 +301,10 @@ this way:
 - otherwise a list of the folder's project files to choose from.
 
 The **project file row** on the card opens a list inside the card of the folder's `*.project.json`
-files, with the current one ticked; clicking one switches to it, and Escape closes the list. At the
+files, with the current one ticked; clicking one switches to it, and Escape closes the list. The
+service keeps each project's list and sends it with every status update (it reads the folder again
+at most every two seconds), so the list opens at once and a file added or deleted shows up in it by
+itself, even while it is open. At the
 bottom, **Browse…** opens a file dialog that starts in the project's folder, for picking the file by
 hand; only a `*.project.json` directly in that folder is taken. *Project File…* in the project's menu
 lists the same files as a quick pick. The choice is saved with the

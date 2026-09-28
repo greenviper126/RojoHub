@@ -841,9 +841,6 @@ async function onPanel(message: FromPanel): Promise<void> {
 		case "log":
 			if (slot) await vscode.window.showTextDocument(vscode.Uri.file(slot.logFile), { preview: true });
 			return;
-		case "projectFiles":
-			if (slot) panel.post({ type: "projectFiles", id: slot.id, files: listProjectFiles(slot.repoPath) });
-			return;
 		case "setProjectFile":
 			if (slot) await useProjectFile(slot, message.file, `slot:${slot.id}`);
 			return;
