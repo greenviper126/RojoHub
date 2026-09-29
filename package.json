@@ -479,8 +479,8 @@
           },
           {
             "id": "studio",
-            "title": "Connect Studio once",
-            "description": "In Studio, connect the Rojo plugin to localhost and the project's port. Turn on the plugin's Auto Reconnect so the place reconnects by itself next time.",
+            "title": "Connect Studio",
+            "description": "List the project's places in servePlaceIds, then open them in Studio: Rojo-Hub's own Studio plugin syncs them by itself. Assign other places a project in the panel's Studio places section.",
             "media": {
               "markdown": "media/walkthrough/studio.md"
             }

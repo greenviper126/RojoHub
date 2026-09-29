@@ -47,16 +47,19 @@ for running projects in this order and stops at the first step that finds any:
 2. **`placeId`** in the project file equals the place's `PlaceId`. Rojo applies `placeId`/`gameId`
    with `game:SetPlaceId`/`SetUniverseId` when a sync is accepted (M5), so a project naming a place
    ID means that place.
-3. **Remembered**: the plugin saved, for this place, the project `name` it last connected to (as the
-   Rojo plugin already does). The service looks that name up, so a remembered place follows its
-   project to a new port.
+3. **Remembered**: the project `name` the place last synced with. The service records it from the
+   plugin's reports (`placeSynced`); the plugin's own per-place record, as in Rojo's plugin, is the
+   fallback (see *Checked in Studio* for why the service keeps its own). The service looks that name
+   up, so a remembered place follows its project to a new port.
+
+An assignment made in VS Code comes before all three (see *Decided in VS Code*).
 
 A place in the project's `blockedPlaceIds` never matches, and neither does `PlaceId` 0 or a Roblox
-template's ID (upstream's `ignorePlaceIds`; see M6): those need the picker every time. The port always comes from the service
+template's ID (upstream's `ignorePlaceIds`; see M6): those are assigned in VS Code, per window. The port always comes from the service
 (which already honours `servePort`), never from the plugin's memory.
 
-A project with none of the above still works: connect once from the plugin's picker, and step 3
-covers it from then on.
+A place with none of the above is assigned a project once in VS Code, or connected by hand once; step
+3 covers it from then on.
 
 ### One project, several places
 
@@ -71,11 +74,14 @@ Branches and worktrees of one repo are one project, so an overlap means two sepa
 repos, or two project files in one repo) match the same place.
 
 - Only **running** projects count. If one of the matches is running, it is used.
-- If **more than one** running project matches, the plugin does not connect. It shows a picker with
-  them; the choice is saved per place in the service's registry and used from then on while that
-  project is running. The panel can clear it.
-- The panel warns when a project's places overlap another project's, when adding it or when its
-  project file changes.
+- A place keeps to the project it last synced with: while that one's rojo restarts, the place waits
+  for it and is not handed to another claimant that is the only one serving for those seconds (a bug
+  seen live; see *Checked in Studio*).
+- If **more than one** running project matches a place that has synced with neither, the plugin does
+  not connect; the place's row in VS Code's **Studio places** says to assign one, and the assignment
+  is kept per place (`placeChoices`). Removing the project forgets it.
+- Not built: a panel warning when two projects list the same place. The Studio places row shows the
+  conflict when it matters.
 
 ### Both directions
 
@@ -96,10 +102,11 @@ closes, so the panel can show which places are connected. (Earlier drafts planne
 Auto-connect runs only in edit mode, never inside a playtest (upstream has its own playtest
 setting, kept as it is). It can be turned off in the plugin's settings.
 
-Auto-connect does not skip Rojo's confirmation. Upstream asks before the first non-empty patch per
-project per Studio session (`confirmationBehavior`, default *Initial*), and remembers the project for
-the rest of the session, so a reconnect after a rojo restart applies without asking but the first
-connect of the day still shows the diff. That is kept: connecting writes into the place.
+Rojo's confirmation before a first sync is kept, but only for places the project does not list: the
+plugin's `confirmationBehavior` defaults to *Unlisted PlaceId* instead of upstream's *Initial*, so a
+place in `servePlaceIds` syncs with no click (asked for live: "its asking me to accept or abort from
+the plugin so that will prob have to change"), and any other place still asks once per project per
+Studio session, since connecting writes into the place.
 
 ### The plugin
 
@@ -116,10 +123,12 @@ connect of the day still shows the diff. That is kept: connecting writes into th
   `Rojo-Hub`. Settings are per plugin, so ours has its own saved places (`priorEndpoints`) and
   settings; the Team Create sync lock (`ServerStorage.__Rojo_SessionLock`) stays shared, so the two
   never sync one place at once.
-- Keeps Rojo's UI. Adds a Rojo-Hub line (project, branch, port, or "no project for this place") and
-  the picker.
-- Sends its version; the plugin, extension and service share one version. On a mismatch the plugin
-  says which to update and falls back to manual connect.
+- Keeps Rojo's UI. Adds one read-only Rojo-Hub line under the Not Connected page's buttons with the
+  service's answer; no choices in Studio.
+- Sends its version and a protocol number (`STUDIO_PROTOCOL`, now 2). The service answers a plugin on
+  another protocol with *incompatible* ("close and reopen the place"); the panel shows each place's
+  plugin version. Across ordinary updates the protocol stays, so older plugins in open places keep
+  working until reopened.
 - The panel warns when the official Rojo plugin is installed as well; it does not remove it.
 
 ### Installing the plugin
@@ -150,12 +159,14 @@ versions or duplicates of our plugin".
 
 ### Service API
 
-- `ws://127.0.0.1:34870/studio`: the plugin says hello with its version, `PlaceId`, `GameId` and
-  remembered project name; the service answers with the matching running projects (name, port,
-  branch, why each matched, or why there are none) and sends that again whenever it changes.
-- `PUT /studio/choices/:placeId { project }`, `DELETE ...` → the overlap choice.
-- The card shows the places connected to it (from the open sockets), next to the existing count
-  from Rojo's log.
+- `ws://127.0.0.1:34870/studio`: the service says `welcome`; the plugin says `hello` with its version,
+  protocol, `PlaceId`, `GameId` (as strings: JSONEncode may round them), name, whether it is unsaved,
+  and its remembered project; the service answers `match` (status, message, the target project) and
+  sends it again whenever it changes. The plugin reports `state` (what it is synced to).
+- `PUT /studio/places/:key { slotId }`: assign a project to an open place (`key`: a place ID, or
+  `studio:<id>` for an unsaved place's window); `null` goes back to automatic.
+- The snapshot (`GET /events`) carries `studioPlaces` for the panel's Studio places section, and
+  `studioPlugin` (the install); each card's `places` lists the places synced to it.
 
 ## Measurements
 
@@ -179,7 +190,7 @@ made for the purpose ("Rojo-Hub Test1" and "Test2") had anything loaded into the
   `execute_luau` runs, but the plugin reconnects on any close anyway and the service sends a message
   at least every 30 s. Hours of idle were not measured.
 - **M3 Plugin updates wait for the next place: Studio does not reload local plugins.** A new file in
-  `%LOCALAPPDATA%RobloxPlugins` was not loaded by an open place (30 s), and changing a loaded
+  `%LOCALAPPDATA%\Roblox\Plugins` was not loaded by an open place (30 s), and changing a loaded
   plugin's file did not reload it (15 s), whether the file was replaced by a rename or rewritten in
   place. Every place opened afterwards loaded it. So an install or update reaches each place when it is
   next opened; the plugin reports its version, and the panel says which open places still run an
@@ -191,7 +202,7 @@ made for the purpose ("Rojo-Hub Test1" and "Test2") had anything loaded into the
 
 Found while measuring: `rojo plugin install` had put the official plugin in the plugins folder as
 `RojoManagedPlugin.rbxm`. That is the file the panel's "official plugin also installed" warning looks
-for, along with Creator Store installs (M8, to find where Studio keeps those).
+for. Creator Store installs are kept elsewhere and are not detected (not measured).
 
 Answered from Rojo 7.7.0's source (2026-09-28, `plugin/` at tag `v7.7.0`):
 
@@ -256,49 +267,57 @@ service's `/slots`.
   last synced project (`placeSynced` in `registry.json`) from the plugin's reports and uses it
   first.
 
-Not yet checked live: the Sync with… picker, two projects
-claiming one place in Studio (covered by unit tests), an unsaved place, and the panel's new tooltip
-and notice (need the extension installed).
+- **The design changed** after this ("everything should be decided from vscode not roblox"): the
+  *Sync with…* picker left Studio for the panel's Studio places section. Checked live through the
+  service's API (the one the panel calls): Test2, waiting for a pick, was assigned project 1 with
+  `PUT /studio/places/89386659316315` and connected.
+- **Found:** the places still ran the previous plugin build, whose status line crashed on the new
+  answer's shape (no `projects`). The protocol went to 2 so such a plugin is told to reopen the
+  place, and a drawing error in the plugin can no longer stop it from connecting.
+
+Not yet checked live: the panel's Studio places section by hand (0.19.0 was installed in the VS Code
+profiles for that), the plugin's read-only line after reopening the places, and Team Create.
 
 ## Acceptance criteria
 
-- [ ] Opening a place whose `PlaceId` is in a running project's `servePlaceIds` connects it with no
-      click and no port typed.
-- [ ] Starting a project connects every open Studio whose place matches it.
-- [ ] After rojo restarts on a project (crash, port move, project-file change), Studio reconnects by
-      itself; the card's *reconnect Studio* notes change to say it reconnected.
-- [ ] A remembered place follows its project to a new port.
-- [ ] Three places listed in one project's `servePlaceIds`, open at once, are all connected to the one
-      rojo and all receive changes.
-- [ ] Two running projects matching one place: no auto-connect, a picker, the choice remembered and
-      clearable in the panel. The panel warns about overlapping places.
-- [ ] `blockedPlaceIds`, a `PlaceId` of 0 and no match never auto-connect.
-- [ ] No auto-connect during a playtest; a plugin setting turns auto-connect off.
-- [ ] The service installs `RojoHub.rbxm` into Studio's local plugins folder, updates it in place
+- [x] Opening a place whose `PlaceId` is in a running project's `servePlaceIds` connects it with no
+      click and no port typed. *(live; no confirmation with Unlisted PlaceId)*
+- [x] Starting a project connects every open Studio whose place matches it. *(live)*
+- [x] After rojo restarts on a project (crash, port move, project-file change), Studio reconnects by
+      itself; the card's notes say places with the plugin reconnect by themselves. *(live: stop and
+      start, and a crash; port move by unit and end-to-end tests of the move itself)*
+- [x] A remembered place follows its project to a new port. *(the port always comes from the service)*
+- [x] Two places listed in one project's `servePlaceIds`, open at once, are both connected to the one
+      rojo and both receive changes. *(live with two; three clients measured in M1)*
+- [x] Two running projects matching one place: no auto-connect, and the place is assigned in VS Code;
+      the assignment is kept and can be set back to Automatic. A place keeps to its own project while
+      that one restarts. *(live and unit tests)* Not built: a warning about overlapping places.
+- [x] `blockedPlaceIds`, an unsaved place and no match never auto-connect. *(unit tests; unsaved live)*
+- [x] No auto-connect during a playtest; a plugin setting turns auto-connect off. *(by the code:
+      the link starts only in edit mode; not tried in a playtest)*
+- [x] The service installs `RojoHub.rbxm` into Studio's local plugins folder, updates it in place
       (never to an older version), removes other `RojoHub*.rbxm(x)` copies, and uninstall removes it.
-      A setting turns this off.
-- [ ] A version mismatch between the plugin and the service is reported in Studio and falls back to
-      manual connect.
-- [ ] `npm test` builds the plugin; the service's lookup, wait, overlap and choice rules have unit and
-      end-to-end tests. The Studio side is checked by hand, and what was checked is recorded here.
-- [ ] `docs/how-it-works.md` and the site's *Connecting Studio* page describe it.
+      A setting turns this off. *(unit and smoke tests; install live)*
+- [x] A plugin on another protocol is told to reopen the place. *(unit test; seen live)*
+- [x] `npm test` builds the plugin; the matching, assignment and WebSocket rules have unit tests. The
+      Studio side was checked by hand, recorded above.
+- [x] `docs/how-it-works.md`, the site (Connecting Studio, Studio places, troubleshooting) and the
+      README describe it.
 
 ## Non-goals
 
 - Switching branches, or starting and stopping projects, from Studio. The plugin connects; the panel
   and agents decide what is served.
 - A Creator Store release of the plugin. Local install only, so plugin and service versions match.
-- A per-project place setting in the panel. The project file and the remembered name cover it; revisit
-  if a real project needs it.
+- A per-project place list in the panel. The project file lists places; the panel assigns open places.
 - Group-level place overrides.
-- Changing Rojo's sync behaviour or UI beyond the Rojo-Hub line and the picker.
+- Choices in Studio, or changing Rojo's sync behaviour or UI beyond the read-only Rojo-Hub line.
 
 ## Open questions
 
-1. Is dropping the panel place setting right (the project file plus "connect once and it's
-   remembered")? Default: yes.
-2. Should auto-connect be on by default for a new install? Default: yes, exact matches only.
-3. Which Rojo tag to vendor? Default: v7.7.0, the newest release.
+1. ~~A panel place setting?~~ Replaced by assigning open places in VS Code.
+2. ~~Auto-connect on by default?~~ Yes.
+3. ~~Which Rojo tag?~~ v7.7.0, the newest release.
 4. ~~Projects pinning rojo older than 7.7?~~ Decided by Viper: "were just gonna do 7.7.0 and
    after". Only protocol-5 servers are supported. For an older one, the service answers "this
    project pins rojo X; Rojo-Hub's plugin needs 7.7 or newer", and the plugin shows that instead of

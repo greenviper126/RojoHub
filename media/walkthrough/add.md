@@ -9,4 +9,4 @@ Each project gets its own port:
 - the `servePort` in its project file, if it sets one;
 - otherwise a port worked out from the repo's first commit, so it is the same on every machine.
 
-Two projects can't share a Rojo project `name`, because the Studio plugin reconnects by name.
+Two projects can't share a Rojo project `name`, because a place remembers its project by name.

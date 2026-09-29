@@ -31,8 +31,10 @@ measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-ro
 Rojo-Hub is a VS Code extension for Roblox developers who use Rojo and work on several
 projects, or several branches of one project, at the same time.
 
-- **Every project gets its own Rojo port**, and several projects can serve at once. Each Studio
-  place connects to its project once; after that the Rojo plugin reconnects it by itself.
+- **Every project gets its own Rojo port**, and several projects can serve at once.
+- **Studio connects by itself.** Rojo-Hub installs its own Studio plugin, which syncs each place
+  with its project (from `servePlaceIds`, or as assigned in the panel) and reconnects after any Rojo
+  restart (see [Connecting Studio](#7-connecting-studio)).
 - **Any project can be switched to another branch or worktree while it is serving**, and Studio
   stays connected: it receives the difference as one update instead of disconnecting.
 - **Projects can be grouped** so a set of them starts, stops, or takes over as a profile, together.
@@ -110,7 +112,8 @@ running through this, so Studio stays connected, and the new service adopts them
   toolchain file picks its Rojo version (see [Projects](#5-projects)); `aftman.toml` and
   `foreman.toml` pins are read too, but a Rojo installed by Aftman or Foreman themselves is not
   found. `rokit install` in the project installs what those files pin.
-- Rojo 7.7 or later, and its Studio plugin, for everything to work as described.
+- Rojo 7.7 or later, for everything to work as described. Rojo-Hub installs its own Studio plugin
+  (Rojo 7.7's, see [Connecting Studio](#7-connecting-studio)); Rojo's own plugin is not needed.
 - Orca is optional.
 
 **One Windows user at a time.** The service's port, 34870, is shared by everyone signed in to the PC.
@@ -291,7 +294,7 @@ it a project; *Automatic* follows its project files and its last sync (see
 
 **Active ports** (below Studio places; the header shows how many): every project serving right now, lowest
 port first, with its status light, name and branch, and its address `localhost:<port>`; clicking
-the address copies the port number. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
+the address copies the port number, for connecting by hand. It says *Nothing
 serving* when nothing is.
 
 **Agent access** (below Port settings, folded by default; the header shows how many agents can use
@@ -360,8 +363,8 @@ when:
 - the same repo is already registered **with the same project file** (*‹folder› is already
   registered*). One repo can be registered more than once with different `*.project.json` files, as
   long as their `name`s differ;
-- another project already uses the same Rojo project `name`. Names must be unique because the
-  Studio plugin reconnects a place only to a server reporting the name it saved;
+- another project already uses the same Rojo project `name`. Names must be unique because a
+  place remembers the project it last synced with by name (Rojo-Hub's record and the plugin's);
 - no port can be given to it: its `servePort` is 34870 or another project's `servePort`, or the port
   range has no free port left (see [Ports](#6-ports));
 - git is missing or older than 2.31.
@@ -428,7 +431,8 @@ because that command starts the real Rojo as a console program of its own.)
 - A project pinned to a Rojo older than 7.7 starts, with a warning. **Rojo 7.7 is the first version
   that speaks protocol 5, and the Studio plugin only connects to a server with the same protocol**,
   so a 7.7 plugin refuses Rojo 7.0–7.6 (protocol 4) with *"it's using a different protocol version,
-  and is incompatible"*. Since one Studio plugin serves every place, keep every project on Rojo 7.7.
+  and is incompatible"*. Rojo-Hub's plugin is Rojo 7.7's, so it does not connect to such a project
+  by itself: its Studio places row says *Rojo too old*. Keep every project on Rojo 7.7.
   Live switching itself was measured working on 7.3.0; the Studio-connected light needs 7.7.
   Older Rojo answers Rojo-Hub's status check in JSON rather than MessagePack; both are read.
 
@@ -505,12 +509,13 @@ and back.
 
 **When a port changes** (you add, change or remove a `servePort`, exclude the port a project is on or
 change the port range, or remove the project that had pushed it off its own port), a serving project
-is restarted on its new port. That is a new session: reconnect Studio to the new port. The project
-shows *Port moved from A to B; reconnect Studio to the new port.* (a stopped project just *Port moved
-from A to B.*), and VS Code shows a warning, *Rojo-Hub: ‹project› moved from port A to B. Set the Rojo
-plugin's port to B in its places.*, with **Copy Port** and **Show Project**; the window with the
-project open says it, or else the focused window. The Rojo plugin remembers the last port per place,
-so set it to the new one once.
+is restarted on its new port. That is a new session: places with Rojo-Hub's Studio plugin reconnect
+to the new port by themselves. The project shows *Port moved from A to B. Places with Rojo-Hub's
+Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.* (a stopped project
+just *Port moved from A to B.*), and VS Code shows a warning, *Rojo-Hub: ‹project› moved from port A
+to B. …*, with **Copy Port** and **Show Project**; the window with the project open says it, or else
+the focused window. Rojo's own plugin remembers the last port per place, so with it, set the new one
+once.
 
 **A move waits until the new port has held.** A move that comes from a project file (a `servePort`
 added, changed or removed) or from removing a project happens only once the new assignment has stayed
@@ -875,7 +880,8 @@ runs a separate background service that owns every project and its Rojo.
 - **Restores on start**: projects that were serving when the service last stopped are adopted, or
   started again.
 - **Crash recovery**: if a project's Rojo dies unexpectedly, the service starts it again on the
-  same port and shows *Rojo crashed at ‹time› and was restarted on the same port; reconnect Studio.*,
+  same port and shows *Rojo crashed at ‹time› and was restarted on the same port; places with
+  Rojo-Hub's Studio plugin reconnect by themselves …*,
   followed by Rojo's own reason (or, right after a checkout in the served worktree, *Checking out
   ‹branch› in ‹folder› removed a folder Rojo was watching, and Rojo 7.7 crashed …*). This is a new
   session. A Rojo the service started itself is known to have exited at once;
@@ -966,7 +972,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
 | `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |
 | `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
-| `service.log` | Service start and stop, recovered errors, a damaged registry, git problems |
+| `service.log` | Service start and stop, recovered errors, a damaged registry, git problems, and each Studio place's hello and every change of what it is told to sync with |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
 | `slots\<id>\borrowed.project.json` | The generated copy used in borrowed mode |
 | `slots\<id>\rojo.log` | This Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |
@@ -986,7 +992,10 @@ Outside that folder, Rojo-Hub writes:
   [Sourcemaps](#sourcemaps)), or once when you ask with *Update sourcemap.json*;
 - a new worktree in `<repo>-worktrees/<name>` beside the repo when you make a *New branch* in a repo
   Orca does not know (see [Switching branches](#8-switching-branches));
-- place files where you save them with *Build place file…*.
+- place files where you save them with *Build place file…*;
+- its Studio plugin, `RojoHub.rbxm`, in Studio's local plugins folder (`%LOCALAPPDATA%RobloxPlugins`),
+  taking out other `RojoHub*.rbxm(x)` files there, unless `rojoHub.studioPlugin` is off (see
+  [Connecting Studio](#7-connecting-studio)).
 
 It never edits your project files. Git also records the view worktrees it registers (visible in
 `git worktree list`) and removes again.
@@ -1036,7 +1045,7 @@ fix pending in PR #1319). It happens with plain `rojo serve` too. Anything that 
 containing files under a served tree triggers it: deleting it in Explorer, a `git checkout` or
 rebase that removes a folder, deleting a worktree the project served earlier in the same session.
 Rojo-Hub restarts Rojo on the same port and tells you (naming the checkout when one caused it);
-reconnect Studio. Switching with the picker instead of checking out in the served folder avoids it.
+places with Rojo-Hub's plugin reconnect by themselves. Switching with the picker instead of checking out in the served folder avoids it.
 
 **"Port 34870 is used by another Windows user's Rojo-Hub"**: someone else signed in to this PC runs
 Rojo-Hub. Only one signed-in user can run it at a time; it works again once they sign out.
@@ -1079,5 +1088,7 @@ service.
 
 Source layout, commands and the rules that must not be simplified away are in
 [`CLAUDE.md`](../CLAUDE.md). In short: `src/service` is the background service, `src/extension`
-the VS Code front end, `src/common/api.ts` the protocol between them; `npm test` runs unit tests and
+the VS Code front end, `src/common/api.ts` the protocol between them (and with the Studio plugin);
+`plugin/` the Studio plugin, Rojo 7.7.0's with Rojo-Hub's changes listed in `plugin/UPSTREAM.md`, built
+into `dist/RojoHub.rbxm` by `npm run build` with Rokit's Rojo 7.7.0; `npm test` runs unit tests and
 end-to-end tests against a real Rojo; `tools/` holds the original measurement scripts.

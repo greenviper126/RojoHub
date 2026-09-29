@@ -30,8 +30,8 @@ One repo can be added more than once, with different `*.project.json` files, as 
 `name`s differ.
 
 ::: warning Why names must be unique
-The Studio plugin reconnects a place only to a server reporting the project name it saved. Rename
-one of the projects in its project file.
+A place remembers the project it last synced with by name. Rename one of the projects in its
+project file.
 :::
 
 ## Project files
@@ -82,8 +82,8 @@ project's name; if Rojo does not come up within 30 seconds, the card shows the e
 - No window opens: Rojo runs straight from Rokit's tool storage, without a console.
 - The toolchain file is read from the **primary checkout** (and the folders above it), not from the
   worktree being served.
-- A project pinned to a Rojo **older than 7.7** starts, with a warning: the 7.7 Studio plugin will
-  refuse it (see [Which Rojo version](./requirements#which-rojo-version)).
+- A project pinned to a Rojo **older than 7.7** starts, with a warning: Rojo-Hub's Studio plugin (Rojo
+  7.7's) does not connect to it (see [Which Rojo version](./requirements#which-rojo-version)).
 
 **Stop** stops that project's Rojo only. Other projects, and any Rojo you started by hand, are left
 alone.

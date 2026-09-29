@@ -321,7 +321,7 @@ function noticePortMoves(slots: SlotView[]): void {
 		if (!from || slot.port <= 0 || from === slot.port) continue;
 		if (!workspaceRepos.includes(pathKey(slot.repoPath)) && !vscode.window.state.focused) continue;
 		void vscode.window
-			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Set the Rojo plugin's port to ${slot.port} in its places.`, "Copy Port", "Show Project")
+			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, set its port to ${slot.port}.`, "Copy Port", "Show Project")
 			.then(async (choice) => {
 				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
 				if (choice === "Show Project") void panel.focus(slot.id);

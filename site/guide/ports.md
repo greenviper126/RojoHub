@@ -1,7 +1,7 @@
 # Ports
 
-Every project has its **own port**, and it is the **same on every machine**. That is what lets each
-Studio place connect once and reconnect by itself from then on.
+Every project has its **own port**, and it is the **same on every machine**. Rojo-Hub's Studio plugin
+looks the port up itself, so you rarely need it; it is there for connecting by hand.
 
 ## How a port is picked
 
@@ -61,7 +61,8 @@ These change a project's port:
 - you remove the project that had pushed it off its own port.
 
 A **serving** project is then restarted on its new port. That is a new Rojo session, so Studio
-disconnects. The card shows *Port moved from A to B; reconnect Studio to the new port.* and VS Code
+disconnects, and places with Rojo-Hub's Studio plugin reconnect to the new port by themselves. The
+card shows *Port moved from A to B.* followed by *Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.*, and VS Code
 shows *‹project› moved from port A to B* with **Copy Port** and **Show Project** (in the window that
 has the project open, or else the focused window).
 
@@ -72,9 +73,9 @@ being typed with auto-save on (3, 34, 349…) does not restart Rojo at every key
 port settings, which you save on purpose, moves at once.
 :::
 
-::: warning Reconnect Studio to the new port
-The Rojo plugin remembers the last port per place. Set it to the new one once, and Auto Reconnect
-takes over again.
+::: tip With Rojo's own plugin
+Rojo's own plugin remembers the last port per place, so with it, set the new port once. Rojo-Hub's
+plugin needs nothing.
 :::
 
 ## Excluding ports

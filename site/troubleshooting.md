@@ -127,8 +127,8 @@ another [project file](/guide/projects#project-files) that exists there.
 *Serving with Rojo ‹version› …, which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only
 connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it.*
 
-The project still serves, but the 7.7 plugin will not connect and the Studio-connected light does
-not work. Pin Rojo 7.7 and install it:
+The project still serves, but Rojo-Hub's Studio plugin (Rojo 7.7's) will not connect, its places
+show *Rojo too old*, and the Studio-connected light does not work. Pin Rojo 7.7 and install it:
 
 ```sh
 rokit add rojo-rbx/rojo@7.7.0
@@ -139,8 +139,8 @@ rokit install
 
 ### Studio says the server is "using a different protocol version, and is incompatible" {#protocol-version}
 
-The project runs Rojo older than 7.7 and your Studio plugin is 7.7 (or the other way round). Keep
-every project and the plugin on Rojo 7.7; see [the warning above](#older-rojo).
+The project runs Rojo older than 7.7 and the Studio plugin is 7.7's (Rojo-Hub's is), or the other way
+round. Keep every project on Rojo 7.7; see [the warning above](#older-rojo).
 
 ### Studio disconnected {#studio-disconnected}
 
@@ -150,15 +150,15 @@ The Rojo session changed. Causes:
 - its port moved (the card says *Port moved from A to B*);
 - Rojo crashed and was restarted (the card says so).
 
-Switching branches never causes it. Reconnect in the Rojo plugin; with Auto Reconnect on, reopening
-the place is enough unless the port changed.
+Switching branches never causes it. Places with Rojo-Hub's Studio plugin reconnect by themselves as
+soon as the project serves again. With Rojo's own plugin, reconnect in it.
 
 ### "Port moved from ‹A› to ‹B›" {#port-moved}
 
 The project's port changed (a `servePort` was added, changed or removed, its port was excluded or
 the range changed, or the project that had pushed it off its own port was removed), so it was
-restarted on the new one. Set the Rojo plugin's
-port to the new one in its places, once. See [When a port changes](/guide/ports#when-a-port-changes).
+restarted on the new one. Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's
+own plugin, set its port to the new one in its places, once. See [When a port changes](/guide/ports#when-a-port-changes).
 
 ### "Its own port ‹p› is taken by ‹name›, so it moved to ‹q›" {#port-taken}
 
@@ -182,12 +182,33 @@ the project file (or remove it to get a port worked out from the repo). See
 The project file's `servePort` is not a whole number from 1 to 65535. Fix it in the project file,
 or remove it to get a port worked out from the repo.
 
-### A place does not reconnect by itself {#no-auto-reconnect}
+### A place does not sync by itself {#no-auto-reconnect}
 
-- Turn on **Auto Reconnect** in the Rojo plugin's settings.
-- The plugin reconnects only to a server reporting the same project name it saved. If you renamed
-  the project (or changed its project file to one with another `name`), connect once by hand.
-- If `servePlaceIds` is set, the place must be on the list.
+Look at the place in the panel's **Studio places** section; it says why:
+
+- *Assign a project*: no project lists the place in `servePlaceIds`, it is not saved to Roblox, or
+  two serving projects claim it. Pick its project in the list.
+- *Waiting*: its project is not serving. Start it.
+- *Rojo too old*: its project pins Rojo older than 7.7. Pin `rojo-rbx/rojo@7.7.0`.
+- *Reopen the place*: the place runs an older copy of the plugin. Close and reopen it.
+- You pressed **Disconnect** (or **Abort** on the first sync) in Studio: that session is left alone.
+  Connect by hand, assign the project again, or restart the project.
+
+If the place is not listed at all, Studio has not loaded Rojo-Hub's plugin: it loads a new or updated
+plugin only when a place is opened, so reopen the place. Check that `rojoHub.studioPlugin` is on.
+
+### Studio shows two Rojo windows {#two-rojo-windows}
+
+Rojo's own plugin is installed next to Rojo-Hub's (the panel says so). Rojo-Hub's does everything
+Rojo's does; remove `RojoManagedPlugin.rbxm` from `%LOCALAPPDATA%\Roblox\Plugins` (or uninstall Rojo
+from Studio's plugin manager) to keep one.
+
+### Studio asks to accept or abort the first sync {#confirm-first-sync}
+
+That is Rojo's confirmation, kept because syncing writes into the place. Rojo-Hub's plugin skips it
+for places the project lists in `servePlaceIds` (*Confirmation Behavior: Unlisted PlaceId*). A Studio
+that ran an early 0.19.0 build may still have Rojo's *Initial* saved: change it in the plugin's
+settings.
 
 ### A switch does not appear in Studio {#switch-not-in-studio}
 
@@ -196,10 +217,10 @@ serving the previous tree; the card shows the error. Fix the file (edits sync li
 
 ## Rojo crashes
 
-### "Rojo crashed at ‹time› and was restarted on the same port; reconnect Studio" {#rojo-crashed}
+### "Rojo crashed at ‹time› and was restarted on the same port" {#rojo-crashed}
 
-Rojo exited unexpectedly and Rojo-Hub started it again on the same port. It is a new session, so
-reconnect Studio. The message ends with Rojo's own reason; *Show Rojo log* has the full log. If the
+Rojo exited unexpectedly and Rojo-Hub started it again on the same port. It is a new session: places
+with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio. The message ends with Rojo's own reason; *Show Rojo log* has the full log. If the
 restart fails too, the card shows the error; stop the project from its card.
 
 ### Deleting a folder crashes Rojo 7.7 {#deleting-a-folder}
@@ -212,13 +233,14 @@ under a served tree triggers it:
 - a `git checkout` or rebase that removes a folder;
 - deleting a worktree the project served earlier in the same session.
 
-Rojo-Hub restarts Rojo on the same port and tells you; reconnect Studio. **Switching with the picker
+Rojo-Hub restarts Rojo on the same port and tells you; places with Rojo-Hub's plugin reconnect by
+themselves. **Switching with the picker
 instead of checking out in the served folder avoids it.**
 
 ### "Checking out ‹branch› in ‹folder› removed a folder Rojo was watching" {#checkout-crash}
 
-The same crash, caused by a checkout inside the served worktree. Rojo-Hub restarted Rojo; reconnect
-Studio. Use the [branch picker](/guide/switching) to switch instead.
+The same crash, caused by a checkout inside the served worktree. Rojo-Hub restarted Rojo; places
+with Rojo-Hub's plugin reconnect by themselves. Use the [branch picker](/guide/switching) to switch instead.
 
 ### "‹branch› was checked out in ‹folder› while it was being served" {#checked-out-while-served}
 
