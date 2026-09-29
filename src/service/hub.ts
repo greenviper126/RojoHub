@@ -125,24 +125,19 @@ export class Hub {
 
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
-		this.studio = new StudioLinks(
-			() => this.placeCandidates(),
-			{
-				get: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
-				set: (placeId, slotId) => {
-					if (slotId) this.registry.placeChoices[String(placeId)] = slotId;
-					else delete this.registry.placeChoices[String(placeId)];
-					this.registry.save();
-				},
+		this.studio = new StudioLinks(() => this.placeCandidates(), {
+			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
+			assign: (placeId, slotId) => {
+				if (slotId) this.registry.placeChoices[String(placeId)] = slotId;
+				else delete this.registry.placeChoices[String(placeId)];
+				this.registry.save();
 			},
-			{
-				get: (placeId) => this.registry.placeSynced[String(placeId)] ?? null,
-				set: (placeId, projectName) => {
-					this.registry.placeSynced[String(placeId)] = projectName;
-					this.registry.save();
-				},
+			synced: (placeId) => this.registry.placeSynced[String(placeId)] ?? null,
+			sync: (placeId, projectName) => {
+				this.registry.placeSynced[String(placeId)] = projectName;
+				this.registry.save();
 			},
-		);
+		});
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));

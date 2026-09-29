@@ -10,8 +10,10 @@ changed to sync each place with its project without a port typed or a button pre
   it last synced with. One project can serve several places at once.
 - It connects when the place opens, when its project is started later, and again after Rojo
   restarts (a crash, a port move, a project file change), with no click.
-- When it cannot tell (an unsaved place, no match, two projects claiming the place), the Rojo window
-  says why and offers every serving project to pick; a pick between two is remembered per place.
+- Everything is decided in VS Code: a new **Studio places** section lists each open place, what it
+  syncs with, and a list to assign it a project (an unsaved place, one no project lists, or one two
+  projects claim). Studio only shows the answer.
+- A place keeps to the project it syncs with while that project's Rojo restarts.
 - Disconnect and Abort are respected: that session is not reconnected by itself.
 - The plugin is kept up to date in Studio's plugins folder and removed on uninstall; the new
   `rojoHub.studioPlugin` setting turns that off. Studio loads an update when a place is next opened.

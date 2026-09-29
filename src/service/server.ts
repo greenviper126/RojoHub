@@ -41,8 +41,7 @@ import { acceptWebSocket } from "./websocket";
 	PUT    /agents                { claudeCode?, codex? }   true adds Rojo-Hub to that agent's config, false takes it out
 	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
 	GET    /studio                                   WebSocket for the Studio plugin (spec 007, src/service/studio.ts)
-	GET    /place-choices                            the project picked per Studio place, { placeId: slotId }
-	DELETE /place-choices/:placeId                   forget one
+	PUT    /studio/places/:key    { slotId }         assign a project to an open Studio place (null: back to its project files)
 
 	Only programs on this machine may use it, never a web page:
 	- Host must name the loopback address and this port. A DNS-rebinding page
@@ -103,7 +102,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 	const agents = new AgentRegistrar();
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places() } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -184,13 +183,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return send(response, 200, hub.registry.order);
 				}
 			}
-			if (parts[0] === "place-choices") {
-				if (method === "GET" && parts.length === 1) return send(response, 200, hub.registry.placeChoices);
-				if (method === "DELETE" && parts.length === 2) {
-					delete hub.registry.placeChoices[parts[1]];
-					hub.registry.save();
-					return send(response, 200, hub.registry.placeChoices);
-				}
+			if (method === "PUT" && parts[0] === "studio" && parts[1] === "places" && parts.length === 3) {
+				const input = await body(request);
+				if (input.slotId !== null && typeof input.slotId !== "string") return send(response, 400, { error: "slotId must be a project id or null" });
+				if (typeof input.slotId === "string") hub.registry.get(input.slotId);
+				hub.studio.assign(parts[2], input.slotId as string | null);
+				return send(response, 200, hub.studio.places());
 			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {

@@ -26,6 +26,17 @@ The project file already says which places a project belongs to: `servePlaceIds`
 
 ## Design
 
+### Decided in VS Code, never in Studio
+
+Asked for by Viper after the first live test: "everything should be decided from vscode not roblox",
+and "it would be ideal that we only change what we need to so bumping up to newer rojo versions is
+fairly easy". So the plugin has no choices of its own: a read-only line under the Rojo window's
+buttons shows the service's answer, and the panel's **Studio places** section lists every open place
+with a list to assign it a project (`PUT /studio/places/:key`). An assignment comes first, for any
+place: saved places keep it by place ID (`placeChoices`), an unsaved place (ID 0 or a template's,
+shared by all of them) only while its window is open. This replaced a *Sync with…* picker in the
+plugin, which needed a prop and a callback threaded through Rojo's page; the protocol went to 2.
+
 ### Where the connect information comes from
 
 The project file is the source. Nothing Rojo-Hub-specific is added to the repo (no TOML), and no

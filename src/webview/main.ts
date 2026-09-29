@@ -15,7 +15,7 @@
 	of time, and the panel keeps them.
 */
 
-import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption } from "../common/api";
+import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
@@ -795,6 +795,50 @@ function studioPluginNotice(): string {
 	return "";
 }
 
+/*
+	Studio places (spec 007): every open place with Rojo-Hub's plugin, what it
+	syncs with, and a list to assign it a project. Which project a place syncs
+	with is decided here, never in Studio.
+*/
+const PLACE_STATUS: Record<StudioPlaceView["status"], { icon: string; kind: string; label: string }> = {
+	connect: { icon: "plug", kind: "ok", label: "Synced" },
+	choose: { icon: "question", kind: "info", label: "Assign a project" },
+	stopped: { icon: "clock", kind: "", label: "Waiting" },
+	unsupported: { icon: "warning", kind: "bad", label: "Rojo too old" },
+	unsaved: { icon: "question", kind: "info", label: "Assign a project" },
+	none: { icon: "question", kind: "info", label: "Assign a project" },
+	incompatible: { icon: "warning", kind: "bad", label: "Reopen the place" },
+};
+
+function studioPlaces(): string {
+	const places = state!.studioPlaces;
+	if (places.length === 0) {
+		return `<div class="empty compact">${icon("device-desktop", "empty-icon")}<p class="muted small">No Studio place is open with Rojo-Hub's plugin. Open one and it shows here; a place listed in a project's servePlaceIds syncs by itself.</p></div>`;
+	}
+	const rows = places
+		.map((place) => {
+			const shown = PLACE_STATUS[place.status];
+			const status = place.status === "connect" && !place.syncedWith ? { ...shown, icon: "loading", label: "Connecting" } : shown;
+			const options = state!.slots
+				.map((slot) => `<option value="${escape(slot.id)}"${place.assigned === slot.id ? " selected" : ""}>${escape(slot.projectName)}  :${slot.port}${slot.state === "running" ? "" : " (stopped)"}</option>`)
+				.join("");
+			const title = `${place.placeName} (${place.unsaved ? "not saved to Roblox" : place.placeId}) · plugin ${place.pluginVersion}`;
+			return `<div class="member studio-place">
+				<span class="grow two-line">
+					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}</span>
+					<span class="sub ellipsis" title="${escape(place.message)}">${escape(place.message)}</span>
+				</span>
+				<span class="pill ${status.kind}" title="${escape(place.message)}">${icon(status.icon, status.icon === "loading" ? "codicon-modifier-spin" : "")}<span class="ellipsis">${escape(status.label)}</span></span>
+				<select data-action="assign-place" data-key="${escape(place.key)}" title="The project this place syncs with. Automatic follows the project files (servePlaceIds, then placeId) and the last sync.">
+					<option value=""${place.assigned ? "" : " selected"}>Automatic</option>
+					${options}
+				</select>
+			</div>`;
+		})
+		.join("");
+	return `<div class="card studio-places">${rows}</div>`;
+}
+
 /** A count's first word stays in a narrow panel; the rest ("serving") hides. */
 function countText(count: string): string {
 	const [lead, ...rest] = count.split(" ");
@@ -1007,6 +1051,7 @@ function render(): void {
 		${studioPluginNotice()}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
+		${section("studio", "Studio places", "device-desktop", state.studioPlaces.length ? String(state.studioPlaces.length) : "", "", studioPlaces())}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
 		${section("agents", "Agent access", "robot", agentCount ? String(agentCount) : "", "", agentsBody())}
@@ -1671,6 +1716,10 @@ document.addEventListener("change", (event) => {
 		return setAgent(box.dataset.agent as AgentStatus["id"] | "vscode", box.checked);
 	}
 	const select = event.target as HTMLSelectElement;
+	if (select.dataset.action === "assign-place") {
+		send({ type: "assignPlace", key: select.dataset.key ?? "", slotId: select.value || null });
+		return;
+	}
 	if (select.dataset.action !== "add-member" || !select.value) return;
 	const separator = select.value.indexOf(":");
 	const kind = select.value.slice(0, separator);

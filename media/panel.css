@@ -1722,3 +1722,17 @@ button:focus-visible {
 	display: inline-flex;
 	color: var(--info);
 }
+
+/* Studio places (spec 007) */
+.studio-place select {
+	flex: none;
+	max-width: 45%;
+	background: var(--vscode-dropdown-background);
+	color: var(--vscode-dropdown-foreground);
+	border: 1px solid var(--vscode-dropdown-border, transparent);
+	border-radius: 3px;
+}
+
+.studio-place .pill {
+	flex: none;
+}

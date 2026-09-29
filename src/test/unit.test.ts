@@ -25,7 +25,7 @@ import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from 
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
-import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate } from "../service/studio";
+import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
 
@@ -575,79 +575,75 @@ test("Studio places: servePlaceIds, then placeId, then the remembered project (s
 	assert.equal(matchPlace(place(111), [lobby], null).target?.slotId, "lobby", "one project serves several places");
 });
 
+test("Studio places: an assignment from VS Code wins, for any place, saved or not", () => {
+	const lobby = candidate({ slotId: "lobby", servePlaceIds: [111] });
+	const other = candidate({ slotId: "other" });
+	const assigned = matchPlace(place(111), [lobby, other], "other");
+	assert.equal(assigned.target?.slotId, "other");
+	assert.equal(assigned.target?.reason, "assigned");
+	assert.equal(matchPlace(place(0, null, true), [lobby, other], "other").target?.slotId, "other", "an unsaved place too");
+	assert.equal(matchPlace(place(0, null, true), [lobby, other], null).status, "unsaved");
+	const waiting = matchPlace(place(111), [lobby, { ...other, state: "stopped", sessionId: null }], "other");
+	assert.equal(waiting.status, "stopped", "an assigned project that is not serving is waited for");
+	assert.equal(waiting.projectId, "other");
+	assert.equal(matchPlace(place(111), [lobby], "removed").target?.slotId, "lobby", "an assignment to a project that is gone is ignored");
+});
+
 test("Studio places: only running projects connect, and a stopped claimant is not skipped for a lower tier", () => {
 	const stopped = candidate({ slotId: "game", servePlaceIds: [111], state: "stopped", sessionId: null });
 	const other = candidate({ slotId: "other" });
 	const answer = matchPlace(place(111, "other"), [stopped, other], null);
 	assert.equal(answer.status, "stopped");
 	assert.equal(answer.target, null);
-	assert.match(answer.message, /game is this place's project/);
+	assert.match(answer.message, /Waiting for game/);
 	const starting = candidate({ slotId: "game", servePlaceIds: [111], state: "starting", sessionId: null });
 	assert.equal(matchPlace(place(111), [starting], null).status, "stopped");
 });
 
-test("Studio places: several running claimants need a pick, which is remembered per place", () => {
+test("Studio places: several serving claimants are assigned in VS Code; only serving ones compete", () => {
 	const a = candidate({ slotId: "a", servePlaceIds: [111] });
 	const b = candidate({ slotId: "b", servePlaceIds: [111] });
-	const stoppedB = { ...b, state: "stopped" as const, sessionId: null };
-	assert.equal(matchPlace(place(111), [a, b], null).status, "choose");
+	const choose = matchPlace(place(111), [a, b], null);
+	assert.equal(choose.status, "choose");
+	assert.match(choose.message, /VS Code/);
 	assert.equal(matchPlace(place(111), [a, b], "b").target?.slotId, "b");
-	assert.equal(matchPlace(place(111), [a, b], "gone").status, "choose", "a pick of a project that no longer claims it is ignored");
-	assert.equal(matchPlace(place(111), [a, stoppedB], null).target?.slotId, "a", "only running claimants compete");
+	assert.equal(matchPlace(place(111), [a, { ...b, state: "stopped", sessionId: null }], null).target?.slotId, "a");
 });
 
 test("Studio places: a place keeps to its own project while that one restarts", () => {
 	const mine = candidate({ slotId: "mine", servePlaceIds: [111] });
 	const fork = candidate({ slotId: "fork", servePlaceIds: [111] });
 	const restarting = { ...mine, state: "starting" as const, sessionId: null };
-	// last synced with "mine": while it restarts, the place waits instead of taking the fork
 	const waiting = matchPlace(place(111, "mine"), [restarting, fork], null);
 	assert.equal(waiting.status, "stopped");
-	assert.match(waiting.message, /^mine is this place's project/);
-	assert.equal(matchPlace(place(111, "mine"), [mine, fork], null).target?.slotId, "mine", "and goes back to it, without a pick");
-	// a pick wins over the remembered project, and is waited for the same way
-	assert.equal(matchPlace(place(111, "mine"), [mine, fork], "fork").target?.slotId, "fork");
-	assert.equal(matchPlace(place(111, "mine"), [mine, { ...fork, state: "stopped" as const, sessionId: null }], "fork").status, "stopped");
-	// a place that never synced still takes the only serving claimant
-	assert.equal(matchPlace(place(111), [restarting, fork], null).target?.slotId, "fork");
+	assert.match(waiting.message, /^Waiting for mine/);
+	assert.equal(matchPlace(place(111, "mine"), [mine, fork], null).target?.slotId, "mine", "and goes back to it without being asked");
+	assert.equal(matchPlace(place(111), [restarting, fork], null).target?.slotId, "fork", "a place that never synced takes the only serving claimant");
 });
 
-test("Studio places: blocked, unsaved and old-Rojo places never connect", () => {
+test("Studio places: blocked places and old Rojo never connect", () => {
 	const blocked = candidate({ slotId: "x", servePlaceIds: [111], blockedPlaceIds: [111] });
 	assert.equal(matchPlace(place(111), [blocked], null).status, "none");
-	const unsaved = matchPlace(place(0, "x", true), [candidate({ slotId: "x" })], null);
-	assert.equal(unsaved.status, "unsaved");
-	assert.equal(unsaved.projects.length, 1, "running projects are still listed for picking by hand");
 	const old = matchPlace(place(111), [candidate({ slotId: "sf", servePlaceIds: [111], rojoVersion: "7.3.0" })], null);
 	assert.equal(old.status, "unsupported");
 	assert.match(old.message, /Rojo 7\.3\.0/);
-	assert.equal(old.projects[0].supported, false);
 	assert.equal(speaksProtocol5("7.7.0"), true);
 	assert.equal(speaksProtocol5("8.0.1"), true);
 	assert.equal(speaksProtocol5("7.6.1"), false);
 });
 
-test("Studio places: claimants are listed first for the picker", () => {
-	const answer = matchPlace(place(111), [candidate({ slotId: "z" }), candidate({ slotId: "y", servePlaceIds: [111] })], null);
-	assert.deepEqual(
-		answer.projects.map((project) => [project.slotId, project.reason]),
-		[
-			["y", "servePlaceIds"],
-			["z", null],
-		],
-	);
-});
-
-test("the Studio WebSocket: hello gets the place's answer, changes are pushed, web pages are refused", async () => {
+test("the Studio WebSocket: hello gets the place's answer, changes are pushed, VS Code assigns, web pages are refused", async () => {
 	const { createServer } = await import("node:http");
 	let candidates: PlaceCandidate[] = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111 })];
-	const choices = new Map<number, string | null>();
+	const assigned = new Map<number, string>();
 	const synced = new Map<number, string>();
-	const links = new StudioLinks(
-		() => candidates,
-		{ get: (id) => choices.get(id) ?? null, set: (id, slot) => void choices.set(id, slot) },
-		{ get: (id) => synced.get(id) ?? null, set: (id, name) => void synced.set(id, name) },
-	);
+	const memory: PlaceMemory = {
+		assigned: (id) => assigned.get(id) ?? null,
+		assign: (id, slot) => void (slot ? assigned.set(id, slot) : assigned.delete(id)),
+		synced: (id) => synced.get(id) ?? null,
+		sync: (id, name) => void synced.set(id, name),
+	};
+	const links = new StudioLinks(() => candidates, memory);
 	const server = createServer();
 	let port = 0;
 	server.on("upgrade", (request, socket, head) => {
@@ -657,13 +653,15 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 	});
 	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
 	port = (server.address() as { port: number }).port;
-	try {
+	const open = async (hello: StudioHello) => {
 		const socket = new WebSocket(`ws://127.0.0.1:${port}${STUDIO_PATH}`);
 		const inbox: StudioMatch[] = [];
 		socket.onmessage = (event) => {
-			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "ping" };
+			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "welcome" | "ping" };
+			if (message.type === "welcome") socket.send(JSON.stringify(hello));
 			if (message.type === "match") inbox.push(message);
 		};
+		await new Promise((done, fail) => ((socket.onopen = done), (socket.onerror = fail)));
 		const next = async (): Promise<StudioMatch> => {
 			const deadline = Date.now() + 3000;
 			while (inbox.length === 0 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
@@ -671,40 +669,57 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 			assert.ok(message, "an answer arrived");
 			return message;
 		};
-		await new Promise((done, fail) => ((socket.onopen = done), (socket.onerror = fail)));
+		return { socket, next };
+	};
+	try {
 		const hello: StudioHello = { type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "test", placeId: 111, gameId: 1, placeName: "Lobby", unsaved: false, remembered: null };
-		socket.send(JSON.stringify(hello));
-		const first = await next();
+		const lobby = await open(hello);
+		const first = await lobby.next();
 		assert.equal(first.status, "connect");
 		assert.equal(first.target?.port, 35111);
 
 		// the project's rojo restarts: the new session reaches the plugin without it asking
 		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
-		assert.equal((await next()).target?.sessionId, "second");
+		assert.equal((await lobby.next()).target?.sessionId, "second");
 
-		// reporting the sync puts the place on the project's card
-		socket.send(JSON.stringify({ type: "state", connected: { port: 35111, projectName: "game", sessionId: "second" } }));
+		// reporting the sync puts the place on the project's card and in the service's memory
+		lobby.socket.send(JSON.stringify({ type: "state", connected: { port: 35111, projectName: "game", sessionId: "second" } }));
 		await new Promise((done) => setTimeout(done, 100));
 		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
 		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
-		assert.equal(synced.get(111), "game", "the service records what the place synced with");
+		assert.equal(synced.get(111), "game");
 
-		// a second claimant appears: the place keeps to the project it syncs with; a pick moves it, and is stored
+		// a second claimant appears: the place keeps to the project it syncs with
 		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];
-		const kept = await next();
-		assert.equal(kept.status, "connect");
-		assert.equal(kept.target?.slotId, "game");
-		socket.send(JSON.stringify({ type: "choose", slotId: "fork" }));
-		assert.equal((await next()).target?.slotId, "fork");
-		assert.equal(choices.get(111), "fork");
+		await new Promise((done) => setTimeout(done, 400));
+		assert.equal(links.places()[0].projectId, "game", "its answer, and so nothing sent, is unchanged");
+
+		// VS Code assigns the fork: stored per place, and the plugin is told at once
+		links.assign("111", "fork");
+		assert.equal((await lobby.next()).target?.slotId, "fork");
+		assert.equal(assigned.get(111), "fork");
+		const [view] = links.places();
+		assert.equal(view.key, "111");
+		assert.equal(view.assigned, "fork");
+		assert.equal(view.syncedWith, "game");
+
+		// an unsaved place is assigned by window, and forgotten when the window closes
+		const unsaved = await open({ ...hello, placeId: 0, placeName: "Place1", unsaved: true });
+		assert.equal((await unsaved.next()).status, "unsaved");
+		const key = links.places().find((entry) => entry.unsaved)!.key;
+		assert.match(key, /^studio:/);
+		links.assign(key, "game");
+		assert.equal((await unsaved.next()).target?.slotId, "game");
+		assert.throws(() => links.assign("0", "game"), /not a place ID/);
+		unsaved.socket.close();
 
 		// a plugin speaking another protocol is told to reopen the place instead of being matched
-		socket.send(JSON.stringify({ ...hello, protocol: STUDIO_PROTOCOL + 1 }));
-		assert.equal((await next()).status, "incompatible");
+		lobby.socket.send(JSON.stringify({ ...hello, protocol: STUDIO_PROTOCOL + 1 }));
+		assert.equal((await lobby.next()).status, "incompatible");
 
-		socket.close();
+		lobby.socket.close();
 		await new Promise((done) => setTimeout(done, 200));
-		assert.equal(links.count, 0, "a closed socket is forgotten");
+		assert.equal(links.count, 0, "closed sockets are forgotten");
 
 		// Node's WebSocket sends no Origin, so a web page's handshake is sent by hand
 		const refused = await fetch(`http://127.0.0.1:${port}${STUDIO_PATH}`, {

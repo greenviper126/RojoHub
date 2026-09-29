@@ -937,11 +937,6 @@ function App:render()
 						-- Rojo-Hub
 						hubEnabled = self.hub ~= nil,
 						hubMatch = self.state.hubMatch,
-						onHubPick = function(project)
-							if self.hub then
-								self.hub:pick(project)
-							end
-						end,
 
 						onNavigateSettings = function()
 							self.backPage = AppStatus.NotConnected

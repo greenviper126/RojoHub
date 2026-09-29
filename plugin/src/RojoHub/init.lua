@@ -29,7 +29,7 @@ local HubVersion = require(script.Version)
 
 local SERVICE_URL = "ws://127.0.0.1:34870/studio"
 -- Must match STUDIO_PROTOCOL in Rojo-Hub's src/common/api.ts.
-local PROTOCOL = 1
+local PROTOCOL = 2
 -- Seconds between tries to reach the service after it went away; the last one repeats.
 local RETRY_SECONDS = { 1, 2, 5, 10 }
 -- How often the connect decision is looked at again (sessions end, pages change).
@@ -166,7 +166,15 @@ function Hub:lost(reason)
 	self.reported = nil
 	self.failures += 1
 	self.nextAttempt = os.clock() + RETRY_SECONDS[math.min(self.failures, #RETRY_SECONDS)]
-	self.app:setHubMatch(nil)
+	self:show(nil)
+end
+
+-- Draws the service's answer. A drawing error must never stop the connecting.
+function Hub:show(match)
+	local ok, err = pcall(self.app.setHubMatch, self.app, match)
+	if not ok then
+		Log.warn("Rojo-Hub could not show its status: {}", err)
+	end
 end
 
 function Hub:send(message)
@@ -193,8 +201,19 @@ function Hub:receive(text)
 		Log.trace("Connected to Rojo-Hub {}", message.serviceVersion)
 		self:sendHello()
 	elseif message.type == "match" then
+		local before = self.match and self.match.target
+		local after = message.target
+		if
+			after
+			and after.reason == "assigned"
+			and not (before and before.reason == "assigned" and before.slotId == after.slotId)
+		then
+			-- Assigned in VS Code just now: that is asking for a sync, even to a session the user left.
+			self.declined = nil
+			self.attempt = nil
+		end
 		self.match = message
-		self.app:setHubMatch(message)
+		self:show(message)
 		self:evaluate()
 	end
 end
@@ -326,20 +345,6 @@ end
 ]]
 function Hub:decline(sessionId)
 	self.declined = sessionId or (self.match and self.match.target and self.match.target.sessionId)
-end
-
--- The picker on the Not Connected page.
-function Hub:pick(project)
-	local match = self.match
-	if match and match.status == "choose" and project.reason ~= nil then
-		-- Remembered for this place by the service, which then answers "connect".
-		self:send({ type = "choose", slotId = project.slotId })
-		return
-	end
-	self.declined = nil
-	self.app.setHost("localhost")
-	self.app.setPort(tostring(project.port))
-	self.app:startSession()
 end
 
 return Hub

@@ -149,7 +149,6 @@ function NotConnectedPage:render()
 		HubStatus = if self.props.hubEnabled
 			then e(HubStatusLine, {
 				match = self.props.hubMatch,
-				onPick = self.props.onHubPick,
 				transparency = self.props.transparency,
 				layoutOrder = 4,
 			})

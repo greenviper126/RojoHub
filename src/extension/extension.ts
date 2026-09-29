@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -52,6 +52,8 @@ let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
 /** The Studio plugin's install, from the last snapshot (spec 007). */
 let lastStudioPlugin: StudioPluginStatus | null = null;
+/** Open Studio places, from the last snapshot (spec 007). */
+let lastStudioPlaces: StudioPlaceView[] = [];
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -202,6 +204,7 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastGroups = snapshot.groups;
 	lastOrder = snapshot.order;
 	lastStudioPlugin = snapshot.studioPlugin ?? null;
+	lastStudioPlaces = snapshot.studioPlaces ?? [];
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
 	render();
@@ -295,6 +298,7 @@ function render(): void {
 		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
+		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
 	});
 	updateStatus();
 }
@@ -1205,6 +1209,12 @@ async function handlePanel(message: FromPanel): Promise<void> {
 		case "agentNudge":
 			hideAgentNudge(hubHome, message.action);
 			return refresh();
+		case "assignPlace":
+			await act(`place:${message.key}`, async () => {
+				lastStudioPlaces = await client.assignPlace(message.key, message.slotId);
+				render();
+			});
+			return;
 	}
 }
 
@@ -1235,6 +1245,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			agents: { url: MCP_URL, vscode: false, list: [] },
 			agentNudge: false,
 			studioPlugin: null,
+			studioPlaces: [],
 		});
 		void vscode.window.showWarningMessage(message);
 		return;

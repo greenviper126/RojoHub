@@ -151,8 +151,8 @@ every two seconds until it is back.
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
 
-It has five sections that fold open and closed (Projects, Groups, Active ports, Port settings and
-Agent access), and a footer. **Projects, Groups and Active ports start open; Port settings and Agent
+It has six sections that fold open and closed (Projects, Groups, Studio places, Active ports, Port
+settings and Agent access), and a footer. **Projects, Groups, Studio places and Active ports start open; Port settings and Agent
 access start folded.** Within Projects, **only the first item starts open**: the first workspace
 (or, with no workspaces, the first project card); the rest start folded. Whatever you fold or open
 is remembered. Opening a project from elsewhere (a group, Active ports, the status bar) unfolds its
@@ -283,7 +283,13 @@ projects are serving (green when all are). Inside:
 - ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete …?* on
   a row under the name; the projects stay). Both show when the pointer is on the card.
 
-**Active ports** (below Groups; the header shows how many): every project serving right now, lowest
+**Studio places** (below Groups; the header shows how many): every open Studio place with Rojo-Hub's
+plugin, its name (and *unsaved*), what it syncs with or waits for, a status pill (*Synced*,
+*Connecting*, *Waiting*, *Assign a project*, *Rojo too old*, *Reopen the place*), and a list to assign
+it a project; *Automatic* follows its project files and its last sync (see
+[Connecting Studio](#7-connecting-studio)). It says so when no place is open.
+
+**Active ports** (below Studio places; the header shows how many): every project serving right now, lowest
 port first, with its status light, name and branch, and its address `localhost:<port>`; clicking
 the address copies the port number. The quickest place to get an address into Studio's Rojo plugin. It says *Nothing
 serving* when nothing is.
@@ -522,12 +528,13 @@ so; add that port to `rojoHub.excludedPorts` and the project moves.
 Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.0's plugin, changed to connect by
 itself. With it, a place connects with no port typed and no click.
 
-**Which project a place syncs with.** When a place opens, the plugin tells the service its
-`PlaceId`, and the service answers from the project files, in this order:
+**Which project a place syncs with** is decided in VS Code, never in Studio. When a place opens, the
+plugin tells the service its `PlaceId`, and the service answers, in this order:
 
-1. a project whose `servePlaceIds` lists the place;
-2. a project whose `placeId` is the place's;
-3. the project this place last synced with. The service records it (`placeSynced` in `registry.json`)
+1. the project assigned to the place in the panel's **Studio places** section (see below);
+2. a project whose `servePlaceIds` lists the place;
+3. a project whose `placeId` is the place's;
+4. the project this place last synced with. The service records it (`placeSynced` in `registry.json`)
    whenever a place with the plugin syncs; the plugin's own per-place record, like Rojo's, is only the
    fallback, since every open Studio shares that one settings value and overwrites the others' entries.
 
@@ -541,18 +548,24 @@ it connects when the place opens, when its project is started later, and again, 
 the project's Rojo restarts with a new session (a crash, a port move, a project file change). A
 branch switch keeps the session, so nothing happens.
 
-**When it does not connect by itself**, the Rojo window's Not Connected page says why under the
-buttons, with a **Sync with…** list of every serving project:
+**Studio places** (a panel section) lists every open place with the plugin: its name, what it syncs
+with or waits for, and a list to assign it a project. *Automatic* (the default) follows the order
+above; picking a project assigns it, and the place syncs with it at once. An assignment is kept per
+place ID (`placeChoices` in `registry.json`; removing the project forgets it). An unsaved place (`PlaceId`
+0, or a Roblox template's ID such as a new Baseplate's) shares its ID with every other unsaved place,
+so its assignment is kept only while that Studio window is open. Studio's Rojo window only shows the
+service's answer in a line under its buttons; it has no choices of its own.
 
-- the place is not saved to Roblox (`PlaceId` 0, or a Roblox template's ID such as a new
-  Baseplate's): pick a project; once saved, it is remembered;
-- no project lists the place and it has never synced: pick one, and it is remembered;
-- two serving projects claim it: pick one; the service remembers the pick for that place
-  (`placeChoices` in `registry.json`), and removing the project forgets it;
+**When it does not connect by itself**, the Studio places row and the line in Studio say why:
+
+- the place is not saved to Roblox: assign it a project in VS Code;
+- no project lists the place and it has never synced: assign it one;
+- two serving projects claim it: assign it one. A place keeps to the project it last synced with,
+  though, so this only asks for a place that has not synced with either;
 - its project runs a Rojo older than 7.7: the plugin speaks only protocol 5. Pin
   `rojo-rbx/rojo@7.7.0`;
 - you pressed **Disconnect**, or **Abort** on the first sync: that session is not connected again by
-  itself. Connecting by hand, or a new session, lifts it;
+  itself. Connecting by hand, assigning it a project in VS Code, or a new session, lifts it;
 - *Rojo-Hub Auto Connect* is off in the plugin's settings.
 
 Rojo's confirmation before a first sync is kept for places the project does not list: the plugin's
@@ -564,7 +577,7 @@ playtest. With the Rojo-Hub service not running, the plugin behaves like Rojo's 
 included.
 
 **Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`) into Studio's
-local plugins folder, `%LOCALAPPDATA%RobloxPlugins`, when it starts and when it is updated, and
+local plugins folder, `%LOCALAPPDATA%\Roblox\Plugins`, when it starts and when it is updated, and
 only when the file there differs. Studio loads a new or changed plugin only when a place is opened,
 so an update reaches each open place when it is next opened. Other `RojoHub*.rbxm` or `.rbxmx` files
 there (a copy downloaded from a GitHub release) are removed. Rojo's own plugin
@@ -902,7 +915,7 @@ debugging.
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin }`: once at once, then on every change, within 150 ms |
+| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces }`: once at once, then on every change, within 150 ms |
 | `GET /slots` | | Every project with its state |
 | `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; without `projectFile`, its `default.project.json` or only `*.project.json` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
@@ -926,9 +939,8 @@ debugging.
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
 | `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin? }` | Settings (sent by the extension). Replaces all four: a missing field goes back to its default (`""`, `[]`, `true`, `true`). A port settings change moves ports at once; turning `studioPlugin` on installs the Studio plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
-| `GET /studio` | WebSocket | The Studio plugin's link (spec 007): JSON messages `welcome` → `hello` (place) → `match` (which project, pushed again on every change); `state` (what the place is synced to) and `choose` (a pick among several). Refused with a browser `Origin`, like every route |
-| `GET /place-choices` | | The project picked per Studio place: `{ placeId: slotId }` |
-| `DELETE /place-choices/:placeId` | | Forget one pick |
+| `GET /studio` | WebSocket | The Studio plugin's link (spec 007): JSON messages `welcome` → `hello` (place) → `match` (which project, pushed again on every change); `state` (what the place is synced to). Protocol 2. Refused with a browser `Origin`, like every route |
+| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open Studio place (`key` from the snapshot's `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` goes back to *Automatic*. Answers the new `studioPlaces` |
 | `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (config unreadable), last error |
 | `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` takes it out (only for an installed agent, and never on `other` or `unknown`) |
 | `POST /mcp` | JSON-RPC | The MCP server for agents (see [Agents](#10-agents)): one request object per POST, answered with plain JSON; a notification gets 202 with no body. Any other method on `/mcp` gets 405 |
@@ -949,7 +961,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project picked per Studio place where several claim it (`placeChoices`), and the project each place last synced with (`placeSynced`) |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project assigned to each Studio place in VS Code (`placeChoices`), and the project each place last synced with (`placeSynced`) |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
 | `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |

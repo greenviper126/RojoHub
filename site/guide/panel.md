@@ -14,6 +14,7 @@ The panel has five sections that fold open and closed, and a footer.
 |---|---|---|
 | **Projects** | A card per project, grouped by [workspace](./workspaces). Header: how many are serving, a filter and `+` (add a project). | open |
 | **Groups** | A card per [group](./groups). Header: how many, and `+` (new group). | open |
+| **Studio places** | Every open Studio place with Rojo-Hub's plugin: what it syncs with, and a list to assign it a project (see [Connecting Studio](./connecting-studio#studio-places)). | open |
 | **Active ports** | Every project serving right now, lowest port first, with its light, name, branch and `localhost:<port>`. Click the address to copy the port. Says *Nothing serving* when nothing is. | open |
 | **Port settings** | The port range and excluded ports, with *Save*, *Undo* and *Reset* (see [Ports](./ports#port-settings-in-the-panel)). | folded |
 | **Agent access** | A switch per AI agent (see [Agents](./agents)). | folded |
@@ -109,7 +110,7 @@ tag after its own (`test` for `test.project.json`).
 
 ## Folding
 
-- **Projects, Groups and Active ports start open; Port settings and Agent access start folded.**
+- **Projects, Groups, Studio places and Active ports start open; Port settings and Agent access start folded.**
 - Within Projects, **only the first item starts open**: the first workspace, or with no workspaces,
   the first project card.
 - Whatever you fold or open is **remembered**.

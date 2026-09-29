@@ -75,7 +75,7 @@ export interface SlotView {
 	keeps working across ordinary updates.
 */
 export const STUDIO_PATH = "/studio";
-export const STUDIO_PROTOCOL = 1;
+export const STUDIO_PROTOCOL = 2;
 
 /*
 	The service greets each new socket with { type: "welcome", protocol,
@@ -102,13 +102,7 @@ export interface StudioState {
 	connected: { port: number; projectName: string; sessionId: string } | null;
 }
 
-/** The user picked a project for this place among several that claim it; null forgets the pick. */
-export interface StudioChoose {
-	type: "choose";
-	slotId: string | null;
-}
-
-export type StudioToService = StudioHello | StudioState | StudioChoose;
+export type StudioToService = StudioHello | StudioState;
 
 export interface StudioProject {
 	slotId: string;
@@ -117,20 +111,19 @@ export interface StudioProject {
 	sessionId: string | null;
 	branch: string | null;
 	targetLabel: string;
-	/** Why it belongs to this place, or null when it does not (listed only for picking by hand). */
-	reason: "servePlaceIds" | "placeId" | "remembered" | null;
-	/** Served by Rojo 7.7 or newer, which the plugin speaks (protocol 5). */
-	supported: boolean;
+	/** Why it is this place's project. */
+	reason: "assigned" | "servePlaceIds" | "placeId" | "remembered";
 }
 
 /*
-	The service's answer, sent after hello and again whenever it changes.
-	- connect: `target` is the one running project for this place; connect to it.
-	- choose: several running projects claim the place and none was picked.
+	The service's answer, sent after hello and again whenever it changes. Which
+	project a place syncs with is decided in VS Code (spec 007): the plugin only
+	connects to `target` and shows `message`.
+	- connect: `target` is this place's project, serving; connect to it.
+	- choose: several serving projects claim the place; assign one in VS Code.
 	- stopped: the place's project is not serving.
 	- unsupported: the place's project runs a Rojo the plugin cannot speak.
-	- unsaved / none: nothing to connect to by itself; `projects` lists every
-	  running project for picking by hand.
+	- unsaved / none: no project for this place; assign one in VS Code.
 	- incompatible: the plugin's protocol is not the service's.
 */
 export interface StudioMatch {
@@ -139,8 +132,28 @@ export interface StudioMatch {
 	status: "connect" | "choose" | "stopped" | "unsupported" | "unsaved" | "none" | "incompatible";
 	message: string;
 	target: StudioProject | null;
-	/** Every running project, those that claim the place first. */
-	projects: StudioProject[];
+}
+
+/*
+	An open Studio place with Rojo-Hub's plugin, as the panel lists it. `key`
+	names the place for an assignment: its place ID, or for an unsaved place
+	(which shares ID 0 with every other) "studio:<id>" for this one window,
+	forgotten when it closes.
+*/
+export interface StudioPlaceView {
+	key: string;
+	placeId: number;
+	placeName: string;
+	unsaved: boolean;
+	pluginVersion: string;
+	status: StudioMatch["status"];
+	message: string;
+	/** The project it should sync with, when there is one. */
+	projectId: string | null;
+	/** The project picked for it in VS Code, if any. */
+	assigned: string | null;
+	/** Synced now, with this project name. */
+	syncedWith: string | null;
 }
 
 /*
@@ -173,6 +186,8 @@ export interface Snapshot {
 	order: DisplayOrder;
 	/** Missing from services older than 0.19.0. */
 	studioPlugin?: StudioPluginStatus;
+	/** Open Studio places with Rojo-Hub's plugin (spec 007); missing from services older than 0.19.0. */
+	studioPlaces?: StudioPlaceView[];
 }
 
 /** What POST /slots/:id/branch made. */
