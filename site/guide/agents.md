@@ -95,6 +95,15 @@ when a repo has more than one project. With neither, the only project is used wh
 one.
 :::
 
+## Which Studio an agent looks at
+
+`status`, `serve_here` and `switch` name the Studio places synced to
+the project, with their place IDs (from Rojo-Hub's Studio plugin), and `status` ends with every open
+place and what it syncs with. With several Studio windows open for different projects, an agent
+using a Roblox Studio tool picks the Studio with that place ID. The server's instructions also tell
+agents that Rojo overwrites what it syncs (so they change files, not Studio), that a switch reaches
+Studio within about a second, and that they cannot choose which project a place syncs with.
+
 ## Claims
 
 Several agents can work in worktrees of one repo while one Studio shows one of them. So
@@ -112,8 +121,9 @@ Several agents can work in worktrees of one repo while one Studio shows one of t
 - **Your own switches always go through** (the picker, Open Menu's *Switch Branch…*) and clear the
   claim, and so does *New branch*.
 - `release` drops it. With a `path` in another worktree it refuses; without a `path` it refuses
-  unless the agent passes `force`. Claims are kept in memory, so
-  restarting the service forgets them.
+  unless the agent passes `force`.
+- Claims are kept across a service restart (an update, a crash) until they run out.
+- Claims are **per project**: agents working in different projects never block each other.
 
 ## Uninstalling
 

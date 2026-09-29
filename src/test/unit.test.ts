@@ -22,6 +22,7 @@ import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
+import { Hub } from "../service/hub";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
@@ -768,4 +769,17 @@ test("the Studio plugin says the same version as the service", () => {
 	assert.equal(/return "([^"]+)"/.exec(lua)?.[1], SERVICE_VERSION);
 	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "init.lua"), "utf8");
 	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
+});
+
+test("agents' claims survive a service restart, and run out as before", () => {
+
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-claims-"));
+	const first = new Hub(home);
+	first.setClaim("game", { key: "worktree:c:/work/feature", label: "feature", until: Date.now() + 60_000 });
+	first.setClaim("old", { key: "worktree:c:/work/old", label: "old", until: Date.now() - 1 });
+	const second = new Hub(home);
+	assert.equal(second.claimOf("game")?.label, "feature", "a new service keeps a claim that has not run out");
+	assert.equal(second.claimOf("old"), null, "a claim that ran out is not brought back");
+	second.setClaim("game", null);
+	assert.equal(new Hub(home).claimOf("game"), null, "a released claim stays released");
 });

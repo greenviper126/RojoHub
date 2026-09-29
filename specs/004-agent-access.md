@@ -25,7 +25,8 @@ playtest shows, without either of them knowing.
   branch) for 10 minutes. Any tool call from the same worktree renews it. While another target
   holds the claim, both tools refuse with who holds it and until when, unless `force: true`.
   `release` drops it. A switch by the user (panel, picker, menu) always goes through and clears the
-  claim. Claims live in the service's memory: a restarted service forgets them.
+  claim. Claims are kept in `claims.json` (since 0.19.1; before, in memory only, so a service
+    restarted by an update freed every project) and survive a restart until they run out.
 - **Registration**, the `rojoHub.agents` setting (application scope, checkboxes) and the panel's
   *Agent access* section, which show and change the same values:
   - *VS Code agents*: on by default. Registered with the provider API

@@ -22,11 +22,17 @@ import { Conflict, NotFound } from "./registry";
 export const CLAIM_MS = 10 * 60 * 1000;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio.
+const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself.
 
-Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Several agents may share one Studio: serve_here claims the project for your worktree for 10 minutes (renewed by each Rojo-Hub call you make from it) and is refused while another worktree holds it; do not pass force unless the user asks. Call release when you are done with Studio.
+Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch to every synced place within about a second.
 
-You cannot start, stop, add or remove projects. If a project is not serving, or a repo is not registered, tell the user to do it in the Rojo-Hub panel in VS Code.`;
+Which Studio to look at: serve_here and status name the Studio places synced to the project, with their place IDs. The user may have several Studio windows open for different projects; use the one whose place ID is listed (Roblox Studio tools list each open Studio with its place ID). If no place is synced, say so to the user instead of inspecting another project's Studio.
+
+Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
+
+Several agents may share one project: serve_here claims it for your worktree for 10 minutes (renewed by each Rojo-Hub call you make from it) and is refused while another worktree holds it; do not pass force unless the user asks. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
+
+You cannot start, stop, add or remove projects, or choose which project a Studio place syncs with. If a project is not serving, a repo is not registered, or a place is not synced, tell the user to do it in the Rojo-Hub panel in VS Code.`;
 
 interface Tool {
 	name: string;
@@ -45,7 +51,7 @@ export const TOOLS: Tool[] = [
 		name: "status",
 		title: "Rojo-Hub status",
 		description:
-			"Lists the Rojo projects Rojo-Hub serves: port, whether rojo is serving, whether Studio is connected, which worktree or branch each one serves, and who claimed it. With path, also says whether your worktree is the one being served.",
+			"Lists the Rojo projects Rojo-Hub serves: port, whether rojo is serving, which Studio places are synced to each (name and place ID, to pick the right Studio), which worktree or branch each one serves, and who claimed it, then every open Studio place and what it syncs with. With path, also says whether your worktree is the one being served.",
 		inputSchema: { type: "object", properties: { path: pathProperty } },
 		annotations: { readOnlyHint: true },
 	},
@@ -53,7 +59,7 @@ export const TOOLS: Tool[] = [
 		name: "serve_here",
 		title: "Serve my worktree",
 		description:
-			"Makes Studio show your worktree: switches the project of the repo you are in to serve your worktree, live, without disconnecting Studio, and claims it for your worktree for 10 minutes. Call it before checking changes in Studio.",
+			"Makes Studio show your worktree: switches the project of the repo you are in to serve your worktree, live, without disconnecting Studio, and claims it for your worktree for 10 minutes. Says which Studio places (name and place ID) show it. Call it before checking changes in Studio.",
 		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, force: forceProperty }, required: ["path"] },
 	},
 	{
@@ -315,6 +321,7 @@ export class Mcp {
 		const lines: string[] = [];
 		for (const slot of slots) {
 			const claim = this.hub.claimOf(slot.id);
+			if (lines.length > 0) lines.push("");
 			const serves = slot.target.kind === "worktree" ? `${slot.targetLabel}${slot.branch && slot.branch !== slot.targetLabel ? ` (branch ${slot.branch})` : ""} at ${slot.target.path}` : `branch ${slot.targetLabel} (read-only copy)`;
 			lines.push(`${slot.projectName} (id ${slot.id}), port ${slot.port}: ${this.health(slot)}`, `  serves ${serves}`, `  repo ${slot.repoPath}`);
 			if (claim) lines.push(`  claimed by an agent in ${claim.label} until ${time(claim.until)}`);
@@ -324,17 +331,36 @@ export class Mcp {
 				lines.push(mine ? "  -> your worktree is the one being served" : "  -> your worktree is NOT being served; call serve_here to change that");
 			}
 		}
+		const places = this.hub.studio.places();
+		if (places.length > 0) {
+			lines.push("", "Open Studio places (with Rojo-Hub's plugin):");
+			for (const place of places) {
+				const project = place.syncedWith ? `synced with ${place.syncedWith}` : place.message;
+				lines.push(`  ${place.placeName} (${place.unsaved ? "not saved to Roblox" : `place ${place.placeId}`}): ${project}`);
+			}
+		}
 		return lines.join("\n");
 	}
 
+	/** `Lobby (place 111), Match (place 222)` */
+	private placeList(places: { placeName: string; placeId: number }[]): string {
+		return places.map((place) => `${place.placeName} (${place.placeId ? `place ${place.placeId}` : "not saved to Roblox"})`).join(", ");
+	}
+
 	private health(slot: SlotView): string {
+		const waiting = this.hub.studio.places().filter((place) => place.projectId === slot.id && place.syncedWith !== slot.projectName);
+		const waitingText = waiting.length > 0 ? ` Waiting for it: ${this.placeList(waiting)}.` : "";
 		if (slot.state === "running") {
-			return slot.connections > 0
-				? `Rojo is serving on port ${slot.port} and Studio is connected (${slot.connections}).`
-				: `Rojo is serving on port ${slot.port}, but no Studio is connected; the user connects the Rojo plugin to localhost:${slot.port}.`;
+			const synced = slot.places ?? [];
+			if (synced.length > 0) {
+				return `Rojo is serving on port ${slot.port}. Studio places synced to it: ${this.placeList(synced)}; look at the Studio with that place ID.${waiting.length > 0 ? ` Connecting: ${this.placeList(waiting)}.` : ""}`;
+			}
+			if (waiting.length > 0) return `Rojo is serving on port ${slot.port}. Studio places connecting to it: ${this.placeList(waiting)}.`;
+			if (slot.connections > 0) return `Rojo is serving on port ${slot.port} and Studio is connected (${slot.connections}), through Rojo's own plugin, so which place is not known.`;
+			return `Rojo is serving on port ${slot.port}, but no Studio place is synced to it. The user opens a place listed in the project's servePlaceIds (it syncs by itself), or assigns an open place in the Rojo-Hub panel's Studio places.`;
 		}
-		if (slot.state === "error") return `Rojo has an error: ${(slot.error ?? "").split("\n")[0]}`;
-		if (slot.state === "starting") return "Rojo is starting.";
-		return "Rojo is not serving this project, so Studio gets nothing; ask the user to start it in the Rojo-Hub panel.";
+		if (slot.state === "error") return `Rojo has an error: ${(slot.error ?? "").split("\n")[0]}${waitingText}`;
+		if (slot.state === "starting") return `Rojo is starting.${waitingText}`;
+		return `Rojo is not serving this project, so Studio gets nothing; ask the user to start it in the Rojo-Hub panel.${waitingText}`;
 	}
 }

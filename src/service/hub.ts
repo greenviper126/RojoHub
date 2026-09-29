@@ -96,7 +96,11 @@ export class Hub {
 	/** Slots with a port move queued, so a slow restart is not queued twice. */
 	private readonly moving = new Set<string>();
 
-	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
+	/*
+		Agents' claims by slot id (spec 004). Kept in claims.json too, so a service
+		restarted by an update (or a crash) does not free a project an agent is in
+		the middle of testing.
+	*/
 	private readonly claims = new Map<string, Claim>();
 
 	/** A port a slot is to move to, and since when it has been the one assigned (see refreshPorts). */
@@ -125,6 +129,7 @@ export class Hub {
 
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
+		this.loadClaims();
 		this.studio = new StudioLinks(() => this.placeCandidates(), {
 			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
 			assign: (placeId, slotId) => {
@@ -447,6 +452,26 @@ export class Hub {
 	setClaim(id: string, claim: Claim | null): void {
 		if (claim) this.claims.set(id, claim);
 		else this.claims.delete(id);
+		try {
+			const temporary = join(this.home, "claims.json.tmp");
+			writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.claims), null, "\t") + "\n");
+			renameSync(temporary, join(this.home, "claims.json"));
+		} catch {
+			// Claims still work for this service's life; only surviving a restart is lost.
+		}
+	}
+
+	private loadClaims(): void {
+		try {
+			const saved = JSON.parse(readFileSync(join(this.home, "claims.json"), "utf8")) as Record<string, Partial<Claim>>;
+			for (const [id, claim] of Object.entries(saved)) {
+				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number" && claim.until > Date.now()) {
+					this.claims.set(id, { key: claim.key, label: claim.label, until: claim.until });
+				}
+			}
+		} catch {
+			// none saved, or unreadable: start with none, as before
+		}
 	}
 
 	/*

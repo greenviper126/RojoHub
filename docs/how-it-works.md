@@ -832,12 +832,19 @@ agent is told to ask you.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, Studio connected or not, what it serves, who claimed it. Given the agent's folder, also whether its worktree is the one served. |
-| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it. |
+| `status` | Every project: port, serving or not, the Studio places synced to it (name and place ID), what it serves, who claimed it; then every open Studio place and what it syncs with. Given the agent's folder, also whether its worktree is the one served. |
+| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it; says which Studio places show it. |
 | `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. |
 | `release` | Drops the agent's claim. The project keeps serving what it serves. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
+
+**Which Studio to look at.** `status`, `serve_here` and `switch` name the Studio places synced to
+the project, with their place IDs (from Rojo-Hub's Studio plugin), and `status` ends with every open
+place and what it syncs with. With several Studio windows open for different projects, an agent
+using a Roblox Studio tool picks the Studio with that place ID. The server's instructions also tell
+agents that Rojo overwrites what it syncs (so they change files, not Studio), that a switch reaches
+Studio within about a second, and that they cannot choose which project a place syncs with.
 
 **Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them.
 So `serve_here` and `switch` claim the project for what they serve (a worktree, or a branch), for
@@ -857,7 +864,9 @@ holds it and until when (the agent can pass `force`, and is told to only when yo
 - **Your own switches always go through** (the panel's picker, Open Menu's *Switch Branch…*, or
   anything else that calls `POST /slots/:id/switch`), and *New branch*, clear the claim. Starting,
   stopping and group actions leave a claim in place.
-- Claims are kept in memory, so restarting the service forgets them. Removing a project drops its
+- Claims are kept in `claims.json` in the service's folder, so a service restarted by an update or a
+  crash keeps them until they run out. Claims are per project: agents in different projects never
+  block each other. Removing a project drops its
   claim.
 
 **Uninstalling** Rojo-Hub removes its Claude Code and Codex entries (only ones pointing at
@@ -971,6 +980,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
 | `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |
+| `claims.json` | Agents' claims on projects (spec 004), so they survive a service restart until they run out |
 | `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
 | `service.log` | Service start and stop, recovered errors, a damaged registry, git problems, and each Studio place's hello and every change of what it is told to sync with |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
