@@ -21,7 +21,8 @@ local defaultSettings = {
 	hubAutoConnect = true, -- Rojo-Hub (spec 007)
 	checkForPrereleases = false,
 	autoConnectPlaytestServer = false,
-	confirmationBehavior = "Initial" :: "Never" | "Initial" | "Large Changes" | "Unlisted PlaceId",
+	-- Rojo-Hub: places listed in servePlaceIds sync without asking, so connecting by itself needs no click (spec 007)
+	confirmationBehavior = "Unlisted PlaceId" :: "Never" | "Initial" | "Large Changes" | "Unlisted PlaceId",
 	largeChangesConfirmationThreshold = 5,
 	playSounds = true,
 	typecheckingEnabled = false,

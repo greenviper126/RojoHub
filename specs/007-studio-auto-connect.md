@@ -221,7 +221,21 @@ service's `/slots`.
 - Found: once synced, a place's `game.Name` is the project's name (Rojo sets the DataModel name), so
   the plugin reports the name from `MarketplaceService:GetProductInfo` instead.
 
-Not yet checked live: Disconnect and Abort being respected, the Sync with… picker, two projects
+- **Two projects claiming both places** (a second project with the same `servePlaceIds`): with both
+  serving and nothing picked, neither place connected. A pick sent over the WebSocket was stored and
+  the place connected to the picked project.
+- **Bug found and fixed:** a place synced with project A was handed to project B when A restarted,
+  because for those seconds B was the only serving claimant (Rojo's first-sync confirmation stopped
+  it; with *Never* it would have synced B into the place). Now a place keeps to the project picked
+  for it, else the one it syncs with, and waits while that one restarts. Checked again live: A
+  restarted, both places waited 5 s and went back to A; B got no connection.
+- **Abort** on that confirmation was respected: the plugin did not connect to B's session again.
+- The first-sync confirmation got in the way of connecting by itself ("its asking me to accept or
+  abort"), so the plugin's *Confirmation Behavior* now defaults to *Unlisted PlaceId*: listed places
+  sync without asking, others still ask. Rojo saves each setting's default the first time the plugin
+  runs, so a Studio that already ran an earlier build of this plugin keeps *Initial* until changed.
+
+Not yet checked live: Disconnect being respected, the Sync with… picker, two projects
 claiming one place in Studio (covered by unit tests), an unsaved place, and the panel's new tooltip
 and notice (need the extension installed).
 

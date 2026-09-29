@@ -596,6 +596,22 @@ test("Studio places: several running claimants need a pick, which is remembered 
 	assert.equal(matchPlace(place(111), [a, stoppedB], null).target?.slotId, "a", "only running claimants compete");
 });
 
+test("Studio places: a place keeps to its own project while that one restarts", () => {
+	const mine = candidate({ slotId: "mine", servePlaceIds: [111] });
+	const fork = candidate({ slotId: "fork", servePlaceIds: [111] });
+	const restarting = { ...mine, state: "starting" as const, sessionId: null };
+	// last synced with "mine": while it restarts, the place waits instead of taking the fork
+	const waiting = matchPlace(place(111, "mine"), [restarting, fork], null);
+	assert.equal(waiting.status, "stopped");
+	assert.match(waiting.message, /^mine is this place's project/);
+	assert.equal(matchPlace(place(111, "mine"), [mine, fork], null).target?.slotId, "mine", "and goes back to it, without a pick");
+	// a pick wins over the remembered project, and is waited for the same way
+	assert.equal(matchPlace(place(111, "mine"), [mine, fork], "fork").target?.slotId, "fork");
+	assert.equal(matchPlace(place(111, "mine"), [mine, { ...fork, state: "stopped" as const, sessionId: null }], "fork").status, "stopped");
+	// a place that never synced still takes the only serving claimant
+	assert.equal(matchPlace(place(111), [restarting, fork], null).target?.slotId, "fork");
+});
+
 test("Studio places: blocked, unsaved and old-Rojo places never connect", () => {
 	const blocked = candidate({ slotId: "x", servePlaceIds: [111], blockedPlaceIds: [111] });
 	assert.equal(matchPlace(place(111), [blocked], null).status, "none");
@@ -667,9 +683,11 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
 		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
 
-		// a pick among several is stored for the place
+		// a second claimant appears: the place keeps to the project it syncs with; a pick moves it, and is stored
 		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];
-		assert.equal((await next()).status, "choose");
+		const kept = await next();
+		assert.equal(kept.status, "connect");
+		assert.equal(kept.target?.slotId, "game");
 		socket.send(JSON.stringify({ type: "choose", slotId: "fork" }));
 		assert.equal((await next()).target?.slotId, "fork");
 		assert.equal(choices.get(111), "fork");

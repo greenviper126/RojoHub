@@ -553,8 +553,11 @@ buttons, with a **Sync with…** list of every serving project:
   itself. Connecting by hand, or a new session, lifts it;
 - *Rojo-Hub Auto Connect* is off in the plugin's settings.
 
-Rojo's confirmation for the first sync is kept (*Confirmation Behavior*, default *Initial*: once per
-project per Studio session), since connecting writes into the place. Nothing connects during a
+Rojo's confirmation before a first sync is kept for places the project does not list: the plugin's
+*Confirmation Behavior* defaults to *Unlisted PlaceId* (Rojo's own defaults to *Initial*), so a place
+in `servePlaceIds` syncs with no click and any other place asks once per project per Studio session,
+since syncing writes into the place. A place that last synced with one project waits for that
+project while its Rojo restarts; it is never handed to another project that claims the place too. Nothing connects during a
 playtest. With the Rojo-Hub service not running, the plugin behaves like Rojo's own, Auto Reconnect
 included.
 

@@ -36,7 +36,9 @@ Each hook is marked `-- Rojo-Hub` in the file.
 - `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.StatusLine` under the buttons.
 - `src/App/StatusPages/Settings/init.lua`: a *Rojo-Hub Auto Connect* row (`hubAutoConnect`).
 - `src/Settings.lua`: `hubAutoConnect = true`; `checkForUpdates` defaults to `false`, since Rojo's update
-  check points at Rojo's own plugin and this one updates with Rojo-Hub.
+  check points at Rojo's own plugin and this one updates with Rojo-Hub; `confirmationBehavior`
+  defaults to `"Unlisted PlaceId"` rather than `"Initial"`, so a place its project lists in
+  `servePlaceIds` syncs without a click, and any other place still asks before its first sync.
 - `testez.yml` (Rojo's, for selene's `roblox+testez` std) is copied beside `selene.toml`.
 
 ## Moving to a new Rojo release

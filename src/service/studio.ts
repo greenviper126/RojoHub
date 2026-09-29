@@ -61,6 +61,11 @@ const names = (projects: PlaceCandidate[]): string => projects.map((project) => 
 /*
 	The answer for one place. `choice` is the slot the user picked for it among
 	several, if any.
+
+	Among several claimants, the place keeps to its own: the one picked for it,
+	else the one it last synced with. While that one is down (its rojo
+	restarting), the place waits for it; it is never handed to another claimant
+	that happens to be the only one serving at that moment (seen live, spec 007).
 */
 export function matchPlace(place: Place, candidates: PlaceCandidate[], choice: string | null): Omit<StudioMatch, "type" | "serviceVersion"> {
 	const running = (project: PlaceCandidate) => project.state === "running" && project.sessionId !== null;
@@ -80,13 +85,21 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], choice: s
 			if (claiming.length === 0) continue;
 			for (const project of claiming) reasons.set(project.slotId, tier.reason);
 			const live = claiming.filter(running);
-			if (live.length === 0) {
+			const own =
+				claiming.find((project) => project.slotId === choice) ??
+				(claiming.length > 1 && place.remembered !== null ? claiming.find((project) => project.projectName === place.remembered) : undefined);
+			if (own && !running(own)) {
+				answer = {
+					status: "stopped",
+					message: `${own.projectName} is this place's project, and not serving. Start it in Rojo-Hub and this place syncs by itself.`,
+				};
+			} else if (live.length === 0) {
 				answer = {
 					status: "stopped",
 					message: `${names(claiming)} ${claiming.length === 1 ? "is" : "are"} this place's project, and not serving. Start it in Rojo-Hub and this place syncs by itself.`,
 				};
 			} else {
-				const picked = live.length === 1 ? live[0] : live.find((project) => project.slotId === choice);
+				const picked = own ?? (live.length === 1 ? live[0] : undefined);
 				if (!picked) {
 					answer = {
 						status: "choose",
@@ -195,6 +208,8 @@ export class StudioLinks {
 				this.log(`studio: ${message.placeName} (${message.placeId}) said hello, plugin ${message.pluginVersion}`);
 			} else if (message.type === "state") {
 				studio.connected = message.connected ?? null;
+				// What the place syncs with now is what it last synced with, which the plugin saves too.
+				if (studio.connected && studio.hello) studio.hello = { ...studio.hello, remembered: studio.connected.projectName };
 			} else if (message.type === "choose" && studio.hello && !studio.hello.unsaved) {
 				this.choices.set(studio.hello.placeId, message.slotId);
 			}
