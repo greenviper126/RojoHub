@@ -446,10 +446,20 @@ test("MCP: initialize, tools/list, notifications and unknown methods", async () 
 	assert.equal(unknownVersion.result.protocolVersion, "2025-11-25", "otherwise its newest");
 	assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null, "notifications get no answer");
 	const list = (await mcp.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-	assert.deepEqual(list.result.tools.map((tool) => tool.name), ["status", "serve_here", "switch", "release", "build", "sourcemap"]);
-	assert.ok(!TOOLS.some((tool) => /^(start|stop|add|remove)/.test(tool.name)), "no tool starts, stops, adds or removes projects");
+	const names = list.result.tools.map((tool) => tool.name);
+	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap"]) {
+		assert.ok(names.includes(name), `the ${name} tool (spec 008)`);
+	}
+	assert.ok(!names.some((name) => /assign|setting|agent/.test(name)), "nothing for what stays the user's: place assignments, settings, agent registration");
+	for (const tool of TOOLS) {
+		const schema = tool.inputSchema as { type: string; properties: Record<string, unknown>; required?: string[] };
+		assert.equal(schema.type, "object", tool.name);
+		for (const required of schema.required ?? []) assert.ok(required in schema.properties, `${tool.name} requires ${required}, which it declares`);
+		assert.ok(tool.description.length > 20 && tool.description.length < 400, `${tool.name} has a short description`);
+	}
+	assert.match(init.result.instructions, /force only when the user asks/);
 	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 4, method: "nope" })) as { error: { code: number } }).error.code, -32601);
-	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "start" } })) as { error: { code: number } }).error.code, -32602);
+	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "launch_missiles" } })) as { error: { code: number } }).error.code, -32602);
 	assert.deepEqual(await mcp.handle({ jsonrpc: "2.0", id: 6, method: "ping" }), { jsonrpc: "2.0", id: 6, result: {} });
 });
 

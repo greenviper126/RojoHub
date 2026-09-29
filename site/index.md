@@ -42,7 +42,7 @@ features:
     linkText: Using groups
   - icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1M15 13v1M9 17h6"/><circle cx="12" cy="3.5" r="1"/></svg>'
     title: Built for agents
-    details: Claude Code, Codex and VS Code agents can serve their own worktree to Studio through an MCP server, taking turns when several share one repo.
+    details: "Claude Code, Codex and VS Code agents drive Rojo-Hub through an MCP server: serve their worktree, start projects and groups, make branches in their own worktrees, and take turns when several share one repo."
     link: /guide/agents
     linkText: Agent access
 ---

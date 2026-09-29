@@ -64,7 +64,7 @@ const IN_VS_CODE = "Assign one in Rojo-Hub's panel in VS Code (Studio places).";
 
 const names = (projects: PlaceCandidate[]): string => projects.map((project) => project.projectName).join(", ");
 
-export type PlaceAnswer = Omit<StudioMatch, "type" | "serviceVersion"> & { projectId: string | null };
+export type PlaceAnswer = Omit<StudioMatch, "type" | "serviceVersion"> & { projectId: string | null; reason?: Reason };
 
 /*
 	The answer for one place. `assigned` is the slot picked for it in VS Code, if
@@ -84,6 +84,7 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 				message: `Waiting for ${project.projectName}, this place's project (${REASON_TEXT[reason]}), to be started in Rojo-Hub.`,
 				target: null,
 				projectId: project.slotId,
+			reason,
 			};
 		}
 		if (!speaksProtocol5(project.rojoVersion)) {
@@ -92,6 +93,7 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 				message: `${project.projectName} is served by Rojo ${project.rojoVersion}. Rojo-Hub's plugin needs Rojo 7.7 or newer: pin rojo-rbx/rojo@7.7.0 in its rokit.toml.`,
 				target: null,
 				projectId: project.slotId,
+			reason,
 			};
 		}
 		return {
@@ -107,6 +109,7 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 				reason,
 			},
 			projectId: project.slotId,
+			reason,
 		};
 	};
 
@@ -288,6 +291,7 @@ export class StudioLinks {
 				status: studio.answer?.status ?? "none",
 				message: studio.answer?.message ?? "",
 				projectId: studio.answer?.projectId ?? null,
+				reason: studio.answer?.target?.reason ?? studio.answer?.reason ?? null,
 				assigned: this.assignedFor(studio),
 				syncedWith: studio.connected?.projectName ?? null,
 			});

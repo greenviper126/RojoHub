@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.19.1";
+export const SERVICE_VERSION = "0.19.2";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -150,6 +150,8 @@ export interface StudioPlaceView {
 	message: string;
 	/** The project it should sync with, when there is one. */
 	projectId: string | null;
+	/** Why that is its project. */
+	reason: StudioProject["reason"] | null;
 	/** The project picked for it in VS Code, if any. */
 	assigned: string | null;
 	/** Synced now, with this project name. */

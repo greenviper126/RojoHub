@@ -21,8 +21,10 @@ fixed port, and switches any of them to another branch or worktree **without Stu
 - **Live branch switching.** Pick a worktree or any branch. The same `rojo serve` keeps running and
   Studio receives the difference as one update.
 - **Groups.** Start, stop or swap a whole set of projects at once, like a profile.
-- **Built for agents.** Claude Code, Codex and VS Code agents can serve their own worktree to Studio
-  through Rojo-Hub's MCP server, taking turns when several share one repo.
+- **Built for agents.** Claude Code, Codex and VS Code agents drive Rojo-Hub through its MCP server:
+  serve their own worktree to Studio, start projects and groups, make branches in worktrees of their
+  own (Orca or git), read Rojo's errors and see which Studio shows their work. Several agents take
+  turns on one project, waiting in line instead of being refused.
 - **Always serving.** A small background service owns the Rojo processes, so closing or reloading
   VS Code windows does not stop anything. The panel follows it live.
 

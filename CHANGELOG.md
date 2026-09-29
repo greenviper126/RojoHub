@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.2
+
+**Agents control Rojo-Hub.** Rojo-Hub is mainly for several agents working at once, so agents now
+have every common panel action over MCP: start and stop projects and groups, add and remove
+projects, make, edit and delete groups, list branches, make a branch in a worktree of its own
+(through Orca when it manages the repo), list and change project files, read Rojo's log, and wait
+for Studio to sync.
+- What could pull Studio out from under someone is guarded: stopping or removing a project another
+  agent claimed, or that a Studio place is synced to, needs `force`; stopping everything always does.
+- `serve_here` and `switch` take `wait`: take the project as soon as another agent's claim ends, in
+  order, instead of being refused.
+- Answers include Rojo's own errors after a switch, which Studio places show the project (with place
+  IDs and why they sync), and warnings.
+- Claims survive a service restart.
+
 ## 0.19.1
 
 **Studio connects by itself.** Rojo-Hub now installs its own Studio plugin: Rojo 7.7's plugin,

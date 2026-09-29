@@ -98,7 +98,7 @@ export const eventSubscribers = (): number => subscribers.size;
 
 export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void) {
 	const groups = new Groups(hub);
-	const mcp = new Mcp(hub);
+	const mcp = new Mcp(hub, groups);
 	const agents = new AgentRegistrar();
 
 	let lastSent = "";

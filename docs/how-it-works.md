@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.1, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.2, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -778,7 +778,8 @@ switched to. Removing a project removes it from every group. Group names are uni
 
 AI agents (Claude Code in a terminal or an Orca worktree, Codex, Copilot and other agents in VS Code)
 can use Rojo-Hub themselves: serve their own worktree to Studio before checking their changes there,
-switch a project to a branch, build a place file, write `sourcemap.json`. They get this from an MCP
+start, stop and add projects, run groups, make branches in worktrees of their own, read Rojo's log,
+and wait for Studio to sync (see *The tools* below). They get this from an MCP
 server that the background service runs at `http://127.0.0.1:34870/mcp`, so the agent needs no
 extra files, scripts or instructions: the server tells the agent what it is for when it connects.
 
@@ -826,18 +827,46 @@ commands and a JSON entry for agents that read a JSON MCP config. *Copy prompt* 
 Agent Setup Prompt**) copies a paragraph to paste into any agent's chat; the agent then adds Rojo-Hub
 to its own config.
 
-**The tools.** Agents cannot start, stop, add or remove projects: starting Rojo is a new Studio
-session, and that stays yours. When a project is not serving, or a repo is not registered, the
-agent is told to ask you.
+**The tools.** Agents can do everything the panel does except what is your own setup; Rojo-Hub is
+mainly for several agents working at once, so an agent should not have to stop and ask you to click.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, the Studio places synced to it (name and place ID), what it serves, who claimed it; then every open Studio place and what it syncs with. Given the agent's folder, also whether its worktree is the one served. |
-| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it; says which Studio places show it. |
-| `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. |
+| `status` | Every project: port, serving or not, the Studio places synced to it (name, place ID, why, plugin version), what it serves and with which project file, who claimed it, its warnings and `sourcemap.json` state; then the groups and every open Studio place. Given the agent's folder, also whether its worktree is the one served. |
+| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it; says which Studio places show it and any error Rojo logged. `wait` takes it as soon as another worktree's claim ends. |
+| `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. Also takes `wait`. |
+| `new_branch` | Makes a branch in a worktree of its own (through Orca when Orca manages the repo), switches the project to it and claims it; answers the folder to work in. |
+| `branches` | What a project can switch to, newest first (`fetch` runs `git fetch` first). |
 | `release` | Drops the agent's claim. The project keeps serving what it serves. |
+| `start` | Starts a stopped project. |
+| `stop` | Stops a project. Guarded (below). |
+| `stop_all` | Stops every project. Needs `force`, always. |
+| `add_project` | Registers the repo a folder is in (optionally with another `project_file`). |
+| `remove_project` | Unregisters a project; never deletes files. Guarded. |
+| `project_files` | The `*.project.json` files in a project's folder, and which it serves. |
+| `set_project_file` | Serves another project file; only while the project is stopped. |
+| `start_group` / `stop_group` | Starts or stops a group (`only` also stops everything outside it). Stopping is guarded. |
+| `create_group` / `edit_group` / `delete_group` | Makes, renames, changes the members of, or deletes a group. |
+| `log` | The last lines of a project's Rojo log. |
+| `wait_for_studio` | Waits until a Studio place is synced to the project's session, and names it. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
+
+**Guarded.** `stop`, `stop_group`, `remove_project` and `start_group` with `only` are refused while
+another worktree holds the project's claim, or while a Studio place is synced to it and the agent
+holds no claim on it; the agent that holds the claim may stop its own project. The refusal says who
+or what is affected. `force` goes ahead, and the server tells agents to pass it only when you ask.
+Starting, adding and group edits never disturb anyone. `set_project_file` works only on a stopped
+project, like the panel. Which project a Studio place syncs with, agent registration and settings
+stay yours (spec 008).
+
+**Rojo's errors come back.** After `serve_here`, `switch`, `new_branch` and `start`, the tool waits
+about a second (Rojo applies a switch in that time) and adds any error Rojo logged, and the card's
+warnings, to its answer.
+
+**Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
+`new_branch` wait while another worktree holds the claim and take the project the moment it is
+released or runs out. Several agents waiting for one project are served in the order they asked.
 
 **Which Studio to look at.** `status`, `serve_here` and `switch` name the Studio places synced to
 the project, with their place IDs (from Rojo-Hub's Studio plugin), and `status` ends with every open

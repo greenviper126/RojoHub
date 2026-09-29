@@ -442,6 +442,12 @@ export class Hub {
 		this.studioPlugin = installPlugin(join(__dirname, PLUGIN_FILE));
 	}
 
+	/** The last `count` lines of the slot's rojo log (agents' `log` tool, spec 008). */
+	logTail(id: string, count: number): string {
+		this.registry.get(id);
+		return this.runtime(id).log.tail(count);
+	}
+
 	/** The slot's claim, or null when there is none or it ran out. */
 	claimOf(id: string): Claim | null {
 		const claim = this.claims.get(id);
