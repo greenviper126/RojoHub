@@ -55,6 +55,8 @@ export interface PanelState {
 	studioPlugin: StudioPluginStatus | null;
 	/** Open Studio places with Rojo-Hub's plugin, and what each syncs with (spec 007). */
 	studioPlaces: StudioPlaceView[];
+	/** rojoHub.openPlaces (spec 009): cards list their places with Open, Close and Reopen only while it is on. */
+	openPlaces: boolean;
 }
 
 export type ToPanel =
@@ -114,4 +116,7 @@ export type FromPanel =
 	/** The notice above Projects: Later hides it for a while, never for good. */
 	| { type: "agentNudge"; action: "later" | "never" }
 	/** Studio places (spec 007): the project a place syncs with; null goes back to its project files. */
-	| { type: "assignPlace"; key: string; slotId: string | null };
+	| { type: "assignPlace"; key: string; slotId: string | null }
+	/** A project's place in Studio (spec 009). */
+	| { type: "placeAction"; id: string; placeId: number; action: "open" | "close" | "reopen" }
+	| { type: "openAllPlaces"; id: string };

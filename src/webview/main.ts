@@ -455,6 +455,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		${filePicker(slot)}
 		${claimNote(slot)}
 		${notices(slot)}
+		${cardPlaces(slot)}
 		<div class="row card-foot">
 			${statusPill(slot)}
 			<span class="grow"></span>
@@ -463,6 +464,38 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 			${controls}
 		</div>
 	</article>`;
+}
+
+/*
+	A project's places (spec 009), only while rojoHub.openPlaces is on: each
+	place its project file names, whether it is open, and Open, or Close and
+	Reopen. A place that is open is never opened a second time.
+*/
+function cardPlaces(slot: SlotView): string {
+	const places = slot.listedPlaces ?? [];
+	if (!state?.openPlaces || places.length === 0) return "";
+	const rows = places
+		.map((place) => {
+			const key = `place:${slot.id}:${place.placeId}`;
+			const data = { id: slot.id, place: String(place.placeId) };
+			const name = place.placeName ?? `Place ${place.placeId}`;
+			const busyText = ui.busy.has(key) ? "Working…" : place.busy === "opening" ? "Opening…" : place.busy === "closing" ? "Closing…" : place.busy === "reopening" ? "Reopening…" : "";
+			const actions = busyText
+				? `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">${busyText}</span></span>`
+				: place.open
+					? `${iconButton("place-reopen", "refresh", `Reopen ${name}: close it (Studio asks about unsaved changes), then open it again`, data)}${iconButton("place-close", "close", `Close ${name} (Studio asks about unsaved changes)`, data)}`
+					: button("place-open", "Open", { icon: "link-external", data, kind: "secondary", title: `Open ${name} in Studio` });
+			return `<div class="member card-place">
+				${icon("device-desktop")}
+				<span class="grow two-line">
+					<span class="ellipsis" title="${escape(`${name} (place ${place.placeId})`)}">${escape(name)}</span>
+					<span class="sub ellipsis">${place.open ? "Open in Studio" : "Not open"}${place.placeName ? ` · ${place.placeId}` : ""}</span>
+				</span>
+				${actions}
+			</div>${place.error ? `<div class="notice error">${icon("error")}<span>${escape(place.error)}</span></div>` : ""}`;
+		})
+		.join("");
+	return `<div class="card-places">${rows}</div>`;
 }
 
 /* Paths compared the way Windows does: case and slash direction do not matter. */
@@ -532,6 +565,7 @@ function cardMenu(slot: SlotView): string {
 							? `${item("sourcemap", "file-code", "Update sourcemap.json")}<div class="menu-note ${slot.sourcemap.state}" title="${escape(slot.sourcemap.detail)}">${icon(slot.sourcemap.state === "watching" ? "sync" : slot.sourcemap.state === "error" ? "warning" : "circle-slash")}<span>${escape(slot.sourcemap.state === "watching" ? "Sourcemap kept up to date" : slot.sourcemap.detail || "Sourcemap not kept")}</span></div><div class="menu-separator"></div>`
 							: ""
 					}
+					${state?.openPlaces && (slot.listedPlaces ?? []).some((place) => !place.open) ? item("open-all-places", "link-external", "Open all places in Studio") : ""}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
@@ -1497,6 +1531,18 @@ document.addEventListener("click", (event) => {
 			return;
 		case "log":
 			return send({ type: "log", id });
+		case "place-open":
+		case "place-close":
+		case "place-reopen": {
+			const placeId = Number(target.dataset.place);
+			const verb = action === "place-open" ? "open" : action === "place-close" ? "close" : "reopen";
+			sendTracked(`place:${id}:${placeId}`, { type: "placeAction", id, placeId, action: verb });
+			return render();
+		}
+		case "open-all-places":
+			ui.menu = null;
+			sendTracked(`places:${id}`, { type: "openAllPlaces", id });
+			return render();
 		case "remove":
 			return send({ type: "remove", id });
 		case "open-adder":

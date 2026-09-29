@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.19.7";
+export const SERVICE_VERSION = "0.20.0";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -65,6 +65,27 @@ export interface SlotView {
 	claim: { label: string; until: number } | null;
 	/** Studio places whose Rojo-Hub plugin is synced to this project now (spec 007). */
 	places: StudioPlace[];
+	/** The places its project file names (servePlaceIds, placeId; not blockedPlaceIds), for opening them (spec 009). Missing from services older than 0.20.0. */
+	listedPlaces?: ListedPlace[];
+}
+
+/* One of a project's places on its card, for opening it in Studio (spec 009). */
+export interface ListedPlace {
+	placeId: number;
+	/** From its plugin, else Roblox; null until known (the panel shows the ID). */
+	placeName: string | null;
+	/** Its Rojo-Hub plugin reports it open. */
+	open: boolean;
+	busy: "opening" | "closing" | "reopening" | null;
+	/** What went wrong with the last open, close or reopen, until the next. */
+	error: string | null;
+}
+
+/** What opening a place did: nothing when it was open already (Studio would open a second copy). */
+export interface PlaceOpened {
+	placeId: number;
+	placeName: string | null;
+	outcome: "opened" | "already-open";
 }
 
 /*
@@ -196,6 +217,8 @@ export interface Snapshot {
 	studioPlugin?: StudioPluginStatus;
 	/** Open Studio places with Rojo-Hub's plugin (spec 007); missing from services older than 0.19.0. */
 	studioPlaces?: StudioPlaceView[];
+	/** rojoHub.openPlaces (spec 009); missing from services older than 0.20.0, which cannot open places. */
+	openPlaces?: boolean;
 }
 
 /** What POST /slots/:id/branch made. */
@@ -260,6 +283,8 @@ export interface PortSettings {
 		last synced with.
 	*/
 	studioAutoConnect?: "listed" | "remembered";
+	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
+	openPlaces?: boolean;
 }
 
 /*

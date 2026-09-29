@@ -29,6 +29,7 @@ import { countConnections, decodeInfo, findRojo } from "../service/rojo";
 import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
+import { OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -805,4 +806,138 @@ test("agents' claims survive a service restart, and run out as before", () => {
 	assert.equal(second.claimOf("old"), null, "a claim that ran out is not brought back");
 	second.setClaim("game", null);
 	assert.equal(new Hub(home).claimOf("game"), null, "a released claim stays released");
+});
+
+/* ---------- opening places (spec 009) ---------- */
+
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/* A machine with no Studio: records what would have been launched and closed. Tests never open Studio. */
+function fakeStudio() {
+	const calls = { lookups: [] as number[], launched: [] as string[], closed: [] as number[] };
+	const running: StudioProcess[] = [];
+	const dead = new Set<number>();
+	let failLookup = false;
+	const system: PlaceSystem = {
+		async lookup(placeId) {
+			calls.lookups.push(placeId);
+			if (failLookup) throw new Error(`Could not look up the universe of place ${placeId}: the request timed out. Try again.`);
+			return { universeId: placeId + 1, name: `Place${placeId}` };
+		},
+		launch(link) {
+			calls.launched.push(link);
+			// Studio starts at once with the link in its command line (M5).
+			running.push({ pid: 1000 + running.length, placeId: placeInCommandLine(link) });
+		},
+		async processes() {
+			return running.filter((entry) => !dead.has(entry.pid));
+		},
+		async close(pid) {
+			calls.closed.push(pid);
+			return true;
+		},
+		alive: (pid) => !dead.has(pid),
+	};
+	return { system, calls, running, dead, failLookup: (on: boolean) => (failLookup = on) };
+}
+
+test("placeInCommandLine reads the link's place ID, and -placeId", () => {
+	assert.equal(placeInCommandLine('"C:\\Roblox\\RobloxStudioBeta.exe" roblox-studio:1+launchmode:edit+task:EditPlace+placeId:108404263554868+universeId:10768528004'), 108404263554868);
+	assert.equal(placeInCommandLine("RobloxStudioBeta.exe -task EditPlace -placeId 42 -universeId 7"), 42);
+	assert.equal(placeInCommandLine('"C:\\Roblox\\RobloxStudioBeta.exe"'), null);
+	assert.equal(placeLink(5, 6), "roblox-studio:1+launchmode:edit+task:EditPlace+placeId:5+universeId:6");
+});
+
+test("opening places: off by default does nothing; on, the universe is looked up once and kept", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
+	const fake = fakeStudio();
+	let on = false;
+	const places = new Places(home, () => on, () => [], fake.system);
+	await assert.rejects(places.open(111), (error: Error) => error.message === OFF_MESSAGE);
+	await assert.rejects(places.close(111), (error: Error) => error.message === OFF_MESSAGE);
+	await assert.rejects(places.reopen(111), (error: Error) => error.message === OFF_MESSAGE);
+	assert.deepEqual(fake.calls, { lookups: [], launched: [], closed: [] }, "nothing is looked up, launched or closed while off");
+
+	on = true;
+	assert.deepEqual(await places.open(111), { placeId: 111, placeName: "Place111", outcome: "opened" });
+	assert.deepEqual(fake.calls.launched, [placeLink(111, 112)]);
+	assert.equal(places.listed([111])[0].busy, "opening");
+
+	// A new service reads the saved universe: no second lookup.
+	const again = new Places(home, () => true, () => [], fake.system);
+	fake.running.length = 0;
+	await again.open(111);
+	assert.deepEqual(fake.calls.lookups, [111]);
+	assert.equal(again.name(111), "Place111");
+
+	// The project file's gameId is the universe: no lookup at all.
+	await again.open(222, 999);
+	assert.equal(fake.calls.launched.at(-1), placeLink(222, 999));
+	assert.deepEqual(fake.calls.lookups, [111]);
+});
+
+test("opening places: never a second copy, whether the plugin or a Studio command line says it is open", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
+	const fake = fakeStudio();
+	let reported: { placeId: number; placeName: string }[] = [{ placeId: 111, placeName: "Lobby" }];
+	const places = new Places(home, () => true, () => reported, fake.system);
+	assert.deepEqual(await places.open(111), { placeId: 111, placeName: "Lobby", outcome: "already-open" });
+	assert.equal(fake.calls.launched.length, 0, "open by its plugin");
+
+	reported = [];
+	fake.running.push({ pid: 50, placeId: 333 });
+	assert.equal((await places.open(333)).outcome, "already-open", "open by command line, before its plugin reports it");
+	assert.equal(fake.calls.launched.length, 0);
+
+	// Two opens at the same moment (a double click, two agents) open it once.
+	const both = await Promise.all([places.open(444), places.open(444)]);
+	assert.deepEqual(both.map((result) => result.outcome).sort(), ["already-open", "opened"]);
+	assert.equal(fake.calls.launched.length, 1);
+});
+
+test("opening places: a failed lookup says which place and why, and a retry works", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
+	const fake = fakeStudio();
+	const places = new Places(home, () => true, () => [], fake.system);
+	fake.failLookup(true);
+	await assert.rejects(places.open(555), /place 555: the request timed out\. Try again/);
+	assert.match(places.listed([555])[0].error ?? "", /place 555/);
+	assert.equal(fake.calls.launched.length, 0);
+	fake.failLookup(false);
+	assert.equal((await places.open(555)).outcome, "opened");
+	assert.equal(places.listed([555])[0].error, null, "the error goes with the next try");
+});
+
+test("closing places: only a Studio whose command line names the place, asked (never killed); reopen waits for it to exit", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
+	const fake = fakeStudio();
+	let reported: { placeId: number; placeName: string }[] = [];
+	const places = new Places(home, () => true, () => reported, fake.system);
+
+	await assert.rejects(places.close(111), /place 111 is not open/);
+	reported = [{ placeId: 111, placeName: "Lobby" }];
+	await assert.rejects(places.close(111), /cannot tell which Studio window it is\. Close it in Studio/);
+	assert.deepEqual(fake.calls.closed, []);
+
+	fake.running.push({ pid: 70, placeId: 111 }, { pid: 71, placeId: 999 });
+	await places.close(111);
+	assert.deepEqual(fake.calls.closed, [70], "only the place's own Studio");
+
+	// Reopen: asks to close, waits while Studio is still up (a save prompt), opens once it has exited.
+	await places.reopen(111, 7, 5000);
+	assert.deepEqual(fake.calls.closed, [70, 70]);
+	assert.equal(places.listed([111])[0].busy, "reopening");
+	await sleep(700);
+	assert.equal(fake.calls.launched.length, 0, "not reopened while Studio is still open");
+	fake.dead.add(70);
+	reported = [];
+	await sleep(700);
+	assert.deepEqual(fake.calls.launched, [placeLink(111, 7)]);
+
+	// Studio that never closes: reopen gives up and says so.
+	fake.running.push({ pid: 80, placeId: 222 });
+	await places.reopen(222, 1, 300);
+	await sleep(1000);
+	assert.match(places.listed([222])[0].error ?? "", /did not close/);
+	assert.equal(fake.calls.launched.length, 1);
 });

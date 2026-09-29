@@ -42,6 +42,11 @@ import { acceptWebSocket } from "./websocket";
 	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
 	GET    /studio                                   WebSocket for the Studio plugin (spec 007, src/service/studio.ts)
 	PUT    /studio/places/:key    { slotId }         assign a project to an open Studio place (null: back to its project files)
+	POST   /slots/:id/places/:placeId/open           open one of the project's places in Studio, unless it is open (spec 009)
+	POST   /slots/:id/places/:placeId/close          ask that place's Studio to close (never killed)
+	POST   /slots/:id/places/:placeId/reopen         close it, wait for Studio to exit, open it again
+	POST   /slots/:id/places/open-all                open every one of the project's places that is not open
+	(all four refused with 409 while rojoHub.openPlaces is off)
 
 	Only programs on this machine may use it, never a web page:
 	- Host must name the loopback address and this port. A DNS-rebinding page
@@ -102,7 +107,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 	const agents = new AgentRegistrar();
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places() } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places(), openPlaces: hub.openPlacesOn } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -200,6 +205,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					sourcemaps: input.sourcemaps !== false,
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
+					openPlaces: input.openPlaces === true,
 				});
 				return send(response, 200, { ok: true });
 			}
@@ -263,6 +269,20 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (method === "DELETE" && !action) {
 					await hub.remove(id);
 					return send(response, 200, { ok: true });
+				}
+				if (method === "POST" && action === "places" && parts[3] === "open-all" && parts.length === 4) return send(response, 200, await hub.openAllPlaces(id));
+				if (method === "POST" && action === "places" && parts.length === 5) {
+					const placeId = Number(parts[3]);
+					if (!Number.isSafeInteger(placeId) || placeId <= 0) return send(response, 400, { error: `"${parts[3]}" is not a place ID` });
+					if (parts[4] === "open") return send(response, 200, await hub.openPlace(id, placeId));
+					if (parts[4] === "close") {
+						await hub.closePlace(id, placeId);
+						return send(response, 200, { ok: true });
+					}
+					if (parts[4] === "reopen") {
+						await hub.reopenPlace(id, placeId);
+						return send(response, 200, { ok: true });
+					}
 				}
 				if (method === "GET" && action === "port-moves-on-remove") return send(response, 200, hub.portMovesOnRemove(id));
 				if (method === "POST" && action === "start") return send(response, 200, await hub.start(id));

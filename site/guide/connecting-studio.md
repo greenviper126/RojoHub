@@ -91,6 +91,27 @@ so in the Rojo window: pin `rojo-rbx/rojo@7.7.0`. See
   [`rojoHub.studioPlugin`](/reference/settings#rojohub-studioplugin) to false; Rojo-Hub then leaves
   the plugins folder alone.
 
+## Opening places from VS Code
+
+Off by default. Turn on [`rojoHub.openPlaces`](/reference/settings#rojohub-openplaces) and each
+project card lists the places its project file names (`servePlaceIds`, `placeId`), with whether each
+is open in Studio:
+
+- **Open** opens the place for editing in Studio, like the website's *Edit in Studio*. *Open all
+  places in Studio* in the card's ⋯ menu opens every one that is not open.
+- **A place that is already open is never opened again.** Studio would open a second copy, so
+  Rojo-Hub checks first: the place's Rojo-Hub plugin, and the command lines of running Studios.
+- **Close** asks the place's Studio window to close, like its ✕, so Studio still asks about unsaved
+  changes. Rojo-Hub never force-closes Studio.
+- **Reopen** closes the place, waits until Studio has exited (up to 5 minutes, while you answer its
+  prompt), and opens it again. Use it after a Rojo-Hub update, so the place loads the new plugin.
+
+Opening needs the place's universe ID. Rojo-Hub uses the project file's `gameId` if it has one, and
+otherwise looks it up from Roblox once and keeps it. Close and Reopen work for places opened by
+Rojo-Hub or from the website; for a place opened from Studio's start page, close it in Studio.
+
+Agents can open a place too (`open_place`), but never close one.
+
 ## Connecting by hand
 
 It still works like Rojo's plugin: set the address to `localhost` and the project's port (click the

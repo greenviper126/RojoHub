@@ -11,6 +11,7 @@ workspace cannot override them. Open them with *File → Preferences → Setting
 | [`rojoHub.sourcemaps`](#rojohub-sourcemaps) | `true` | Keep `sourcemap.json` up to date |
 | [`rojoHub.studioPlugin`](#rojohub-studioplugin) | `true` | Keep Rojo-Hub's Studio plugin installed |
 | [`rojoHub.studioAutoConnect`](#rojohub-studioautoconnect) | `"remembered"` | Which places connect by themselves |
+| [`rojoHub.openPlaces`](#rojohub-openplaces) | `false` | Open, close and reopen places from VS Code |
 | [`rojoHub.agents`](#rojohub-agents) | `{ "vscode": true, "claudeCode": false, "codex": false }` | Which agents can use Rojo-Hub |
 | [`rojoHub.notifyOnStudioDisconnect`](#rojohub-notifyonstudiodisconnect) | `false` | Message when Studio disconnects |
 
@@ -63,6 +64,15 @@ Which Studio places Rojo-Hub's plugin connects by itself.
 - `"remembered"`: those, and also a place that synced with a project before, to that project.
 
 See [Connecting Studio](/guide/connecting-studio).
+
+## `rojoHub.openPlaces`
+
+- **Default:** `false`
+
+Lets Rojo-Hub open a project's Studio places: **Open**, **Close** and **Reopen** on each project
+card, *Open all places in Studio* in its ⋯ menu, and the `open_place` tool for agents. A place that
+is already open is never opened again. Off, none of these do anything. See
+[Opening places from VS Code](/guide/connecting-studio#opening-places-from-vs-code).
 
 ## `rojoHub.agents`
 

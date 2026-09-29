@@ -56,6 +56,7 @@ process.on("unhandledRejection", (reason) => log(`unhandled rejection: ${reason 
 async function main(): Promise<void> {
 	const hub = new Hub(home);
 	hub.studio.log = log;
+	hub.places.log = log;
 	if (hub.registry.recovered) log(hub.registry.recovered);
 	let exiting = false;
 	const exit = (stopServing: boolean) => {
