@@ -50,6 +50,12 @@ export function speaksProtocol5(version: string | null): boolean {
 	return major > 7 || (major === 7 && minor >= 7);
 }
 
+const REASON_TEXT: Record<Reason, string> = {
+	servePlaceIds: "its servePlaceIds",
+	placeId: "its placeId",
+	remembered: "it last synced here",
+};
+
 const names = (projects: PlaceCandidate[]): string => projects.map((project) => project.projectName).join(", ");
 
 /*
@@ -92,7 +98,7 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], choice: s
 						message: `${picked.projectName} is served by Rojo ${picked.rojoVersion}. Rojo-Hub's plugin needs Rojo 7.7 or newer: pin rojo-rbx/rojo@7.7.0 in its rokit.toml.`,
 					};
 				} else {
-					answer = { status: "connect", message: `${picked.projectName} (${tier.reason})` };
+					answer = { status: "connect", message: `${picked.projectName} serves this place (${REASON_TEXT[tier.reason]}).` };
 					targetId = picked.slotId;
 				}
 			}
@@ -163,6 +169,7 @@ export class StudioLinks {
 	attach(link: WebSocketLink): void {
 		const studio: Studio = { link, hello: null, connected: null, lastSent: "" };
 		this.studios.add(studio);
+		link.send(JSON.stringify({ type: "welcome", protocol: STUDIO_PROTOCOL, serviceVersion: SERVICE_VERSION }));
 		link.onClose = () => this.studios.delete(studio);
 		link.onMessage = (text) => {
 			let message: StudioToService;
@@ -172,7 +179,19 @@ export class StudioLinks {
 				return;
 			}
 			if (message.type === "hello") {
-				studio.hello = message;
+				// Place IDs come as strings: Roblox's JSONEncode may round integers this large.
+				const raw = message as unknown as Record<string, unknown>;
+				studio.hello = {
+					type: "hello",
+					protocol: Number(raw.protocol),
+					pluginVersion: String(raw.pluginVersion ?? "unknown"),
+					placeId: Number(raw.placeId) || 0,
+					gameId: Number(raw.gameId) || 0,
+					placeName: String(raw.placeName ?? ""),
+					unsaved: raw.unsaved === true,
+					remembered: typeof raw.remembered === "string" ? raw.remembered : null,
+				};
+				message = studio.hello;
 				this.log(`studio: ${message.placeName} (${message.placeId}) said hello, plugin ${message.pluginVersion}`);
 			} else if (message.type === "state") {
 				studio.connected = message.connected ?? null;

@@ -397,6 +397,12 @@
           "default": true,
           "markdownDescription": "Keep `sourcemap.json` up to date in the worktree each serving project serves, with its pinned `rojo sourcemap --watch`, whether or not luau-lsp or VS Code is open. It writes the same file luau-lsp's extension does, and only where `sourcemap.json` is gitignored or already exists."
         },
+        "rojoHub.studioPlugin": {
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "markdownDescription": "Keep Rojo-Hub's Studio plugin (Rojo's plugin, changed to connect by itself) in Studio's local plugins folder, and take out other `RojoHub*.rbxm` copies. It syncs each place with the project whose `servePlaceIds` lists it, or the project it last synced with, and reconnects after Rojo restarts. Turn off to manage the plugin yourself; Rojo-Hub then leaves the folder alone."
+        },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",
           "scope": "application",

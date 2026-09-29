@@ -23,6 +23,23 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install Rokit and Rojo 7.7 (builds the Studio plugin)
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $release = gh release view --repo rojo-rbx/rokit --json assets | ConvertFrom-Json
+          $asset = $release.assets | Where-Object { $_.name -like '*windows-x86_64.zip' } | Select-Object -First 1
+          gh release download --repo rojo-rbx/rokit --pattern $asset.name --dir $env:RUNNER_TEMP
+          Expand-Archive (Join-Path $env:RUNNER_TEMP $asset.name) -DestinationPath (Join-Path $env:RUNNER_TEMP rokit)
+          & (Join-Path $env:RUNNER_TEMP rokit\rokit.exe) self-install
+          "$env:USERPROFILE\.rokit\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          $pin = Join-Path $env:RUNNER_TEMP pin
+          New-Item -ItemType Directory $pin | Out-Null
+          Set-Content (Join-Path $pin rokit.toml) "[tools]`nrojo = `"rojo-rbx/rojo@7.7.0`""
+          Push-Location $pin
+          & "$env:USERPROFILE\.rokit\bin\rokit.exe" install --no-trust-check
+          Pop-Location
       - name: Check the tag matches package.json
         shell: pwsh
         run: |
@@ -36,7 +53,9 @@ jobs:
         run: |
           $vsix = Get-ChildItem rojo-hub-*.vsix | Select-Object -First 1
           $notes = "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md). Install: Extensions view → ⋯ → Install from VSIX…, or ``code --install-extension $($vsix.Name)``."
-          gh release create "${{ github.ref_name }}" $vsix.FullName --title "Rojo-Hub ${{ github.ref_name }}" --notes $notes
+          # The Studio plugin too, for installing by hand (the extension installs it by itself).
+          Copy-Item dist/RojoHub.rbxm "RojoHub-${{ github.ref_name }}.rbxm"
+          gh release create "${{ github.ref_name }}" $vsix.FullName "RojoHub-${{ github.ref_name }}.rbxm" --title "Rojo-Hub ${{ github.ref_name }}" --notes $notes
       - name: Publish to the VS Code Marketplace
         if: ${{ env.VSCE_PAT != '' }}
         shell: pwsh

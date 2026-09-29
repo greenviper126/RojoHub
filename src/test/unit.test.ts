@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import type { IncomingMessage } from "node:http";
 
-import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
+import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, SERVICE_VERSION, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
 import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -27,6 +27,7 @@ import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
 import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
+import { installPlugin, removePlugin } from "../service/studioPlugin";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -693,4 +694,39 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 		links.closeAll();
 		server.close();
 	}
+});
+
+test("the Studio plugin install: once, updated in place, our other copies removed, the official one only reported", () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-plugins-"));
+	const plugins = join(dir, "Plugins");
+	const source = join(dir, "RojoHub.rbxm");
+	writeFileSync(source, "v1");
+	const first = installPlugin(source, plugins);
+	assert.equal(first.state, "installed");
+	assert.match(first.detail, /next place you open/);
+	assert.equal(readFileSync(join(plugins, "RojoHub.rbxm"), "utf8"), "v1");
+	assert.equal(installPlugin(source, plugins).detail, "", "an identical file is left alone");
+
+	writeFileSync(source, "v2");
+	writeFileSync(join(plugins, "RojoHub-0.19.0.rbxm"), "downloaded");
+	writeFileSync(join(plugins, "rojohub.rbxmx"), "old");
+	writeFileSync(join(plugins, "RojoManagedPlugin.rbxm"), "official");
+	writeFileSync(join(plugins, "Other.rbxm"), "someone else's");
+	const second = installPlugin(source, plugins);
+	assert.match(second.detail, /Updated/);
+	assert.equal(readFileSync(join(plugins, "RojoHub.rbxm"), "utf8"), "v2");
+	assert.deepEqual(second.removed.sort(), ["RojoHub-0.19.0.rbxm", "rojohub.rbxmx"]);
+	assert.equal(second.officialRojo, true);
+	assert.deepEqual(readdirSync(plugins).sort(), ["Other.rbxm", "RojoHub.rbxm", "RojoManagedPlugin.rbxm"], "nothing else is touched, and no temporary file is left");
+
+	assert.equal(installPlugin(join(dir, "missing.rbxm"), plugins).state, "error");
+	assert.equal(removePlugin(plugins), true);
+	assert.equal(removePlugin(plugins), false);
+});
+
+test("the Studio plugin says the same version as the service", () => {
+	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "Version.lua"), "utf8");
+	assert.equal(/return "([^"]+)"/.exec(lua)?.[1], SERVICE_VERSION);
+	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "init.lua"), "utf8");
+	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
 });

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PortMove, PortSettings, SlotView, Target, TargetOption } from "../common/api";
+import type { PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
@@ -11,6 +11,7 @@ import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./regist
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
 import { StudioLinks, type PlaceCandidate } from "./studio";
+import { installPlugin, PLUGIN_FILE } from "./studioPlugin";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
 
@@ -117,6 +118,9 @@ export class Hub {
 	/** The Studio plugins connected to the service (spec 007). */
 	readonly studio: StudioLinks;
 
+	/** The Studio plugin's install, for the panel (spec 007). */
+	studioPlugin: StudioPluginStatus = { state: "off", detail: "", removed: [], officialRojo: false };
+
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
 		this.studio = new StudioLinks(
@@ -210,6 +214,7 @@ export class Hub {
 		rojo that is still up and serving the same project, else starts one.
 	*/
 	async restore(): Promise<void> {
+		this.syncStudioPlugin();
 		this.poller = setInterval(() => this.pollLogs(), 1000);
 		this.poller.unref();
 		for (const slot of this.registry.slots) {
@@ -407,9 +412,23 @@ export class Hub {
 
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
+		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		savePortSettings(this.home, settings);
+		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
 		for (const slot of this.registry.slots) void this.enqueue(slot, () => this.syncSourcemap(slot)).catch(() => undefined);
+	}
+
+	/*
+		Installs or updates the Studio plugin built beside the service bundle, unless
+		rojoHub.studioPlugin is off; then the plugins folder is left alone.
+	*/
+	syncStudioPlugin(): void {
+		if (loadPortSettings(this.home).studioPlugin === false) {
+			this.studioPlugin = { state: "off", detail: "rojoHub.studioPlugin is off; Rojo-Hub leaves Studio's plugins folder alone.", removed: [], officialRojo: false };
+			return;
+		}
+		this.studioPlugin = installPlugin(join(__dirname, PLUGIN_FILE));
 	}
 
 	/** The slot's claim, or null when there is none or it ran out. */

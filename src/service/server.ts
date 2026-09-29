@@ -103,7 +103,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 	const agents = new AgentRegistrar();
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -196,7 +196,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
 				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];
-				hub.setPortSettings({ portRange: typeof input.portRange === "string" ? input.portRange : "", excludedPorts, sourcemaps: input.sourcemaps !== false });
+				hub.setPortSettings({
+					portRange: typeof input.portRange === "string" ? input.portRange : "",
+					excludedPorts,
+					sourcemaps: input.sourcemaps !== false,
+					studioPlugin: input.studioPlugin !== false,
+				});
 				return send(response, 200, { ok: true });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {

@@ -77,7 +77,12 @@ export interface SlotView {
 export const STUDIO_PATH = "/studio";
 export const STUDIO_PROTOCOL = 1;
 
-/** The plugin's first message, and again whenever the place's ID changes (a publish). */
+/*
+	The service greets each new socket with { type: "welcome", protocol,
+	serviceVersion }; the plugin answers with hello, and says hello again
+	whenever the place's ID changes (a publish). IDs travel as strings, since
+	Roblox's JSONEncode may round integers this large; the service reads both.
+*/
 export interface StudioHello {
 	type: "hello";
 	protocol: number;
@@ -138,6 +143,19 @@ export interface StudioMatch {
 	projects: StudioProject[];
 }
 
+/*
+	Whether Rojo-Hub's Studio plugin is in Studio's plugins folder (spec 007).
+	"off": rojoHub.studioPlugin is false, so the folder is left alone.
+*/
+export interface StudioPluginStatus {
+	state: "installed" | "off" | "no-studio" | "error";
+	detail: string;
+	/** Other RojoHub*.rbxm(x) copies taken out of the folder by the last install. */
+	removed: string[];
+	/** The official Rojo plugin (rojo plugin install) is installed too. */
+	officialRojo: boolean;
+}
+
 /** An open Studio place, as the panel shows it under the project it is synced to. */
 export interface StudioPlace {
 	placeId: number;
@@ -153,6 +171,8 @@ export interface Snapshot {
 	slots: SlotView[];
 	groups: GroupView[];
 	order: DisplayOrder;
+	/** Missing from services older than 0.19.0. */
+	studioPlugin?: StudioPluginStatus;
 }
 
 /** What POST /slots/:id/branch made. */
@@ -208,6 +228,8 @@ export interface PortSettings {
 	excludedPorts?: (number | string)[];
 	/** rojoHub.sourcemaps; missing means on. */
 	sourcemaps?: boolean;
+	/** rojoHub.studioPlugin: keep Rojo-Hub's Studio plugin installed (spec 007); missing means on. */
+	studioPlugin?: boolean;
 }
 
 /*

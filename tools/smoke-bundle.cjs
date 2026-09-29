@@ -28,6 +28,9 @@ const { tmpdir } = require("node:os");
 // and pointed at port 34869 (nothing listens there) with a throwaway Rojo-Hub home, so its
 // shutdown of the service can never reach the real one on 34870.
 const fakeHome = mkdtempSync(path.join(tmpdir(), "rojo-hub-smoke-home-"));
+const fakePlugins = path.join(fakeHome, "Roblox", "Plugins");
+require("node:fs").mkdirSync(fakePlugins, { recursive: true });
+require("node:fs").writeFileSync(path.join(fakePlugins, "RojoHub.rbxm"), "installed plugin");
 execFileSync(process.execPath, [path.join(dist, "uninstall.js")], {
 	env: {
 		...process.env,
@@ -41,13 +44,19 @@ execFileSync(process.execPath, [path.join(dist, "uninstall.js")], {
 	},
 	stdio: "inherit",
 });
-console.log("dist/uninstall.js runs");
+if (require("node:fs").existsSync(path.join(fakePlugins, "RojoHub.rbxm"))) {
+	console.error("dist/uninstall.js left the Studio plugin in place");
+	process.exit(1);
+}
+console.log("dist/uninstall.js runs and removes the Studio plugin");
 
-// The service bundle: start it on a spare port with a throwaway home, ask /health, shut it down.
+// The service bundle: start it on a spare port with a throwaway home and plugins folder, ask /health,
+// check it installed the Studio plugin built beside it, shut it down.
 const port = 34868;
 const home = mkdtempSync(path.join(tmpdir(), "rojo-hub-smoke-"));
+const plugins = path.join(home, "Plugins");
 const child = spawn(process.execPath, [path.join(dist, "service.js")], {
-	env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(port) },
+	env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(port), ROJO_HUB_STUDIO_PLUGINS: plugins },
 	stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";
@@ -57,6 +66,13 @@ child.stderr.on("data", (chunk) => (stderr += chunk));
 		try {
 			const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
 			console.log(`dist/service.js starts and answers /health (v${health.version})`);
+			for (let j = 0; j < 50 && !require("node:fs").existsSync(path.join(plugins, "RojoHub.rbxm")); j++) await new Promise((done) => setTimeout(done, 100));
+			if (!require("node:fs").existsSync(path.join(plugins, "RojoHub.rbxm"))) {
+				console.error("dist/service.js did not install dist/RojoHub.rbxm into the plugins folder");
+				await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", body: "{}" });
+				process.exit(1);
+			}
+			console.log("dist/service.js installs the Studio plugin");
 			await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", body: "{}" });
 			return;
 		} catch {

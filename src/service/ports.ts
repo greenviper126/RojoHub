@@ -83,7 +83,12 @@ export function loadPortSettings(home: string): PortSettings {
 }
 
 export function savePortSettings(home: string, settings: PortSettings): void {
-	const clean: PortSettings = { portRange: settings.portRange ?? "", excludedPorts: settings.excludedPorts ?? [], sourcemaps: settings.sourcemaps !== false };
+	const clean: PortSettings = {
+		portRange: settings.portRange ?? "",
+		excludedPorts: settings.excludedPorts ?? [],
+		sourcemaps: settings.sourcemaps !== false,
+		studioPlugin: settings.studioPlugin !== false,
+	};
 	const temporary = settingsFile(home) + ".tmp";
 	writeFileSync(temporary, JSON.stringify(clean, null, "\t") + "\n");
 	renameSync(temporary, settingsFile(home));
