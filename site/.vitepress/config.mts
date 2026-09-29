@@ -29,7 +29,7 @@ const mediaFiles: Plugin = {
 
 export default defineConfig({
 	title: "Rojo-Hub",
-	description: "Serve many Rojo projects on fixed ports and switch any of them between branches without Studio disconnecting.",
+	description: "Serve many Rojo projects on fixed ports and switch any of them between branches without Studio disconnecting. Built for agents.",
 	base: "/RojoHub/",
 	cleanUrls: true,
 	lastUpdated: false,
@@ -44,11 +44,11 @@ export default defineConfig({
 	themeConfig: {
 		logo: "/icon.png",
 		nav: [
-			{ text: "Guide", link: "/guide/requirements", activeMatch: "/guide/" },
+			{ text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
 			{ text: "Reference", link: "/reference/settings", activeMatch: "/reference/" },
 			{ text: "Troubleshooting", link: "/troubleshooting" },
 			{
-				text: "0.20.1",
+				text: "0.20.2",
 				items: [
 					{ text: "Changelog", link: "/changelog" },
 					{ text: "Releases", link: "https://github.com/greenviper126/RojoHub/releases" },
@@ -57,26 +57,14 @@ export default defineConfig({
 		],
 		sidebar: [
 			{
-				text: "Getting started",
-				items: [
-					{ text: "Requirements", link: "/guide/requirements" },
-					{ text: "Install", link: "/guide/install" },
-					{ text: "Your first project", link: "/guide/first-project" },
-					{ text: "Connecting Studio", link: "/guide/connecting-studio" },
-				],
-			},
-			{
 				text: "Guide",
 				items: [
-					{ text: "The panel", link: "/guide/panel" },
-					{ text: "Projects & project files", link: "/guide/projects" },
-					{ text: "Workspaces", link: "/guide/workspaces" },
-					{ text: "Ports", link: "/guide/ports" },
+					{ text: "Get started", link: "/guide/getting-started" },
+					{ text: "Projects", link: "/guide/projects" },
+					{ text: "Connecting Studio", link: "/guide/connecting-studio" },
 					{ text: "Switching branches", link: "/guide/switching" },
-					{ text: "Sourcemaps", link: "/guide/sourcemaps" },
 					{ text: "Groups", link: "/guide/groups" },
 					{ text: "Agents", link: "/guide/agents" },
-					{ text: "The background service", link: "/guide/service" },
 				],
 			},
 			{
@@ -85,6 +73,7 @@ export default defineConfig({
 					{ text: "Settings", link: "/reference/settings" },
 					{ text: "Commands", link: "/reference/commands" },
 					{ text: "Files on disk", link: "/reference/files" },
+					{ text: "Background service", link: "/reference/service" },
 					{ text: "Local API", link: "/reference/api" },
 				],
 			},

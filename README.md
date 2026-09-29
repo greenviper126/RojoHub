@@ -2,76 +2,57 @@
 
 # Rojo-Hub
 
-A VS Code extension that serves many [Rojo](https://rojo.space) projects at once, each on its own
-fixed port, and switches any of them to another branch or worktree **without Studio disconnecting**.
+Serve many [Rojo](https://rojo.space) projects at once, each on its own fixed port, and switch any of
+them to another branch or worktree **without Studio disconnecting**. Built so AI agents can drive it.
 
 **[Documentation](https://greenviper126.github.io/RojoHub/)** ·
-[Install](https://greenviper126.github.io/RojoHub/guide/install) ·
+[Get started](https://greenviper126.github.io/RojoHub/guide/getting-started) ·
 [Changelog](CHANGELOG.md)
 
 <p align="center"><img src="site/public/images/panel-branch-picker.png" alt="A project card in the Rojo-Hub panel with the branch picker open" width="360"></p>
 
 ## What it does
 
-- **One port per project, the same everywhere.** A project's port is worked out from its repo's
-  first commit (or taken from `servePort` in its project file), so it is the same on every machine.
-- **Studio connects by itself.** Rojo-Hub installs its own Studio plugin (Rojo's, changed to connect
-  by itself). A place syncs with the project whose `servePlaceIds` lists it, or the one you assign it
-  in the panel, and reconnects on its own after Rojo restarts. No port to type.
-- **Open places from VS Code** (opt-in, `rojoHub.openPlaces`). Open, close or reopen a project's
-  places in Studio from its card, or let agents open them. A place that is already open is never
-  opened twice.
-- **Live branch switching.** Pick a worktree or any branch. The same `rojo serve` keeps running and
-  Studio receives the difference as one update.
-- **Groups.** Start, stop or swap a whole set of projects at once, like a profile.
-- **Built for agents.** Claude Code, Codex and VS Code agents drive Rojo-Hub through its MCP server:
-  serve their own worktree to Studio, start projects and groups, make branches in worktrees of their
-  own (Orca or git), read Rojo's errors and see which Studio shows their work. Several agents take
-  turns on one project, waiting in line instead of being refused.
-- **Always serving.** A small background service owns the Rojo processes, so closing or reloading
-  VS Code windows does not stop anything. The panel follows it live.
+- **A fixed port per project**, the same on every machine (from `servePort`, or the repo's first commit).
+- **Studio connects by itself.** Rojo-Hub's Studio plugin syncs each place with its project and
+  reconnects after any Rojo restart.
+- **Live branch switching.** Pick a worktree or branch; Rojo keeps running and Studio gets the diff.
+- **Groups** start and stop a set of projects together.
+- **Agents** (Claude Code, Codex, VS Code agents) use it through a built-in MCP server: serve their
+  own worktree to Studio, make branches, start projects, read Rojo's errors. Several agents take turns.
+- **Always serving.** A background service owns Rojo, so closing VS Code windows stops nothing.
 
 ## Requirements
 
-- Windows 10 or 11.
-- VS Code 1.101 or later.
-- git 2.31 or later on `PATH`.
-- [Rokit](https://github.com/rojo-rbx/rokit), with each project's pinned Rojo installed
-  (`rokit install` in the project). Rokit also reads `aftman.toml` and `foreman.toml`.
-- Rojo 7.7 or later. Rojo-Hub installs its own Studio plugin, built from Rojo 7.7's.
+Windows 10/11, VS Code 1.101+, git 2.31+, and [Rokit](https://github.com/rojo-rbx/rokit) with each
+project's Rojo (7.7+) installed (`rokit install`).
 
-Details and setup steps: [Requirements](https://greenviper126.github.io/RojoHub/guide/requirements).
-
-## Getting started
+## Get started
 
 1. Download `rojo-hub-<version>.vsix` from [Releases](https://github.com/greenviper126/RojoHub/releases)
-   and install it: *Extensions view → ⋯ → Install from VSIX…*, or
-   `code --install-extension rojo-hub-<version>.vsix`. Each VS Code profile needs its own install.
-2. Open the **Rojo-Hub** panel in the activity bar and press **+** to add a project folder.
-3. Press **Start**. List your places in the project file's `servePlaceIds` (or assign them in the
-   panel's **Studio places**), open them in Studio, and they sync by themselves.
-4. Click the branch on the card to switch. Studio stays connected.
+   and run `code --install-extension rojo-hub-<version>.vsix` (once per VS Code profile).
+2. Open the **Rojo-Hub** panel, press **+** and pick your project folder.
+3. Press **Start**. Add your place IDs to `servePlaceIds` in the project file and open the place in
+   Studio: it syncs by itself.
+4. Click the branch on the card to switch.
+5. Optional: turn on your agents under **Agent access**.
 
-Rojo-Hub has been submitted to the VS Code Marketplace and is waiting for Microsoft's review; an
-Open VSX listing will follow. Until then, install the `.vsix` from Releases as above.
+The VS Code Marketplace listing is in review; until then, install from Releases.
 
 ## Develop
 
 ```sh
 npm install          # building also needs Rojo 7.7.0 from Rokit, for the Studio plugin
-npm run typecheck
-npm test              # unit tests, bundle smoke test, end-to-end against a real Rokit-installed Rojo 7.7
-npm run package       # rojo-hub-<version>.vsix
-npm run docs:dev      # the documentation site (site/)
+npm test             # unit, bundle smoke and end-to-end tests against a real Rojo 7.7
+npm run package      # rojo-hub-<version>.vsix
+npm run docs:dev     # the documentation site (site/)
 ```
 
-How it works inside, and why: [`docs/how-it-works.md`](docs/how-it-works.md) and
-[`specs/`](specs/). The Studio plugin is in [`plugin/`](plugin/): Rojo's plugin with Rojo-Hub's
-changes listed in [`plugin/UPSTREAM.md`](plugin/UPSTREAM.md).
+Internals: [`docs/how-it-works.md`](docs/how-it-works.md) and [`specs/`](specs/). The Studio plugin
+in [`plugin/`](plugin/) is Rojo's, with changes listed in [`plugin/UPSTREAM.md`](plugin/UPSTREAM.md).
 
 ## License
 
-[MIT](LICENSE), except [`plugin/`](plugin/), which is Rojo's Studio plugin and stays under Rojo's
-[MPL-2.0](plugin/LICENSE) (Rojo-Hub's own files in it are MIT). The extension and the plugin bundle
-other open-source work, credited with its licences in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-Not affiliated with Roblox or the Rojo project.
+[MIT](LICENSE), except [`plugin/`](plugin/), which stays under Rojo's [MPL-2.0](plugin/LICENSE)
+(Rojo-Hub's own files in it are MIT). Bundled third-party work is credited in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Not affiliated with Roblox or the Rojo project.

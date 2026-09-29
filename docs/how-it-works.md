@@ -1,9 +1,9 @@
 # How Rojo-Hub works
 
-The complete description of Rojo-Hub as built: every feature, command and setting, what happens
-underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.20.1, 2026-09-29. For why each design choice was made, with the
-measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
+The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
+underneath, and the known limits. It is the source for user documentation. Version 0.20.2,
+2026-09-29. Why each design choice was made, with measurements:
+[`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
 
@@ -28,323 +28,252 @@ measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-ro
 
 ## 1. What it does
 
-Rojo-Hub is a VS Code extension for Roblox developers who use Rojo and work on several
-projects, or several branches of one project, at the same time.
+A VS Code extension for Roblox developers who use Rojo on several projects, or several branches of
+one project, at once.
 
-- **Every project gets its own Rojo port**, and several projects can serve at once.
-- **Studio connects by itself.** Rojo-Hub installs its own Studio plugin, which syncs each place
-  with its project (from `servePlaceIds`, or as assigned in the panel) and reconnects after any Rojo
-  restart (see [Connecting Studio](#7-connecting-studio)).
-- **Any project can be switched to another branch or worktree while it is serving**, and Studio
-  stays connected: it receives the difference as one update instead of disconnecting.
-- **Projects can be grouped** so a set of them starts, stops, or takes over as a profile, together.
-- **AI agents can serve their own worktree to Studio** through Rojo-Hub's MCP server, taking turns
-  when several work in one repo (see [Agents](#10-agents)).
+- **Each project gets its own Rojo port**; many serve at once.
+- **Studio connects by itself.** Rojo-Hub's own Studio plugin syncs each place with its project
+  (from `servePlaceIds`, or as assigned in the panel) and reconnects after any Rojo restart
+  ([Connecting Studio](#7-connecting-studio)).
+- **Any serving project switches to another branch or worktree** while Studio stays connected: it
+  gets the difference as one update.
+- **Groups** start, stop or take over a set of projects, like a profile.
+- **AI agents serve their own worktree to Studio** through an MCP server, taking turns in one repo
+  ([Agents](#10-agents)).
 
-It works with Orca worktrees, showing them under Orca's names, and with plain
-git branches and worktrees.
+Works with Orca worktrees (shown under Orca's names) and plain git branches and worktrees.
 
 ## 2. Concepts
 
 | Term | Meaning |
 |---|---|
-| **Project** (in code: *slot*) | One registered Rojo project: a git repo and one of the `*.project.json` files directly in it, normally `default.project.json` (see [Project files](#project-files)). Identified by that file's Rojo project `name`. |
-| **Port** | The TCP port the project's Rojo listens on, `localhost:<port>`. Fixed per project (see [Ports](#6-ports)). |
-| **Target** | What the project is currently serving: a **worktree** (served in place) or a **branch** with no worktree (served from a *view*). |
-| **Primary checkout** | The repo's main folder, the one other worktrees belong to. Registration always stores this, whichever worktree you registered from. |
-| **View** | A folder Rojo-Hub creates to serve a branch nobody has checked out: a detached git worktree of that branch's commit, under `%LOCALAPPDATA%\RojoHub\views\`. |
-| **Group** | A named set of projects started and stopped together, like a profile. |
-| **Service** | A small background program that owns the projects and their Rojo processes, separate from VS Code windows. |
-| **Session** | One run of `rojo serve`. The Studio plugin stays connected only while the session stays the same; restarting Rojo starts a new one. |
+| **Project** (in code: *slot*) | One registered Rojo project: a git repo and one `*.project.json` directly in it, normally `default.project.json` ([Project files](#project-files)). Identified by that file's `name`. |
+| **Port** | The TCP port its Rojo listens on, `localhost:<port>`. Fixed per project ([Ports](#6-ports)). |
+| **Target** | What it serves: a **worktree** (in place) or a **branch** with no worktree (from a *view*). |
+| **Primary checkout** | The repo's main folder, that other worktrees belong to. Registration always stores this. |
+| **View** | A detached git worktree of a branch's commit that Rojo-Hub makes to serve a branch nobody has checked out, under `%LOCALAPPDATA%\RojoHub\views\`. |
+| **Group** | A named set of projects started and stopped together. |
+| **Service** | A background program that owns projects and their Rojo processes, separate from VS Code windows. |
+| **Session** | One run of `rojo serve`. The Studio plugin stays connected only while the session is the same; restarting Rojo starts a new one. |
 
 ## 3. Install, update, uninstall
 
-Rojo-Hub is distributed as a `.vsix` file on the project's
-[GitHub Releases](https://github.com/greenviper126/RojoHub/releases) page. A VS Code Marketplace
-release is planned.
+Distributed as a `.vsix` on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases); a
+Marketplace release is planned.
 
-**Install it** in VS Code: Extensions view → `…` → **Install from VSIX…**, or
-
-```sh
-code --install-extension rojo-hub-<version>.vsix --force
-```
-
-**VS Code profiles have separate extension lists.** The command above installs into the Default
-profile only. Install into each profile you open Roblox projects in:
-
-```sh
-code --install-extension rojo-hub-<version>.vsix --force --profile "<profile name>"
-```
-
-**Build it yourself** (from the RojoHub repo), if you prefer:
-
-```sh
-npm install
-npm run package          # produces rojo-hub-<version>.vsix
-```
+**Install**: Extensions view → `…` → **Install from VSIX…**, or
+`code --install-extension rojo-hub-<version>.vsix --force`. That installs into the Default profile
+only; each profile has its own extension list, so add `--profile "<profile name>"` for every profile
+you open Roblox projects in. **Build it yourself**: `npm install`, then `npm run package`. Then
+**reload the window**: a window open during the install does not load the new version until it
+reloads.
 
 In a remote window (WSL, SSH, Dev Containers) Rojo-Hub runs on the local Windows side, where Rokit,
-Rojo and Studio are. It does not run in Restricted Mode: it runs git and Rojo in your projects'
-folders, so the workspace has to be trusted.
+Rojo and Studio are. It does not run in Restricted Mode: it runs git and Rojo in your folders, so the
+workspace must be trusted.
 
-Then **reload the window** (`Ctrl+Shift+P` → *Developer: Reload Window*). A window that was open
-during the install does not load the new version until it reloads.
-
-**Update**: install the newer `.vsix` the same way and reload **every** window that has Rojo-Hub
-(each window runs its own copy of the extension). A window only ever replaces the service with a
-newer one, never an older one; a window still on the old version keeps using the newer service and
-says so once per new version: *Rojo-Hub ‹new› is running, but this window has ‹old›*, with *Reload
-Window*. If that window's VS Code profile still has the old version installed, reloading does not
-help: install the update in that profile too. The message is not repeated for the same version, so a
-profile you keep on an older version is not nagged. The new extension notices that the
-running service is an older version, asks it to exit, and starts its own. Rojo processes keep
-running through this, so Studio stays connected, and the new service adopts them.
+**Update**: install the newer `.vsix` and reload **every** window with Rojo-Hub (each runs its own
+copy). A window only ever replaces the service with a newer one. The new extension asks the older
+service to exit and starts its own; Rojo keeps running, Studio stays connected, and the new service
+adopts the Rojo processes. A window still on the old version keeps using the newer service and says
+so once per new version: *Rojo-Hub ‹new› is running, but this window has ‹old›*, with *Reload
+Window*. If that window's profile still has the old version, reloading does not help: install the
+update there too. The message is not repeated for the same version, so a profile kept on an older
+version is not nagged.
 
 **Requirements**:
 
-- Windows 10 or 11. On other systems the panel says *Rojo-Hub supports Windows only for now* and
-  nothing is started.
-- VS Code 1.101 or later.
-- git 2.31 or later on `PATH`. A missing or older git is reported when adding a project (and in
+- Windows 10 or 11. Elsewhere the panel says *Rojo-Hub supports Windows only for now* and starts
+  nothing.
+- VS Code 1.101+.
+- git 2.31+ on `PATH`. A missing or older git is reported when adding a project (and in
   `service.log`), with where to get a newer one.
-- Windows PowerShell (built into Windows).
-- Rojo installed by [Rokit](https://github.com/rojo-rbx/rokit) specifically. Each project's
-  toolchain file picks its Rojo version (see [Projects](#5-projects)); `aftman.toml` and
-  `foreman.toml` pins are read too, but a Rojo installed by Aftman or Foreman themselves is not
-  found. `rokit install` in the project installs what those files pin.
-- Rojo 7.7 or later, for everything to work as described. Rojo-Hub installs its own Studio plugin
-  (Rojo 7.7's, see [Connecting Studio](#7-connecting-studio)); Rojo's own plugin is not needed.
+- Windows PowerShell (built in).
+- Rojo installed by [Rokit](https://github.com/rojo-rbx/rokit). Each project's toolchain file picks
+  its version ([Projects](#5-projects)); `aftman.toml` and `foreman.toml` pins are read, but a Rojo
+  installed by Aftman or Foreman themselves is not found. `rokit install` in the project installs
+  what those files pin.
+- Rojo 7.7+ for everything to work as described. Rojo-Hub installs its own Studio plugin (Rojo
+  7.7's); Rojo's own is not needed.
 - Orca is optional.
 
-**One Windows user at a time.** The service's port, 34870, is shared by everyone signed in to the PC.
-If another signed-in Windows user's Rojo-Hub is running, the panel shows *Rojo-Hub could not start*
-with *Port 34870 is used by another Windows user's Rojo-Hub (‹their folder›). Only one signed-in user
-can run Rojo-Hub at a time.* Rojo-Hub never uses or stops the other user's service; it works again
-once that user signs out.
+**One Windows user at a time.** Port 34870 is shared by everyone signed in to the PC. If another
+user's Rojo-Hub runs, the panel shows *Rojo-Hub could not start* with *Port 34870 is used by another
+Windows user's Rojo-Hub (‹their folder›). Only one signed-in user can run Rojo-Hub at a time.*
+Rojo-Hub never uses or stops that service; it works again once that user signs out.
 
-**Uninstall**: uninstall the extension from every profile. The next time VS Code starts, Rojo-Hub's
-uninstall step removes its Claude Code and Codex entries (if you ticked them), then stops the
-background service and every Rojo it serves (only your own: a service of another Windows user is
-left alone). Delete `%LOCALAPPDATA%\RojoHub\` to remove its state and views.
+**Uninstall** from every profile. On VS Code's next start, the uninstall step removes its Claude Code
+and Codex entries (if ticked), then stops the service and every Rojo it serves (only your own).
+Delete `%LOCALAPPDATA%\RojoHub\` to remove state and views.
 
 ## 4. Where to find it in VS Code
 
 ### The Rojo-Hub panel
 
-An icon in the activity bar (a hub: one dot joined to four) opens the Rojo-Hub panel in the
-sidebar. It opens by itself the first time Rojo-Hub runs in a VS Code profile. The panel is built
-for Rojo-Hub and drawn in VS Code's theme colours and icons. Everything can be done from it; no
-menus pop up at the top of the window.
+An activity bar icon (a hub: one dot joined to four) opens the panel in the sidebar. It opens by
+itself the first time Rojo-Hub runs in a profile. It is drawn in VS Code's theme colours and icons,
+does everything, and never pops menus at the top of the window.
 
-**Always current, and immediate.** After the panel first loads, it follows the background service
-as a live stream: a change made anywhere (another window, an agent, a crash restart, Studio
-connecting, a branch made in a terminal) shows within a fraction of a second, with no Refresh.
-Every click shows its result at once: Start turns the card to *Starting…* (with Stop ready, to
-cancel), Stop to *Stopping…*, a branch or project file you pick shows on the card straight away, and
-group actions, Stop all, renames, deletes, member changes, new groups, reordering and adding a
-project (an *Adding…* row) all draw before the service answers. If the service then says otherwise
-(the action failed), the card shows what really happened and the error appears as a notification.
-The branch picker, project file list and *Add a project* list are filled ahead of time, so they open
-with their contents already there; the service keeps them up to date in the background. Menus,
-pickers, rename boxes and confirmations stay open through updates unless what they are about is
-gone. If the stream drops (the service restarting or being updated), the panel falls back to asking
-every two seconds until it is back.
+**Live and immediate.** After loading, the panel follows the service as a stream: changes from
+anywhere (another window, an agent, a crash restart, Studio connecting, a branch made in a terminal)
+show within a fraction of a second, with no Refresh. Every click draws its result at once: Start
+turns the card to *Starting…* (with Stop ready, to cancel), Stop to *Stopping…*; a picked branch or
+project file shows straight away; group actions, Stop all, renames, deletes, member changes, new
+groups, reordering and adding a project (an *Adding…* row) draw before the service answers. If the
+service then disagrees (the action failed), the card shows what really happened and the error shows
+as a notification. The branch picker, project file list and *Add a project* list are filled ahead of
+time and kept current by the service, so they open already drawn. Menus, pickers, rename boxes and
+confirmations stay open through updates unless their subject is gone. If the stream drops (service
+restarting or updating), the panel polls every two seconds until it is back.
 
 | The panel (sample data) | Switching branch inside a card |
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
 
-It has five sections that fold open and closed (Projects, Groups, Studio places, Port settings and
-Agent access), and a footer. **Projects, Groups and Studio places start open; Port settings and Agent
-access start folded.** Within Projects, **only the first item starts open**: the first workspace
-(or, with no workspaces, the first project card); the rest start folded. Whatever you fold or open
-is remembered. Opening a project from elsewhere (a group, the status bar) unfolds its
-card and its workspace.
+**Sections** (fold open and closed) and a footer: Projects, Groups and Studio places start open;
+Port settings and Agent access start folded. Within Projects only the first item starts open (the
+first workspace, or with none, the first card). Folding is remembered. Opening a project from
+elsewhere (a group, the status bar) unfolds its card and workspace. Section headers stick to the top
+while scrolling; the footer sticks to the bottom.
 
-**Collapse All** (the icon at the top right of the panel's title bar, as in the Explorer) folds
-everything except what is running: Projects and Groups stay open, and inside them the cards of
-serving or starting projects, the workspaces that hold them, and running groups stay open. Every
-other card and group folds, and Port settings folds. Agent access is left as it was.
+**Collapse All** (title bar, as in the Explorer) folds everything except what is running: Projects
+and Groups stay open, and so do cards of serving or starting projects, their workspaces, and running
+groups. Everything else folds, Port settings included; Agent access is left as it was.
 
-**Right-clicking a header** that folds (a section, a workspace, a project card or a group) opens a
-menu in place of Cut/Copy/Paste:
+**Right-click on a foldable header** (section, workspace, card, group) replaces Cut/Copy/Paste with:
 
-- **Expand** (on a folded header) opens just that header, like clicking its chevron;
-- **Expand All** opens it and everything inside it: on Projects, every workspace and project card;
-  on Groups, every group; on a workspace, its cards. It shows only on headers that hold other
-  foldable headers;
-- **Collapse** (on an open header) folds it;
-- **Collapse Others** folds its neighbours and opens it. Neighbours are the headers in the same list:
-  the sections, the workspaces, the cards in one workspace, or the groups.
+| Item | Does |
+|---|---|
+| **Expand** | Opens just that (folded) header. |
+| **Expand All** | Opens it and everything in it (Projects: every workspace and card; Groups: every group; a workspace: its cards). Only on headers holding other foldable headers. |
+| **Collapse** | Folds it (open header). |
+| **Collapse Others** | Folds its neighbours in the same list (sections, workspaces, cards in one workspace, or groups) and opens it. |
 
-Right-clicking anywhere else in the panel still shows Copy. Workspace headers have no menu while the
-Projects filter is open, since every matching workspace is open then.
+Elsewhere right-click shows Copy. Workspace headers have no menu while the Projects filter is open.
 
-The section headers stay at the top while their section scrolls under them, and the footer stays at
-the bottom of the panel.
+**Narrow sidebars** (widths are rough; the panel measures its own content):
 
-In a narrow sidebar the panel drops things in steps so names stay readable and nothing runs past a
-card's edge (the widths are the sidebar's, roughly; the panel measures its own content width):
+| Below | Changes |
+|---|---|
+| ~320px | A group's *Running* pill and Agent access's status chips hide. |
+| ~280px | Counts lose their words ("2/5"), footer reads "3/5"; Studio places' hand-connect ports lose project names; the project file row shows just `default`/`test` without its label; card Stop/Start and *Copy commands*/*Copy prompt* become icons; window badges, a folded card's error/warning icon (the card stays tinted), *not added* and *shown above* hide; a group's rename and delete show only on hover. |
+| ~270px | The status pill shrinks to its icon, and a workspace's *Group* button too. |
+| ~230px | Ports leave project headers and group members (*Copy Port* still works); footer Refresh hides and Stop all becomes an icon. |
+| 170px | The panel stops shrinking and scrolls sideways. |
 
-- below about 320px: a group's *Running* pill and Agent access's status chips hide;
-- below about 280px: counts lose their words ("2/5"), the footer reads "3/5", the hand-connect ports in
-  Studio places lose their project names, the project file row shows just `default` or `test` without its *project file*
-  label, the card's Stop and Start and Agent access's *Copy commands* and *Copy prompt* become icons,
-  the window badges, a folded card's error or warning icon (the card stays tinted) and *not
-  added*/*shown above* hide, and a group's rename and delete show only on hover;
-- below about 270px: the card's status pill shrinks to its icon, and a workspace's *Group* button to
-  its icon;
-- below about 230px: ports leave project headers and group members (*Copy Port* in a project's menu
-  still copies it),
-  the footer's Refresh hides and Stop all becomes an icon.
+**Your own order.** Cards, workspace blocks and group cards have a grip (⋮⋮) in their left margin on
+hover; drag onto another to move before or after it (cards within their workspace, workspaces among
+workspaces, groups among groups). The order is saved in the service, so every window shows it. It
+**never changes a port**: port collisions go by the order projects were added.
 
-VS Code lets a sidebar be dragged as narrow as you like, so below 170px the panel stops shrinking and
-scrolls sideways.
+**Projects** (header: serving count, filter icon, `+`). Each card has:
 
-**Your own order.** Project cards, workspace blocks and group cards each have a grip (⋮⋮) that
-appears in their left margin when the pointer is on them; drag one onto another to move it before or after it. Cards move within their workspace,
-workspaces among workspaces, groups among groups. The order is saved in the service, so every
-window shows it, and **it never changes a port**: which project keeps a port when two collide goes by
-the order projects were added, which reordering does not touch.
-
-**Projects** (the header shows how many are serving; the filter icon filters the list and `+` adds
-a project). Each project is a card:
-
-- a grip to reorder it, a fold arrow, a **status light** and the project's **name** (a window icon
-  marks the project this VS Code window is open on). Folded, a project serving a file other than
-  `default.project.json` shows that file's name in a small tag after its own (`test` for
+- grip, fold arrow, **status light**, **name** (a window icon marks this window's project). Folded,
+  a project serving a file other than `default.project.json` shows a small tag (`test` for
   `test.project.json`);
-- the **port** (`:35045`) at the top right, which copies the number (`35045`) when clicked; it shows a
-  copy icon on hover and a green tick for a moment after copying;
-- **what it serves**: a folder icon for a worktree, a branch icon for a branch. Clicking it opens
-  the branch picker inside the card: a search box, then, like Source Control's branch picker,
-  *Worktrees* (under Orca's names), *Local branches* and *Remote branches* (a cloud icon; only those
-  with no local branch of the same name), each with how many it holds. Branches show when they last
-  had a commit. The current one is ticked. Clicking one switches; Enter picks the first match,
-  Escape closes it. Studio stays connected. The picker opens with its list already drawn (see
-  [Switching branches](#8-switching-branches)); its **Fetch** button (⟳, in the search box) and
-  **New branch** row are described there too;
-- **the project file** it serves (`default.project.json`, `test.project.json`, …), in a row of its
-  own under that, since it decides what Studio gets. Clicking it opens a list inside the card, like
-  the branch picker; see [Project files](#project-files). In a narrow sidebar it shows just
-  `default` or `test`;
-- the **agent claim**, while an agent holds one: *Agent in ‹worktree› until 14:05* (see
-  [Agents](#10-agents));
-- **warnings** (yellow) and **errors** (red), in full. An error from Rojo shows its first line, then
-  up to the last five lines Rojo logged about it, with *Show full log*;
-- while `rojoHub.openPlaces` is on, the project's **places**: each place its project file lists
-  (`servePlaceIds`, then `placeId`, not `blockedPlaceIds`), whether it is open in Studio, and
-  **Open**, or **Reopen** and **Close** while it is open (see
-  [Opening places](#opening-places-in-studio));
-- a bottom row: a coloured **status pill** (*Connected* (Studio is connected; *Connected · 2* when
-  more than one Studio is), *Serving* (waiting for Studio), *Starting…*, *Stopping…*, *Stopped*,
-  *Error*, or *Unavailable* (the service is not running)), a **⋯** menu, and **Start** or **Stop** at
-  the right (a project in error has both: Start to try again, Stop to stop it).
-  The ⋯ menu has *Update sourcemap.json* with the sourcemap's status (for a project serving a
-  worktree; see [Sourcemaps](#sourcemaps)), *Open all places in Studio* (while `rojoHub.openPlaces`
-  is on and one of its places is not open), *Build place file…*, *Show Rojo log* and *Remove from
-  Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
+- the **port** (`:35045`) top right; click copies `35045` (copy icon on hover, green tick after);
+- **what it serves** (folder icon: worktree; branch icon: branch). Click opens the branch picker in
+  the card: a search box, then *Worktrees* (Orca's names), *Local branches* and *Remote branches*
+  (cloud icon; only those with no local branch of that name), each with a count. Branches show when
+  they last had a commit; the current one is ticked. Click switches; Enter picks the first match;
+  Escape closes. Studio stays connected. **Fetch** (⟳) and **New branch** are in
+  [Switching branches](#8-switching-branches);
+- **the project file** (`default.project.json`, …) on its own row, since it decides what Studio gets.
+  Click opens a list in the card ([Project files](#project-files)). Narrow: just `default`/`test`;
+- the **agent claim** while held: *Agent in ‹worktree› until 14:05* ([Agents](#10-agents));
+- **warnings** (yellow) and **errors** (red), in full. A Rojo error shows its first line, then up to
+  the last five lines Rojo logged about it, with *Show full log*;
+- while `rojoHub.openPlaces` is on, its **places** (`servePlaceIds`, then `placeId`, not
+  `blockedPlaceIds`), whether each is open in Studio, and **Open**, or **Reopen** and **Close**
+  ([Opening places](#opening-places-in-studio));
+- a bottom row: **status pill** (*Connected*, or *Connected · 2* with two Studios; *Serving*
+  (waiting for Studio); *Starting…*; *Stopping…*; *Stopped*; *Error*; *Unavailable* (service not
+  running)), a **⋯** menu, and **Start** or **Stop** (a project in error has both). The ⋯ menu,
+  opening up or down as room allows: *Update sourcemap.json* with its status (worktree targets;
+  [Sourcemaps](#sourcemaps)), *Open all places in Studio* (with `openPlaces` on and a place not
+  open), *Build place file…*, *Show Rojo log*, *Remove from Rojo-Hub…* (asks first).
 
-**Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
-borrowed project file and packages match what Studio gets. A save dialog opens on
-`<project>-<branch>.rbxl` in the folder you last built into, or your Documents folder the first time
-(never inside the repo, where it would be an untracked file); characters Windows does not allow in
-file names are replaced with `-`. A spinner shows on the card while it builds, and when it
-is done a message gives the size and offers *Reveal in File Explorer*.
+A folded card is one row: grip, arrow, light, name, a warning/error icon, a robot icon while an
+agent holds a claim, the port, and Start or Stop (both in error). A left rail shows state: green
+serving, blue starting, red error (an erroring card is also tinted red). With no projects, the
+section explains Rojo-Hub and offers *Add a project* and the *Getting started guide*.
 
-**Filter** (the filter icon in the Projects header) opens a box above the cards. Typing narrows
-the list to projects whose name, branch or port match every word; workspaces with no match hide
-and the rest open. Escape or ✕ clears it. The filter is not remembered.
+**Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a
+branch's borrowed project file and packages match Studio. A save dialog opens on
+`<project>-<branch>.rbxl` in the last folder built into, or Documents the first time (never inside
+the repo, where it would be untracked); characters Windows forbids become `-`. A spinner shows while
+it builds; then a message gives the size and offers *Reveal in File Explorer*.
 
-A **folded** card is one row: grip, arrow, light, name, a warning or error icon if it has one, a
-robot icon while an agent holds a claim, the port, and a start or stop button (both for a project
-in error).
+**Filter** (Projects header) opens a box above the cards: projects whose name, branch or port match
+every word stay; workspaces with no match hide, the rest open. Escape or ✕ clears. Not remembered.
 
-A thin rail on the card's left edge shows its state: green while serving, blue while starting, red on
-an error (an erroring card is also tinted red). In a narrow sidebar the status pill shrinks to its
-icon. With no projects, the section explains what Rojo-Hub does and offers *Add a project* and the *Getting started guide*.
+**Grouped by workspace.** Projects in a `.code-workspace` are listed under its name, with its
+serving count, a window icon for this window's workspace, and a **Group** button making a group of
+its projects. Listed folders with a `*.project.json` not yet added show as *not added* with **Add**
+(and *Add all* for several). Others are under **Other projects**. See [Workspaces](#workspaces).
 
-**Grouped by workspace.** When projects belong to a VS Code workspace (a `.code-workspace`
-file), the Projects list groups them under that workspace's name, with its serving count, a window icon
-for the workspace this window has open, and a **Group** button that makes a group
-of its projects. Folders the workspace lists that have a `*.project.json` but are not added
-yet appear under it as *not added* with an **Add** button (and *Add all* when there are several).
-Projects in no workspace are under **Other projects**. See [Workspaces](#workspaces).
+**Add a project** (`+`) lists this window's folders and the repos Orca knows, each with `+`, and
+*Browse…*. The new card is highlighted once added.
 
-**Add a project** (the `+`) opens a list inside the panel of the folders open in this window and the
-repos Orca knows about, each with a `+`, and a *Browse…* button for any other folder. The new
-project's card is highlighted once it is added.
+**Groups** (header: count; `+` makes one). *New group* opens a name box; Enter or *Create*. Each
+group card folds and shows how many of its projects serve (green when all). Inside:
 
-**Groups** (the header shows how many; `+` makes one). *New group* opens a name box in the panel;
-Enter or *Create* makes it. Each group is a card that folds open and closed, showing how many of its
-projects are serving (green when all are). Inside:
+- its nested groups, then its projects, each project with its port (click copies) and ✕ to take it
+  out (asks *Take … out of …?*); a name click jumps to its card;
+- an **Add a project, group or workspace…** dropdown: workspaces (adds each of their projects),
+  projects not in it, then groups (those that would loop greyed out);
+- one **Start** / **Stop** button bottom right (Stop keeps projects another running group uses); a
+  folded group shows ▶ / ■ in its header;
+- a green *Running* pill (hidden when narrow) and green rail while running;
+- ✎ rename in place (Enter saves, Escape cancels) and 🗑 delete (asks *Delete …?* under the name;
+  projects stay), shown on hover.
 
-- the groups inside it, then its projects, each project with its port (click to copy the port
-  number) and ✕ to take it out, which asks *Take … out of …?* first (clicking a name
-  jumps to its card);
-- an **Add a project, group or workspace…** dropdown: workspaces (adding each of their projects),
-  projects not in it yet, then groups, with groups that would make a loop greyed out;
-- one **Start** / **Stop** button at the bottom right, as on a project card (Start while the group
-  is not running, Stop while it is; Stop keeps projects another running group uses); a folded group
-  has the same as a small ▶ / ■ at the right of its header;
-- a green *Running* pill and a green rail on the left edge while the group is running (the pill
-  hides when the sidebar is narrow);
-- ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete …?* on
-  a row under the name; the projects stay). Both show when the pointer is on the card.
+**Studio places** (below Groups; header: count): every open place with Rojo-Hub's plugin, its name
+(and *unsaved*), what it syncs with or waits for, a status pill (*Synced*, *Connecting*, *Waiting*,
+*Assign a project*, *Rojo too old*, *Reopen the place*), and a list to assign a project; *Automatic*
+follows project files and the last sync ([Connecting Studio](#7-connecting-studio)). A place that
+does not connect by itself (*Assign a project*) also gets *or connect by hand:* with every serving
+project's port to copy. With no place open it says so and how many projects serve. (0.19.3 removed
+the *Active ports* section this replaced.)
 
-**Studio places** (below Groups; the header shows how many): every open Studio place with Rojo-Hub's
-plugin, its name (and *unsaved*), what it syncs with or waits for, a status pill (*Synced*,
-*Connecting*, *Waiting*, *Assign a project*, *Rojo too old*, *Reopen the place*), and a list to assign
-it a project; *Automatic* follows its project files and its last sync (see
-[Connecting Studio](#7-connecting-studio)). A place that does not connect by itself (*Assign a
-project*) also gets an *or connect by hand:* line with every serving project's port to copy, for
-Rojo's own plugin or typing it in. With no place open it says so, and how many projects are serving.
-(0.19.3 removed the *Active ports* section this replaced: which projects serve shows on their cards
-and the Projects header, and each card's port copies with a click.)
-
-**Agent access** (below Port settings, folded by default; the header shows how many agents can use
-Rojo-Hub): a switch per AI agent, with a chip saying where it stands (*Connected*, *Off*, *Not
-installed*, *Set up by you*, *Can't read config*), and a folded *Other agents and manual setup* part
-with the server's address and buttons to copy setup commands or a setup prompt. See
-[Agents](#10-agents).
+**Agent access** (below Port settings, folded; header: how many agents can use Rojo-Hub): a switch
+per agent with a chip (*Connected*, *Off*, *Not installed*, *Set up by you*, *Can't read config*),
+and a folded *Other agents and manual setup* part with the server's address and buttons to copy setup
+commands or a prompt. See [Agents](#10-agents).
 
 ![Agent access with VS Code agents and Claude Code connected and Codex off](../site/public/images/panel-agent-access.png)
 
 **Agent notice** (above Projects): *Let Claude Code … use Studio*, with *Set up* (opens and scrolls
-to Agent access), *Later* and ✕. It shows only while at least one project is registered, Claude Code
-or Codex is installed, and neither has a `rojohub` entry of any kind: it hides once one is
-*Connected* or *Set up by you*, and while a config *Can't be read*. *Later* hides it for 14 days, ✕
-for good; every window and profile agrees (it is kept in `agent-notice.json`).
+to Agent access), *Later* and ✕. Shown only while a project is registered, Claude Code or Codex is
+installed, and neither has any `rojohub` entry: it hides once one is *Connected* or *Set up by you*,
+and while a config *Can't be read*. *Later* hides it 14 days, ✕ for good; every window and profile
+agrees (`agent-notice.json`).
 
-**Port settings** (folded by default): the port range and excluded ports as text boxes, with
-*Save* and *Undo*. Mistakes are pointed out before saving. The port range also has **Reset**, which
-puts back the default range (34873–35872) after asking: it says how many projects get their port from
-the range, since their ports may change and serving ones restart. Reset is greyed out when the range
-is already the default; excluded ports have no reset. These edit the VS Code user settings described
-in [Settings](#13-settings).
+**Port settings** (folded): port range and excluded ports as text boxes, with *Save* and *Undo*;
+mistakes are shown before saving. The range has **Reset** to the default (34873–35872), which asks
+first and says how many projects get their port from the range (their ports may change and serving
+ones restart); greyed out when already default. Excluded ports have no reset. These edit the user
+settings in [Settings](#13-settings).
 
 ![Port settings with the default range](../site/public/images/panel-port-settings.png)
 
-**Footer**: how many projects are serving, **Stop all**, and Refresh. *Stop all* stops every
-serving, starting or erroring project and marks every group not running; it asks first, on the panel, naming what it will
-stop. The background service itself never appears: Rojo-Hub starts it whenever it is needed.
+**Footer**: serving count, **Stop all**, Refresh. *Stop all* stops every serving, starting or
+erroring project and marks every group not running, after asking in the panel with what it will
+stop. The service never appears; Rojo-Hub starts it when needed.
 
-While an action runs, VS Code's progress bar shows at the top of the panel and the button that
-started it is disabled.
+While an action runs, VS Code's progress bar shows on the panel and the button that started it is
+disabled.
 
 ### Other ways in
 
-- **Rojo-Hub: Open Menu** (command palette, and the list icon in the panel's title bar): the same
-  actions as quick-pick menus for keyboard use, like Rojo's own *Rojo: Open Menu*. It lists the
-  projects, then the groups, then *Add Project*, *New Group*, *Port Settings* (opens VS Code's
-  Settings filtered to Rojo-Hub's settings), *Agent Access* (opens VS Code's Settings on
-  `rojoHub.agents`) and *Stop All*.
-- **The status bar**: in a window whose folder belongs to a registered project, the bottom bar
-  shows `Rojo :<port> · <what it serves>` with its state icon. Clicking it opens the panel and
-  highlights that project's card.
-- **Get Started walkthrough**: on VS Code's Welcome page (Help → Welcome, then *Get Started with
-  Rojo-Hub*), or *Getting started guide* in the empty panel. Five steps: add, start, connect
-  Studio, switch, group.
+- **Rojo-Hub: Open Menu** (command palette; list icon in the title bar): the same actions as quick
+  picks, like *Rojo: Open Menu*. Lists projects, groups, then *Add Project*, *New Group*, *Port
+  Settings* (VS Code's Settings filtered to Rojo-Hub), *Agent Access* (Settings on `rojoHub.agents`)
+  and *Stop All*.
+- **Status bar**: in a window on a registered project, `Rojo :<port> · <what it serves>` with its
+  state icon. Click opens the panel and highlights that card.
+- **Get Started walkthrough**: Welcome page (Help → Welcome, *Get Started with Rojo-Hub*), or
+  *Getting started guide* in the empty panel. Five steps: add, start, connect Studio, switch, group.
 
 **Status lights**
 
@@ -354,698 +283,596 @@ started it is disabled.
 | spinner | starting |
 | green ring | serving, no Studio plugin connected |
 | green dot | serving, at least one Studio plugin connected |
-| red dot | error (the card shows the message; the log has the rest) |
-| dashed grey ring | unavailable: Rojo-Hub's service could not be started |
+| red dot | error (the card shows it; the log has the rest) |
+| dashed grey ring | unavailable: the service could not be started |
 
 ## 5. Projects
 
-**Add a project** (the `+` on Projects) lists the folders open in the window and the repos Orca
-knows about, and offers *Browse…*.
-Any folder inside a repo works; the primary checkout is what gets registered. Registration fails
-when:
+**Add a project** (`+`) lists this window's folders and Orca's repos, plus *Browse…*. Any folder in
+a repo works; the primary checkout is registered. It fails when:
 
 - the primary checkout has no `*.project.json` directly in it, or the chosen one has no `name`;
-- the same repo is already registered **with the same project file** (*‹folder› is already
-  registered*). One repo can be registered more than once with different `*.project.json` files, as
-  long as their `name`s differ;
-- another project already uses the same Rojo project `name`. Names must be unique because a
-  place remembers the project it last synced with by name (Rojo-Hub's record and the plugin's);
-- no port can be given to it: its `servePort` is 34870 or another project's `servePort`, or the port
-  range has no free port left (see [Ports](#6-ports));
+- the repo is already registered **with the same project file** (*‹folder› is already registered*).
+  One repo can be registered with different `*.project.json` files if their `name`s differ;
+- another project uses the same `name` (a place remembers its last project by name, in Rojo-Hub's
+  record and the plugin's);
+- no port can be given: its `servePort` is 34870 or another project's `servePort`, or the range is
+  full ([Ports](#6-ports));
 - git is missing or older than 2.31.
 
-A newly added project points at its primary checkout and is stopped until you start it.
+A new project points at its primary checkout and is stopped.
 
 ### Project files
 
-A project serves one of the `*.project.json` files directly in its folder. Adding a folder picks it
-this way:
+A project serves one `*.project.json` directly in its folder. On adding: `default.project.json` if
+present (no question); else the only `*.project.json` (a library with just `test.project.json`, say);
+else a list to choose from.
 
-- `default.project.json` when the folder has one, without asking;
-- otherwise the folder's only `*.project.json` (a library with just a `test.project.json`, say);
-- otherwise a list of the folder's project files to choose from.
+The **project file row** opens a list in the card of the folder's `*.project.json` files, current one
+ticked; click switches, Escape closes. The service sends each project's list with every status update
+(re-reading the folder at most every two seconds), so it opens at once and added or deleted files
+appear by themselves, even while open. **Browse…** at the bottom opens a file dialog in the project's
+folder; only a `*.project.json` directly in it is taken. *Project File…* in the project's menu offers
+the same as a quick pick. The choice is saved with the project across restarts and updates. That is
+how a library is served with its tests: pick `test.project.json`.
 
-The **project file row** on the card opens a list inside the card of the folder's `*.project.json`
-files, with the current one ticked; clicking one switches to it, and Escape closes the list. The
-service keeps each project's list and sends it with every status update (it reads the folder again
-at most every two seconds), so the list opens at once and a file added or deleted shows up in it by
-itself, even while it is open. At the
-bottom, **Browse…** opens a file dialog that starts in the project's folder, for picking the file by
-hand; only a `*.project.json` directly in that folder is taken. *Project File…* in the project's menu
-lists the same files as a quick pick. The choice is saved with the
-project, so it stays after restarts and updates. That is how a library is served with its tests:
-pick `test.project.json` (or whatever builds a place with the library and its tests in it).
+- Changed only while **stopped** (or in error, e.g. a branch without the file). While running or
+  starting, the row is greyed with a lock. Rojo reads the name, `servePort` and place IDs once per
+  session, so a new file means a new session.
+- The project takes the new file's `name`, which must be unique. A file another project of the same
+  repo serves is refused (*Another project already serves ‹file› from ‹folder›*).
+- The port stays unless the new (or old) file sets `servePort`.
+- Everything follows the file: what Rojo serves on every branch, `sourcemap.json`, *Build place
+  file…*. A tree without that file shows an error until you switch back or pick another file.
 
-- The file is changed while the project is **stopped** (or has an error, e.g. a branch without the
-  file). While it is **running or starting**, the row is greyed out with a lock and only shows which
-  file is served; stop the project to change it. Rojo reads the project name, `servePort` and place
-  IDs once per session, so a new file always means a new session.
-- The project takes the new file's `name`, which must not be another project's (the same rule as
-  adding). A file another project of the same repo already serves is refused (*Another project
-  already serves ‹file› from ‹folder›*).
-- The port stays the same unless the new file sets `servePort` (or the old one did), since ports
-  come from the repo's first commit.
-- Everything follows the file: what Rojo serves on every branch, `sourcemap.json` and *Build place
-  file…*. A branch or worktree without that file shows an error on the card until you switch back or
-  pick another file.
+**The project's menu**: Switch Branch…, Start or Stop Serving (both in error), Copy Port (the number),
+Project File… (locked, with the file's name, while running or starting), Show Rojo Log, Remove
+Project, All Projects (back to Open Menu). *Show Rojo Log* before any start says *‹project› has no
+Rojo log yet; it appears once the project has been started.* The first line of its error, else its
+first warning, shows at the top (the card shows them all).
 
-**A project's menu**: Switch Branch…, Start or Stop Serving (both for a project in error), Copy Port
-(just the number), Project File… (shown locked, with the file's name, while the project is running
-or starting), Show Rojo Log, Remove Project, and All Projects (back to Open Menu). *Show Rojo Log* on
-a project that has never been started says *‹project› has no Rojo log yet; it appears once the
-project has been started.* The first line of the project's error, or else its first warning, shows
-at the top of the menu (only that one; the card shows them all).
+**Start Serving** runs `rojo serve` in the primary checkout's folder with the pinned Rojo, and waits
+until Rojo answers with the project's name, or reports the end of the Rojo log after 30 seconds.
 
-**Start Serving** runs `rojo serve` in the primary checkout's folder, with the Rojo version the
-project pins. It waits until Rojo answers with the project's name, or reports the end of the Rojo
-log if it does not come up within 30 seconds.
+**Which Rojo.** The toolchain file is read as Rokit does, always from the **primary checkout** (not
+the served tree): `rokit.toml`, `aftman.toml` or `foreman.toml` in the project folder, then each
+folder above, then `~/.rokit/rokit.toml`; the nearest that pins Rojo wins, `rokit.toml` first within
+a folder. That version runs straight from Rokit's tool storage
+(`~/.rokit/tool-storage/rojo-rbx/rojo/<version>/rojo.exe`) with no console, so **no window opens**.
+(Rokit's `rojo` shim starts Rojo as a console program, which made Windows flash a Terminal window.)
 
-**Which Rojo.** Rojo-Hub reads the project's toolchain file the way Rokit does, always from the
-**primary checkout** (not from the worktree or branch being served): `rokit.toml`,
-`aftman.toml` or `foreman.toml` in the project folder, then in each folder above it, then the global
-`~/.rokit/rokit.toml`; the nearest one that pins Rojo wins, and `rokit.toml` before the others in
-the same folder. It then runs that version straight from Rokit's tool storage
-(`~/.rokit/tool-storage/rojo-rbx/rojo/<version>/rojo.exe`), with no console, so **no window opens**.
-(Going through Rokit's `rojo` command instead made Windows open a Terminal window for a moment,
-because that command starts the real Rojo as a console program of its own.)
+- Pinned version not installed: *Rojo 7.3.0 (pinned in …\MyLibrary\aftman.toml) is not installed. Run
+  "rokit install" in …\MyLibrary, or pin a Rojo version you have.*
+- Nothing pins Rojo: starting says so and suggests `rokit add rojo-rbx/rojo`.
+- Rojo older than 7.7 starts with a warning. **Rojo 7.7 is the first with protocol 5, and the plugin
+  connects only to the same protocol**, so the 7.7 plugin refuses Rojo 7.0–7.6 (protocol 4: *"it's
+  using a different protocol version, and is incompatible"*). Rojo-Hub's plugin does not connect such
+  a project by itself; its Studio places row says *Rojo too old*. Keep every project on 7.7. Live
+  switching itself was measured working on 7.3.0; the Studio-connected light needs 7.7. Older Rojo
+  answers the status check in JSON rather than MessagePack; both are read.
 
-- If the pinned version is not installed, starting fails with, for example: *Rojo 7.3.0 (pinned in
-  …\MyLibrary\aftman.toml) is not installed. Run "rokit install" in …\MyLibrary, or pin a Rojo version
-  you have.*
-- If no toolchain file pins Rojo, starting says so and suggests `rokit add rojo-rbx/rojo`.
-- A project pinned to a Rojo older than 7.7 starts, with a warning. **Rojo 7.7 is the first version
-  that speaks protocol 5, and the Studio plugin only connects to a server with the same protocol**,
-  so a 7.7 plugin refuses Rojo 7.0–7.6 (protocol 4) with *"it's using a different protocol version,
-  and is incompatible"*. Rojo-Hub's plugin is Rojo 7.7's, so it does not connect to such a project
-  by itself: its Studio places row says *Rojo too old*. Keep every project on Rojo 7.7.
-  Live switching itself was measured working on 7.3.0; the Studio-connected light needs 7.7.
-  Older Rojo answers Rojo-Hub's status check in JSON rather than MessagePack; both are read.
-
-**Stop Serving** stops that project's Rojo only; other projects and any Rojo you started by hand
-are left alone.
+**Stop Serving** stops only that project's Rojo; other projects and hand-started Rojo are untouched.
 
 **Remove Project** stops its Rojo, deletes its generated files and views, and removes it from every
-group. The project's own files are never touched. If removing it frees a port that another project
-was pushed off (see [Ports](#6-ports)), that project moves back a few seconds later; the
-confirmation names each project
-that will move, from which port to which, and says when it is serving and Studio will have to
-reconnect.
+group. Project files are never touched. If that frees a port another project was pushed off
+([Ports](#6-ports)), that project moves back a few seconds later; the confirmation names each project
+that will move, from and to which port, and says when it is serving and Studio must reconnect.
 
 ### Workspaces
 
-A VS Code workspace file (`.code-workspace`) lists folders that open together, like
-`MyGame.code-workspace` listing MyGame, MyGameServer and SharedLib. Rojo-Hub uses them
-only to arrange the Projects list; nothing about a project changes.
+A `.code-workspace` file lists folders that open together (`MyGame.code-workspace` listing MyGame,
+MyGameServer, SharedLib). Rojo-Hub uses them only to arrange the Projects list.
 
-- **Where it looks**: the workspace file this window has open, and the top folder of every added
-  project. Comments and trailing commas in the file are fine; remote (`uri`) folders are ignored.
-- **Which projects**: each folder the file lists is matched to an added project by its repo's
-  primary checkout, so a worktree folder counts as its project.
-- **Drawn once**: a project listed by two workspaces is drawn under the first (this window's
-  workspace first, then by name); the other shows a short *shown above* row that jumps to it.
-- **Adding and removing** stays per project: *Add* (or *Add all*) under a workspace adds its
-  folders one by one as ordinary projects, and a project's trash button removes it as usual.
-- **Group**: makes a group named after the workspace (or *Name 2*, … if taken) holding its added
-  projects. It is an ordinary group from then on; later changes to the workspace file do not
-  change it.
-- The workspace files are re-read when projects are added or removed, when the window's workspace
-  changes, and on Refresh.
+- **Where it looks**: this window's workspace file and the top folder of every added project.
+  Comments and trailing commas are fine; remote (`uri`) folders are ignored.
+- **Which projects**: listed folders are matched to added projects by primary checkout, so a
+  worktree folder counts as its project.
+- **Drawn once**: a project in two workspaces is drawn under the first (this window's, then by name);
+  the other shows a *shown above* row that jumps to it.
+- **Adding and removing** stay per project: *Add* / *Add all* adds folders as ordinary projects.
+- **Group** makes a group named after the workspace (or *Name 2*, … if taken) of its added projects;
+  an ordinary group from then on, unaffected by later workspace changes.
+- Workspace files are re-read when projects are added or removed, the window's workspace changes, and
+  on Refresh.
 
 ## 6. Ports
 
-A project's port is decided by these rules, in order, and is recomputed every few seconds (every
-3 seconds, and whenever the project list is read):
+Decided by these rules, in order, rechecked every 3 seconds and whenever the project list is read:
 
-1. **`servePort`** in the project's project file, when set. This is Rojo's own field: it is
-   committed with the repo, so everyone who clones it agrees, and plain `rojo serve` uses it too.
-   The project file wins over the settings: a `servePort` in `rojoHub.excludedPorts`, or 34872, is
-   still used, and the card notes *servePort ‹p› is in rojoHub.excludedPorts; the project file
-   wins.* Three exceptions:
-   - A `servePort` that is not a port (not a whole number from 1 to 65535) is refused: *servePort
-     ‹value› is not a port; use a whole number from 1 to 65535.*
-   - `servePort` **34870**, Rojo-Hub's own service port, is refused: the card shows the error
-     *servePort 34870 is Rojo-Hub's own service port. Pick another port in the project file.* and
-     the project cannot start.
-   - **Two projects with the same `servePort`**: the one registered first keeps it; the other shows
-     the error *servePort ‹p› is also set by ‹name›; two projects cannot share a port. Change one of
-     them.* and cannot start.
+1. **`servePort`** in the project file, when set. Rojo's own field: committed, so every clone agrees,
+   and plain `rojo serve` uses it too. It wins over settings: a `servePort` in
+   `rojoHub.excludedPorts`, or 34872, is still used, with the note *servePort ‹p› is in
+   rojoHub.excludedPorts; the project file wins.* Exceptions:
+   - not a port (not a whole number 1–65535): *servePort ‹value› is not a port; use a whole number
+     from 1 to 65535.*
+   - **34870** (the service's port): error *servePort 34870 is Rojo-Hub's own service port. Pick
+     another port in the project file.*; the project cannot start.
+   - **two projects with the same `servePort`**: the first registered keeps it; the other errors
+     *servePort ‹p› is also set by ‹name›; two projects cannot share a port. Change one of them.* and
+     cannot start.
 
-   Adding a project whose `servePort` is refused in either way fails with that message.
-2. **Otherwise a port worked out from the repo's first commit**: a hash of the oldest root commit,
-   placed in the port range (default `34873-35872`). Every clone of the repo has the same first
-   commit, and renaming the repo, its folder or its project does not change it, so the port is the
-   same on every machine and after every reinstall.
-3. **Collisions**: a hashed port that is excluded, claimed by a `servePort`, or already taken by a
-   project registered earlier moves forward to the next free port, wrapping around to the start of
-   the range. The project that moved shows *Its own port ‹p› is taken by ‹name› (or: is excluded),
-   so it moved to ‹q›. Set "servePort" in its project file to fix a port.* Rule 1 always wins over
-   rule 2: a `servePort` that lands on a hashed project's port moves the hashed project. When the
-   range has no free port left, the project shows *No free port left in ‹first›-‹last›.*
-4. **Hashing never picks 34872 or 34870.** 34872 is Rojo's default port, used by a plain
-   `rojo serve` (and by tools that expect Rojo there); 34870 is Rojo-Hub's own service. Both are
-   excluded from rule 2 whatever the port range and `rojoHub.excludedPorts` say (a `servePort` of
-   34872 is still honoured, as rule 1 says). A range may be a single port (`35000-35000`).
+   Adding a project whose `servePort` is refused fails with that message.
+2. **Otherwise a hash of the repo's oldest root commit**, placed in the range (default
+   `34873-35872`). Every clone shares it and renames do not change it, so it is the same on every
+   machine and reinstall.
+3. **Collisions**: a hashed port that is excluded, claimed by a `servePort`, or taken by an
+   earlier-registered project moves to the next free port, wrapping around. The moved project shows
+   *Its own port ‹p› is taken by ‹name› (or: is excluded), so it moved to ‹q›. Set "servePort" in its
+   project file to fix a port.* A `servePort` always beats a hashed port. A full range shows *No free
+   port left in ‹first›-‹last›.*
+4. **Hashing never picks 34872 (Rojo's default, for plain `rojo serve` and tools expecting it) or
+   34870**, whatever the settings say (a `servePort` of 34872 is still honoured). A range may be one
+   port (`35000-35000`).
 
-**A project file that does not parse for a moment** (an auto-save of half-typed JSON, or a file
-locked while it is written) keeps the `servePort` last read from it, so the port does not move away
-and back.
+**A project file that briefly fails to parse** (auto-saved half-typed JSON, a locked file) keeps the
+last `servePort` read, so the port does not bounce.
 
-**Excluding ports** for all projects: the `rojoHub.excludedPorts` setting (see [Settings](#13-settings)).
+**Excluding ports** for all projects: `rojoHub.excludedPorts` ([Settings](#13-settings)).
 
-**When a port changes** (you add, change or remove a `servePort`, exclude the port a project is on or
-change the port range, or remove the project that had pushed it off its own port), a serving project
-is restarted on its new port. That is a new session: places with Rojo-Hub's Studio plugin reconnect
-to the new port by themselves. The project shows *Port moved from A to B. Places with Rojo-Hub's
-Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.* (a stopped project
-just *Port moved from A to B.*), and VS Code shows a warning, *Rojo-Hub: ‹project› moved from port A
-to B. …*, with **Copy Port** and **Show Project**; the window with the project open says it, or else
-the focused window. Rojo's own plugin remembers the last port per place, so with it, set the new one
-once.
+**When a port changes** (a `servePort` added, changed or removed; the port excluded or range changed;
+the project that pushed it off removed), a serving project restarts on the new port: a new session,
+and Rojo-Hub's plugin reconnects by itself. The card shows *Port moved from A to B. Places with
+Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.* (stopped:
+just *Port moved from A to B.*), and VS Code warns *Rojo-Hub: ‹project› moved from port A to B. …*
+with **Copy Port** and **Show Project**, in the window with the project open, else the focused one.
+Rojo's own plugin remembers the last port per place, so set the new one once there.
 
-**A move waits until the new port has held.** A move that comes from a project file (a `servePort`
-added, changed or removed) or from removing a project happens only once the new assignment has stayed
-the same for 2.5 seconds, so a `servePort` being typed with auto-save on (3, 34, 349…) or a line
-deleted and put back does not restart Rojo at every step. With the 3-second recheck, that is a few
-seconds in practice. A change of the port settings (`rojoHub.portRange`, `rojoHub.excludedPorts`),
-which you save on purpose, moves at once. Changing a project's project file (while it is stopped)
-takes the new port at once too.
+**A move waits until the new port has held.** Moves from a project file or a removal happen once the
+new assignment has been stable 2.5 seconds (a few seconds in practice, with the 3-second recheck), so
+typing a `servePort` with auto-save (3, 34, 349…) or deleting and restoring a line does not restart
+Rojo each step. Port settings changes (`rojoHub.portRange`, `rojoHub.excludedPorts`) move at once, as
+does changing a stopped project's project file.
 
-**If another program already holds a project's port**, starting it fails with a message saying
-so; add that port to `rojoHub.excludedPorts` and the project moves.
+**If another program holds a project's port**, starting fails saying so; exclude that port and the
+project moves.
 
 ## 7. Connecting Studio
 
-Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.0's plugin, changed to connect by
-itself. With it, a place connects with no port typed and no click.
+Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.0's, changed to connect by itself, with
+no port typed and no click.
 
-**Which project a place syncs with** is decided in VS Code, never in Studio. When a place opens, the
-plugin tells the service its `PlaceId`, and the service answers, in this order:
+**Which project a place syncs with** is decided in VS Code. When a place opens, the plugin sends its
+`PlaceId` and the service answers, in order:
 
-1. the project assigned to the place in the panel's **Studio places** section (see below);
-2. a project whose `servePlaceIds` lists the place;
-3. a project whose `placeId` is the place's;
-4. the project this place last synced with, unless `rojoHub.studioAutoConnect` is `"listed"`: then
-   only a place a project file lists, or one you assign, connects by itself, and any other place is
-   connected by hand each time. The service records it (`placeSynced` in `registry.json`)
-   whenever a place with the plugin syncs; the plugin's own per-place record, like Rojo's, is only the
-   fallback, since every open Studio shares that one settings value and overwrites the others' entries.
+1. the project assigned in the panel's **Studio places**;
+2. a project whose `servePlaceIds` lists it;
+3. a project whose `placeId` is it;
+4. the project it last synced with, unless `rojoHub.studioAutoConnect` is `"listed"` (then only
+   listed or assigned places connect by themselves; others by hand each time). The service records
+   this (`placeSynced` in `registry.json`) whenever a place syncs; the plugin's own per-place record,
+   like Rojo's, is only a fallback, since every open Studio shares and overwrites that one setting.
 
-A project that lists the place in `blockedPlaceIds` never matches. Only a **serving** project is
-connected to. If the first step that finds a project finds only stopped ones, the plugin says which
-project to start rather than falling back to a later step. One project may serve several places
-(`servePlaceIds` is a list); each open place syncs with it on its own.
+`blockedPlaceIds` never matches. Only a **serving** project is connected to; if the first step that
+finds a project finds only stopped ones, the plugin says which to start rather than falling through.
+One project may serve several places; each syncs on its own.
 
 **Both directions.** The plugin keeps a WebSocket to the service (`ws://127.0.0.1:34870/studio`), so
-it connects when the place opens, when its project is started later, and again, with no click, when
-the project's Rojo restarts with a new session (a crash, a port move, a project file change). A
-branch switch keeps the session, so nothing happens.
+it connects when the place opens, when its project starts later, and again with no click when Rojo
+restarts with a new session (crash, port move, project file change). A branch switch keeps the
+session, so nothing happens.
 
-**Studio places** (a panel section) lists every open place with the plugin: its name, what it syncs
-with or waits for, and a list to assign it a project. *Automatic* (the default) follows the order
-above; picking a project assigns it, and the place syncs with it at once. An assignment is kept per
-place ID (`placeChoices` in `registry.json`; removing the project forgets it). An unsaved place (`PlaceId`
-0, or a Roblox template's ID such as a new Baseplate's) shares its ID with every other unsaved place,
-so its assignment is kept only while that Studio window is open. Studio's Rojo window only shows the
-service's answer in a line under its buttons; it has no choices of its own.
+**Studio places** lists every open place with the plugin, what it syncs with or waits for, and a list
+to assign it a project. *Automatic* (default) follows the order above; picking a project syncs at
+once. Assignments are kept per place ID (`placeChoices` in `registry.json`; removing the project
+forgets them). An unsaved place (`PlaceId` 0, or a template's ID such as a new Baseplate's) shares
+its ID with other unsaved places, so its assignment lasts only while that Studio window is open.
+Studio's Rojo window only shows the service's answer, in a line under its buttons.
 
-**Connect to `<project>`.** While a place's project is serving, a green button under Rojo's Connect
-names it. It connects to the port Rojo-Hub serves the project on, whatever is typed in the address
-boxes, and it works after **Disconnect** or **Abort** and with *Rojo-Hub Auto Connect* off. Rojo-Hub
-never writes the address boxes: they are for connecting by hand, and keep what you last typed.
+**Connect to `<project>`.** While the place's project serves, a green button under Rojo's Connect
+names it. It connects to Rojo-Hub's port for it whatever the address boxes say, and works after
+**Disconnect** or **Abort** and with *Rojo-Hub Auto Connect* off. Rojo-Hub never writes the address
+boxes; they keep what you last typed.
 
-**When it does not connect by itself**, the Studio places row and the line in Studio say why:
+**When it does not connect by itself**, the Studio places row and Studio's line say why:
 
-- the place is not saved to Roblox: assign it a project in VS Code;
-- no project lists the place and it has never synced: assign it one;
-- two serving projects claim it: assign it one. A place keeps to the project it last synced with,
-  though, so this only asks for a place that has not synced with either;
-- its project runs a Rojo older than 7.7: the plugin speaks only protocol 5. Pin
+- the place is not saved to Roblox: assign it a project;
+- no project lists it and it never synced: assign one;
+- two serving projects claim it: assign one (a place keeps to the project it last synced with, so
+  this only asks for a place that synced with neither);
+- its project runs Rojo older than 7.7 (the plugin speaks only protocol 5): pin
   `rojo-rbx/rojo@7.7.0`;
-- you pressed **Disconnect**, or **Abort** on the first sync: that session is not connected again by
-  itself. *Connect to `<project>`*, connecting by hand, assigning it a project in VS Code, or a new session, lifts it;
+- you pressed **Disconnect**, or **Abort** on the first sync: that session is not reconnected by
+  itself. *Connect to `<project>`*, connecting by hand, assigning in VS Code, or a new session lifts
+  it;
 - *Rojo-Hub Auto Connect* is off in the plugin's settings.
 
-Rojo's confirmation (Accept or Abort, with the diff) is asked **once per place and project**: the
-first time a place syncs with a project, listed in `servePlaceIds` or not, because that first sync is
-the one that can overwrite what was in the place. Once accepted, Rojo-Hub remembers the pair
-(`placeAccepted` in `registry.json`, shared by every Studio window) and the plugin accepts later
-syncs by itself: reopening the place, a Rojo restart, a crash. Abort declines that session and
-remembers nothing. *Confirmation Behavior* in the plugin's settings keeps Rojo's meaning on top: *Always*
-asks every time, *Never* never asks. Removing a project forgets its pairs. While a place's confirmation is open, Studio places and agents' `status` say it waits for
-you. A place that last synced with one project waits for that
-project while its Rojo restarts; it is never handed to another project that claims the place too. Nothing connects during a
-playtest. With the Rojo-Hub service not running, the plugin behaves like Rojo's own, Auto Reconnect
-included.
+Rojo's confirmation (Accept/Abort with the diff) is asked **once per place and project**, listed or
+not, since that first sync can overwrite the place. Once accepted, Rojo-Hub remembers the pair
+(`placeAccepted` in `registry.json`, shared by every Studio) and the plugin accepts later syncs by
+itself (reopening, Rojo restarts, crashes). Abort declines that session and remembers nothing.
+*Confirmation Behavior* keeps Rojo's meaning on top: *Always* asks every time, *Never* never.
+Removing a project forgets its pairs. While a confirmation is open, Studio places and agents'
+`status` say it waits for you. A place that last synced with a project waits for it while its Rojo
+restarts; it is never handed to another project claiming it. Nothing connects during a playtest.
+Without the service running, the plugin behaves like Rojo's own, Auto Reconnect included.
 
-**Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`) into Studio's
-local plugins folder, `%LOCALAPPDATA%\Roblox\Plugins`, when it starts and when it is updated, and
-only when the file there differs. Studio loads a new or changed plugin only when a place is opened,
-so an update reaches each open place when it is next opened. Other `RojoHub*.rbxm` or `.rbxmx` files
-there (a copy downloaded from a GitHub release) are removed. Rojo's own plugin
-(`RojoManagedPlugin.rbxm`, from `rojo plugin install`) is left alone; the panel suggests removing it,
-because Studio then shows two Rojo windows. `rojoHub.studioPlugin` set to false stops all of this.
-Uninstalling Rojo-Hub removes `RojoHub.rbxm` (unless that setting was off).
+**Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`) into
+`%LOCALAPPDATA%\Roblox\Plugins` on start and update, only when it differs. Studio loads a new or
+changed plugin only when a place opens, so an update reaches each open place when it is reopened.
+Other `RojoHub*.rbxm`/`.rbxmx` files there (e.g. a copy from a GitHub release) are removed. Rojo's own
+`RojoManagedPlugin.rbxm` is left alone; the panel suggests removing it, since Studio would show two
+Rojo windows. `rojoHub.studioPlugin: false` stops all this. Uninstalling removes `RojoHub.rbxm`
+(unless that setting was off).
 
-**Connecting by hand** still works as with Rojo's plugin: `localhost` and the project's port
-(*Copy Port*), then Connect. Project names must be unique and must never change across branch
-switches, because a place remembers its project by name.
+**Connecting by hand** works as with Rojo's plugin: `localhost` and the project's port (*Copy Port*),
+then Connect. Project names must be unique and must not change across branches, since a place
+remembers its project by name.
 
-If the project file lists `servePlaceIds`, Rojo itself refuses places not on the list. Rojo-Hub
-passes `servePlaceIds`, `blockedPlaceIds`, `placeId`, `gameId` and `emitLegacyScripts` through from
-the primary checkout's project file.
+With `servePlaceIds` set, Rojo itself refuses unlisted places. Rojo-Hub passes `servePlaceIds`,
+`blockedPlaceIds`, `placeId`, `gameId` and `emitLegacyScripts` through from the primary checkout's
+project file.
 
-**How Rojo-Hub knows Studio is connected**: Rojo's log records each plugin connection opening and
-closing. Rojo-Hub counts them; that count drives the filled/outlined icon and the tooltip. Places
-running Rojo-Hub's plugin also report which place they are, so the *Connected* pill's tooltip names
-them.
+**How it knows Studio is connected**: Rojo's log records each plugin connection opening and closing;
+Rojo-Hub counts them for the filled/outlined icon and tooltip. Rojo-Hub's plugin also reports which
+place it is, so the *Connected* pill's tooltip names them.
 
 ### Opening places in Studio
 
-Off by default: turn on `rojoHub.openPlaces` (spec 009). Then each project card lists its places,
-and agents get `open_place`. Off, the card shows none of it, and the service's API and `open_place`
-answer that the setting is off.
+Off by default: turn on `rojoHub.openPlaces` (spec 009). Then each card lists its places and agents
+get `open_place`. Off, the card shows none of it and the API and `open_place` say the setting is off.
 
-- **Open** opens the place for editing in Studio, the same way the website's *Edit in Studio* does
-  (a `roblox-studio:` link with the place's universe ID). Studio loads it; the plugin connects it as
-  usual. *Open all places in Studio* in the ⋯ menu opens every one that is not open.
-- **A place that is open is never opened again** (Studio would open a second copy). Rojo-Hub counts
-  a place as open when its Rojo-Hub plugin reports it, or when a running Studio's command line names
-  it, which covers the seconds before the plugin connects. Two opens at the same moment open it
-  once. A place opened another way (Studio's start page) whose plugin is off is not seen.
-- **The universe ID** is the project file's `gameId` when it has one, else looked up once from
-  Roblox (`apis.roblox.com`, no sign-in) and kept in `universes.json`, with the place's name for
-  the card. If the lookup fails (no internet), the card and the answer say which place and why; try
-  again.
+- **Open** opens the place for editing, like the website's *Edit in Studio* (a `roblox-studio:` link
+  with the universe ID). The plugin connects it as usual. *Open all places in Studio* (⋯ menu) opens
+  every one not open.
+- **An open place is never opened again** (Studio would open a second copy). A place counts as open
+  when its plugin reports it, or a running Studio's command line names it (covering the seconds before
+  the plugin connects). Two simultaneous opens open it once. A place opened another way (Studio's
+  start page) with its plugin off is not seen.
+- **The universe ID** is the project file's `gameId`, else looked up once from Roblox
+  (`apis.roblox.com`, no sign-in) and kept in `universes.json` with the place's name. A failed lookup
+  (no internet) says which place and why; try again.
 - **Close** asks the place's Studio window to close, as its ✕ does, so Studio still asks about
-  unsaved changes. Rojo-Hub never kills Studio. It can only tell which window a place is in when
-  Studio was started with the place's link (by Rojo-Hub or the website); for a place opened
-  otherwise, the card says to close it in Studio.
-- **Reopen** closes the place, waits (up to 5 minutes, while you answer Studio's prompt) until that
-  Studio has exited, then opens it again: how an open place picks up a new plugin.
+  unsaved changes. Rojo-Hub never kills Studio. It can tell a place's window only when Studio was
+  started with the place's link (by Rojo-Hub or the website); otherwise the card says to close it in
+  Studio.
+- **Reopen** closes it, waits (up to 5 minutes, while you answer Studio's prompt) for that Studio to
+  exit, then opens it: how an open place picks up a new plugin.
 
-Agents can open a place (`open_place`), never close or reopen one: that window may be one you are
-working in.
+Agents can open a place (`open_place`), never close or reopen one: that window may be yours.
 
 ## 8. Switching branches
 
 **Switch Branch…** lists:
 
-- **Worktrees**: every git worktree of the repo (the primary first, then by most recent commit),
-  under Orca's display names when Orca is installed. A worktree is served **in place**: edits made
-  there, by you or by an agent, reach Studio live.
-- **Branches**: every local branch not checked out in a worktree, and remote branches with no
-  local counterpart. A branch is served from a **view** (below).
+- **Worktrees**: every git worktree (primary first, then by latest commit), under Orca's names when
+  Orca is installed. Served **in place**: edits there, yours or an agent's, reach Studio live.
+- **Branches**: local branches not checked out in a worktree, and remote branches with no local
+  counterpart. Served from a **view** (below). The panel lists local and remote separately, as in
+  Source Control.
 
-In the panel, local and remote branches are listed separately, as in Source Control.
+**Kept current in the background.** The service caches each repo's list and watches its `.git`
+folder: a new or deleted branch, a fetch, a new worktree or a checkout anywhere (terminal, Source
+Control, Orca) updates it within about a second. Orca's names are re-read when the list is over a
+minute old. The picker opens drawn, and a newer list updates in place, keeping what you typed.
 
-**The list is kept up to date in the background.** The service keeps each registered repo's list in
-memory and watches the repo's `.git` folder: a new or deleted branch, a fetch, a new worktree or a
-checkout anywhere updates the list within about a second, whoever made it (a terminal, Source
-Control, Orca). Orca's worktree names are read again when the list is more than a minute old. The
-picker therefore opens with its list drawn, and if a newer list arrives while it is open, the list
-updates in place and keeps what you typed.
+**Fetch** (⟳ in the search box) runs `git fetch --all --prune`. It never asks for a password (git's
+prompt and Git Credential Manager's window are both off); a failure (offline, no access) shows in the
+picker. Rojo-Hub never fetches by itself.
 
-**Fetch** (⟳ in the picker's search box) runs `git fetch --all --prune` for the repo, for branches
-pushed since you last fetched. It never asks for a password: git's own prompt and Git Credential
-Manager's sign-in window are both turned off for it; a failure (offline, no access) shows in the
-picker. Rojo-Hub does not fetch by itself.
+**New branch.** The picker's last row is *New branch…*, or *New branch "‹typed›"* when the search
+text is not an existing branch. Its form has the name and **From** (current target, then local, then
+remote branches). *Create* makes the branch in its own folder and switches to it, Studio connected:
 
-**New branch.** The last row of the picker is *New branch…*; when what you typed in the search box
-is not an existing branch, it reads *New branch "‹what you typed›"*. It opens a small form: the
-name and **From** (what the project serves now, then local, then remote branches). *Create* makes
-the branch in a folder of its own so you can edit it, and switches the project to it; Studio stays
-connected:
+- repo in **Orca**: an Orca worktree (`orca worktree create`, setup skipped); Orca names the branch
+  `<your git user>/<name>`;
+- otherwise: a git worktree in `<repo>-worktrees/<name>` beside the repo.
 
-- when the repo is in **Orca**, as an Orca worktree (`orca worktree create`, setup skipped). Orca
-  names the branch `<your git user>/<name>`;
-- otherwise as a git worktree beside the repo, in `<repo>-worktrees/<name>`.
-
-A name git does not allow, a branch that already exists, or a base that does not exist is pointed out
-in the form before anything is made. When it is done, a message offers *Open in New Window*.
+An invalid name, an existing branch or a missing base is pointed out before anything is made. Done,
+a message offers *Open in New Window*.
 
 ### Sourcemaps
 
-While a project serves a worktree, Rojo-Hub keeps that worktree's `sourcemap.json` up to date with
-the project's pinned `rojo sourcemap --watch`. luau-lsp reads it for Roblox types, and so do tools
-such as `wally-package-types`. It works whether or not VS Code, a window on that folder, or the
-luau-lsp extension is open, so an Orca agent editing a worktree with no window gets it too.
+While a project serves a worktree, Rojo-Hub keeps its `sourcemap.json` current with the pinned
+`rojo sourcemap --watch`, for luau-lsp and tools like `wally-package-types`, whether or not VS Code,
+a window on that folder, or luau-lsp is open (so a windowless Orca agent gets it too).
 
-- **Same file as luau-lsp.** It runs the same command luau-lsp's extension does
-  (`sourcemap <project file> --include-non-scripts`, from the worktree), so the two write identical
-  files and can both run.
-- **Recovers by itself.** Deleting a folder crashes Rojo 7.7's watcher (the same bug as below);
-  Rojo-Hub restarts it a second later, and gives up with a note after five crashes in a minute.
-  Nothing in Studio is affected.
-- **Never adds a file to git.** It writes only where `sourcemap.json` is gitignored or already
-  exists. Elsewhere the ⋯ menu says so, and *Update sourcemap.json* writes it once on request.
-- **Not for branches** served from a Hub copy: nothing edits those.
-- It stops with the project and moves with a switch. `rojoHub.sourcemaps` turns it off everywhere.
+- **Same file as luau-lsp**: the same command (`sourcemap <project file> --include-non-scripts`, from
+  the worktree), so both can run.
+- **Recovers**: a deleted folder crashes Rojo 7.7's watcher (same bug as below); it restarts a second
+  later, giving up with a note after five crashes in a minute. Studio is unaffected.
+- **Never adds a file to git**: writes only where `sourcemap.json` is gitignored or exists. Otherwise
+  the ⋯ menu says so, and *Update sourcemap.json* writes it once.
+- **Not for views**: nothing edits those.
+- Stops with the project, moves with a switch. `rojoHub.sourcemaps` turns it off.
 
-**Checking out in a served worktree.** Switching in the picker never touches your folders. If you
-check out another branch *inside* a worktree that is being served (in a terminal, Source Control or
-Orca), Studio gets that branch, and the card says so: *‹branch› was checked out in ‹folder› while it
-was being served*. If the checkout removed a folder, Rojo 7.7 crashes (see
-[Known limits](#15-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
-card says the checkout caused it, and that Studio needs reconnecting.
+**Checking out in a served worktree.** The picker never touches your folders. A checkout *inside* a
+served worktree (terminal, Source Control, Orca) sends Studio that branch, and the card says *‹branch›
+was checked out in ‹folder› while it was being served*. If it removed a folder, Rojo 7.7 crashes
+([Known limits](#15-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
+card says the checkout caused it and Studio needs reconnecting.
 
 ### What happens on a switch
 
-Rojo-Hub never restarts Rojo to switch. Each project is served from a small generated project
-file, `slot.project.json`, whose only content that matters is one pointer to the served tree's own
-project file. Switching rewrites that pointer. The running Rojo notices, re-reads the project from
-the new tree, and sends Studio the difference as one update over the same session. Studio stays
-connected and does not ask for confirmation (the plugin only confirms the initial sync). The card
-shows the new branch's name at once, whoever switched (the panel, another window or an agent).
+Rojo is never restarted to switch. Each project is served from a generated `slot.project.json` whose
+only meaningful content is one pointer to the served tree's own project file. A switch rewrites it;
+the running Rojo re-reads the project from the new tree and sends Studio the difference as one update
+in the same session. Studio stays connected and is not asked to confirm (only the initial sync is).
+The card shows the new branch at once, whoever switched.
 
-Because Rojo reads the served tree's **own** project file, everything in it applies: its
-own folder mappings, `globIgnorePaths` and `syncRules`, and edits to that file sync live.
-
-The project's `name` and place-ID settings always come from the primary checkout and never change
-on a switch, because Rojo reads them only when a session starts.
+Rojo reads the served tree's **own** project file, so its mappings, `globIgnorePaths` and `syncRules`
+apply, and edits to it sync live. The project's `name` and place-ID settings always come from the
+primary checkout, since Rojo reads them only at session start.
 
 ### Packages (Wally)
 
-A worktree that has not run Wally has no `Packages`/`ServerPackages` folders. Rojo-Hub then serves
-it in **borrowed** mode: a generated copy of the worktree's project file (`borrowed.project.json`)
-with every `$path` made absolute, taking the missing folders from the primary checkout.
+A worktree that has not run Wally lacks `Packages`/`ServerPackages`. Rojo-Hub then serves it
+**borrowed**: a generated copy of its project file (`borrowed.project.json`) with every `$path` made
+absolute, taking the missing folders from the primary checkout.
 
-**When borrowed mode is used**: whenever the served tree lacks a folder that its project file maps
-(a relative `$path`) and the primary checkout has. Only those folders are borrowed; a folder missing
-from both is left for Rojo to report. A tree that has every mapped folder is served natively. Wally's
-folders are the usual case, so views, which never run Wally, usually use borrowed mode, but a
-branch whose packages are committed, or that maps no package folder, is served natively.
+Borrowed mode is used whenever the served tree lacks a folder its project file maps (a relative
+`$path`) and the primary has it. Only those folders are borrowed; one missing from both is left for
+Rojo to report. Complete trees are served natively. So views (never Wally'd) usually borrow, but a
+branch with committed packages, or no package folder, is native.
 
-The project shows a warning saying so: *Packages, ServerPackages come from the primary checkout (not
-present in this tree).* The warning is stronger when the branch changed `wally.toml` and a missing
-folder is a package folder (`Packages`, `ServerPackages`, `DevPackages`), because the primary's
-packages then do not match the branch: *This branch changed wally.toml but has no ‹folders› of its
-own; the primary's copies do not match it. Run Wally in the worktree before trusting what Studio
-shows.* In borrowed mode `globIgnorePaths` and `syncRules` do not apply (the copy lives in Rojo-Hub's
-folder, so rules relative to the project folder match nothing), and when the tree's project file
-uses them the card says so too. Run Wally in the worktree to serve it natively. Edits to the tree's
-own project file are carried into the copy while it is served.
+The card warns *Packages, ServerPackages come from the primary checkout (not present in this tree).*
+If the branch changed `wally.toml` and a missing folder is a package folder (`Packages`,
+`ServerPackages`, `DevPackages`), more strongly: *This branch changed wally.toml but has no ‹folders›
+of its own; the primary's copies do not match it. Run Wally in the worktree before trusting what
+Studio shows.* In borrowed mode `globIgnorePaths` and `syncRules` do not apply (the copy lives in
+Rojo-Hub's folder, so relative rules match nothing), and the card says so when the file uses them.
+Run Wally in the worktree to serve natively. Edits to the tree's project file are carried into the
+copy while served.
 
 ### Views
 
-Serving a branch with no worktree creates a view: `git worktree add --detach` of the branch's
-current commit into `views\<project id>\<first 12 hex digits of the commit>\` (with `-2`, `-3`, …
-added if that folder is already taken). A view of the same commit is reused. A view is never
-modified after it is created: a branch that gets new commits gets a new view the next time you
-switch to it. Views are deleted only
-while the project's Rojo is stopped (when you stop, start or remove the project, or switch it while
-it is stopped), because
-of the Rojo crash in [Known limits](#15-known-limits-and-troubleshooting). Views do not appear in
-the Worktrees list, also when `%LOCALAPPDATA%` is behind a junction or redirected. Making a view
-does not run the repo's git hooks (`post-checkout`, husky), and cleaning up views only drops git's
-record of Rojo-Hub's own views: your worktrees on a drive that is not plugged in are left alone.
+A branch with no worktree gets a view: `git worktree add --detach` of its current commit into
+`views\<project id>\<first 12 hex digits of the commit>\` (`-2`, `-3`, … if taken). A view of the same
+commit is reused, and a view is never modified: new commits mean a new view on the next switch.
+Views are deleted only while the project's Rojo is stopped (stop, start, remove, or a switch while
+stopped), because of the Rojo crash in [Known limits](#15-known-limits-and-troubleshooting). They
+never appear in the Worktrees list, even with `%LOCALAPPDATA%` behind a junction or redirected.
+Making a view runs no git hooks (`post-checkout`, husky), and cleanup drops only git's record of
+Rojo-Hub's own views, leaving your worktrees on unplugged drives alone.
 
 ## 9. Groups
 
-A group is a named set of **projects and other groups**, like a profile. A project or group can be
-in several groups. Groups live in the **Groups** section of the panel, below Projects.
+A named set of **projects and other groups**, like a profile. A project or group can be in several.
+Groups are in the panel's **Groups** section, below Projects.
 
 ### Making and filling groups
 
-- **Make one** with the `+` on Groups (or *New Group* in Open Menu): type a name and press Enter
-  or *Create*.
-- **Add to it** with the group card's **Add a project, group or workspace…** dropdown. It lists:
-  - **Workspaces**: picking one adds every project of that VS Code workspace that is not in the
-    group yet (for example all three of MyGame's). They are added as ordinary projects, so
-    each can be taken out again with its ✕. Folders the workspace lists that are not added to
-    Rojo-Hub are not added to the group; the entry says when there are some. A workspace whose
-    projects are all in the group already is greyed out.
+- **Make one**: `+` on Groups (or *New Group* in Open Menu); type a name, Enter or *Create*.
+- **Add** with the card's **Add a project, group or workspace…** dropdown, one pick at a time:
+  - **Workspaces**: adds every project of that workspace not yet in the group (e.g. all three of
+    MyGame's), as ordinary members removable with ✕. Workspace folders not added to Rojo-Hub are
+    skipped (the entry says when). A workspace fully in the group is greyed out.
   - **Projects** not in the group yet.
-  - **Groups**, with those that would loop greyed out.
-
-  Pick one to add it; do it again for the next.
-- **Take something out** with the ✕ next to it in the group. It asks first, in place (*Take SharedLib
-  out of My Game? Yes / No*). Nothing is deleted: a project stays registered, a group stays a
-  group.
-- **Groups inside groups** are listed first in the card, with a layers icon and how many of their
-  projects are serving. Clicking one scrolls to its own card.
+  - **Groups**, with looping ones greyed out.
+- **Take out** with ✕; it asks in place (*Take SharedLib out of My Game? Yes / No*). Nothing is
+  deleted.
+- **Nested groups** are listed first, with a layers icon and their serving count; click scrolls to
+  their card.
 
 ### Loops
 
-A group can't contain itself, directly or through other groups. Adding group B to group A is
-refused when B already contains A anywhere inside it. In the dropdown such groups are greyed out
-and marked *(would loop: it contains A)*, and the service refuses them too with the chain that would
-loop, for example *Outer → Middle → Inner*. If a loop gets into `registry.json` some other way,
-Rojo-Hub still expands each group only once, so nothing hangs. Deleting a group removes it from
-every group that held it.
+A group can't contain itself, directly or through others. Adding B to A is refused when B contains A
+anywhere: greyed out in the dropdown as *(would loop: it contains A)*, and refused by the service with
+the chain (*Outer → Middle → Inner*). A loop in `registry.json` from elsewhere is still expanded once
+per group, so nothing hangs. Deleting a group removes it from every group holding it.
 
 ### Running groups
 
-A group holds every project inside it, through nested groups; its count (for example `2/3`) is
-over all of them.
+A group holds every project inside it, through nested groups; its count (`2/3`) is over all of them.
 
 | Action | Effect |
 |---|---|
-| **Start** / **Stop** | One button: Start while the group is not running, Stop while it is. |
-| **Start** | Serves every project the group holds, each on its own port. Projects already serving are left alone, so their Studio sessions continue. |
-| **Stop** | Stops the group's projects, **except any that another running group also holds**: that project is in use elsewhere, so its port keeps serving. Rojo-Hub says which projects it kept and why. |
-| ✎ **Rename** | Edit the name in place; Enter saves, Escape cancels. |
+| **Start** / **Stop** | One button: Start while not running, Stop while running. |
+| **Start** | Serves every project it holds, each on its own port. Already-serving projects are left alone, so their Studio sessions continue. |
+| **Stop** | Stops its projects **except any another running group holds**; Rojo-Hub says which it kept and why. |
+| ✎ **Rename** | In place; Enter saves, Escape cancels. |
 | 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only. |
 
-A group is **running** from Start until Stop. (0.19.5 removed *Singleton*, which also stopped every
-project outside the group; agents' `start_group` keeps it as `only`.) The
-card then shows a green *running* badge and a green edge. Running is about what you started, not
-about whether all its projects happen to be serving, so a group you never started never keeps a
-project alive. Stopping a single project from its own card does not change which groups are
-running.
+A group is **running** from Start until Stop (green *running* badge and edge). Running is about what
+you started, not whether its projects happen to serve, so a group never started keeps nothing alive.
+Stopping one project from its card does not change which groups run. (0.19.5 removed *Singleton*,
+which also stopped everything outside the group; agents' `start_group` keeps it as `only`.)
 
-If some projects fail to start or stop, the rest still go ahead, and one message lists the
-failures. Groups remember what they hold, not branches: each project serves whatever it was last
-switched to. Removing a project removes it from every group. Group names are unique, ignoring case.
+If some projects fail to start or stop, the rest proceed and one message lists the failures. Groups
+remember members, not branches. Removing a project removes it from every group. Group names are
+unique, ignoring case.
 
 ## 10. Agents
 
-AI agents (Claude Code in a terminal or an Orca worktree, Codex, Copilot and other agents in VS Code)
-can use Rojo-Hub themselves: serve their own worktree to Studio before checking their changes there,
-start, stop and add projects, run groups, make branches in worktrees of their own, read Rojo's log,
-and wait for Studio to sync (see *The tools* below). They get this from an MCP
-server that the background service runs at `http://127.0.0.1:34870/mcp`, so the agent needs no
-extra files, scripts or instructions: the server tells the agent what it is for when it connects.
+AI agents (Claude Code in a terminal or Orca worktree, Codex, Copilot and other VS Code agents) use
+Rojo-Hub themselves: serve their own worktree to Studio, start, stop and add projects, run groups,
+make branches in their own worktrees, read Rojo's log and wait for Studio to sync. They get this from
+an MCP server the service runs at `http://127.0.0.1:34870/mcp`; no extra files, scripts or
+instructions, since the server describes itself when the agent connects.
 
-**Turning it on.** The panel's **Agent access** section (folded by default) has a switch per agent,
-and the `rojoHub.agents` setting a checkbox per agent. Both change the same setting.
+**Turning it on**: a switch per agent in the panel's **Agent access**, or a checkbox per agent in
+`rojoHub.agents` (the same setting).
 
-| Agent | Default | What turning it on does |
+| Agent | Default | Turning it on |
 |---|---|---|
-| VS Code agents | on | Registers the server with VS Code itself. Nothing is written to disk; it goes with the extension. |
-| Claude Code | off | Runs `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
-| Codex | off | Runs `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
+| VS Code agents | on | Registers the server with VS Code; nothing written to disk. |
+| Claude Code | off | `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
+| Codex | off | `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
 
-Turning it off runs the matching `mcp remove`. The switches show what each agent's own config says,
-so an entry removed by hand shows as off:
+Turning off runs the matching `mcp remove`. Switches reflect each agent's own config, so a
+hand-removed entry shows off:
 
-- Claude Code: the top-level `mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json` when
-  `CLAUDE_CONFIG_DIR` is set **and that file exists**, else `~/.claude.json`;
-- Codex: the `mcp_servers` of `config.toml` in `CODEX_HOME` when that is set, else
-  `~/.codex/config.toml`.
-
-Each agent's chip says where it stands:
+- Claude Code: top-level `mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json` when `CLAUDE_CONFIG_DIR`
+  is set **and that file exists**, else `~/.claude.json`;
+- Codex: `mcp_servers` of `config.toml` in `CODEX_HOME` if set, else `~/.codex/config.toml`.
 
 | Chip | Meaning |
 |---|---|
 | *Connected* | The config has Rojo-Hub's `rojohub` entry. |
 | *Off* | Installed, no `rojohub` entry. |
-| *Not installed* | Its CLI (`claude`, `codex`) is not on `PATH`; the switch is greyed out. |
-| *Set up by you* | The config has an entry named `rojohub` with another URL. Rojo-Hub never changes or removes it; the switch is greyed out. |
-| *Can't read config* | The config file exists but cannot be read or parsed (the agent may be writing it at that moment). Rojo-Hub leaves it alone and looks again: it is never taken for "no entry", so nothing is added or removed and no switch is turned off because of it. The switch is greyed out. |
+| *Not installed* | Its CLI (`claude`, `codex`) is not on `PATH`; switch greyed out. |
+| *Set up by you* | A `rojohub` entry with another URL. Never changed or removed; switch greyed out. |
+| *Can't read config* | The file exists but cannot be read or parsed (maybe mid-write). Left alone and rechecked; never taken for "no entry", so nothing is added, removed or switched off because of it. Switch greyed out. |
 
-While a switch's change is being applied, its chip reads *Working…*; a failure shows under the row.
+While a change applies the chip reads *Working…*; a failure shows under the row.
 
-Rojo-Hub only changes an agent's config when you change its switch (or answer the first-run
-question), never just because VS Code started. **When a window opens** and finds a switch that says
-on for an installed agent whose config has no `rojohub` entry, it takes that as the entry removed by
-hand and turns the switch off in the setting to match, instead of adding the entry back. Turning the
-switch on again adds it. **`rojoHub.agents` is not synced by Settings Sync**: it describes this
-machine's agent configs, so another machine's choice never adds or removes entries here. The first
-time Rojo-Hub finds Claude Code or Codex installed with no `rojohub` entry and no choice made yet, it
-asks once: *Let … use Rojo-Hub's tools?* Yes turns them on; No turns them off and hides the agent
-notice above Projects for 14 days.
+Rojo-Hub changes an agent's config only when you change its switch (or answer the first-run
+question), never merely on startup. **When a window opens** and finds a switch on for an installed
+agent with no `rojohub` entry, it treats the entry as removed by hand and turns the switch off,
+instead of re-adding it. **`rojoHub.agents` is not synced by Settings Sync**: it describes this
+machine's configs. The first time Claude Code or Codex is found installed with no entry and no choice
+made, it asks once: *Let … use Rojo-Hub's tools?* Yes turns them on; No turns them off and hides the
+agent notice for 14 days.
 
-**Another agent?** Under *Other agents and manual setup*: *Copy commands* (also **Rojo-Hub: Copy Agent Setup Commands**) copies the two
-commands and a JSON entry for agents that read a JSON MCP config. *Copy prompt* (**Rojo-Hub: Copy
-Agent Setup Prompt**) copies a paragraph to paste into any agent's chat; the agent then adds Rojo-Hub
-to its own config.
+**Another agent?** Under *Other agents and manual setup*: *Copy commands* (**Rojo-Hub: Copy Agent
+Setup Commands**) copies both commands and a JSON entry for JSON-configured agents; *Copy prompt*
+(**Rojo-Hub: Copy Agent Setup Prompt**) copies a paragraph to paste into any agent, which then adds
+Rojo-Hub to its own config.
 
-**The tools.** Agents can do everything the panel does except what is your own setup; Rojo-Hub is
-mainly for several agents working at once, so an agent should not have to stop and ask you to click.
+**The tools.** Everything the panel does except your own setup; Rojo-Hub is mainly for several agents
+at once, so an agent should not need to ask you to click.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, the Studio places synced to it (name, place ID, why, plugin version), what it serves and with which project file, who claimed it, its warnings and `sourcemap.json` state, the places its project file lists and whether each is open; then the groups and every open Studio place. Given the agent's folder, also whether its worktree is the one served. |
-| `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it; says which Studio places show it and any error Rojo logged. `wait` takes it as soon as another worktree's claim ends. |
-| `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. Also takes `wait`. |
-| `new_branch` | Makes a branch in a worktree of its own (through Orca when Orca manages the repo), switches the project to it and claims it; answers the folder to work in. |
-| `branches` | What a project can switch to, newest first (`fetch` runs `git fetch` first). |
-| `release` | Drops the agent's claim. The project keeps serving what it serves. |
+| `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
+| `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends. |
+| `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait`. |
+| `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. |
+| `branches` | Switch targets, newest first (`fetch` fetches first). |
+| `release` | Drops the agent's claim; the project keeps serving. |
 | `start` | Starts a stopped project. |
-| `stop` | Stops a project. Guarded (below). |
-| `stop_all` | Stops every project. Needs `force`, always. |
-| `add_project` | Registers the repo a folder is in (optionally with another `project_file`). |
+| `stop` | Stops a project. Guarded. |
+| `stop_all` | Stops every project. Always needs `force`. |
+| `add_project` | Registers a folder's repo (optionally another `project_file`). |
 | `remove_project` | Unregisters a project; never deletes files. Guarded. |
-| `project_files` | The `*.project.json` files in a project's folder, and which it serves. |
-| `set_project_file` | Serves another project file; only while the project is stopped. |
-| `start_group` / `stop_group` | Starts or stops a group (`only` also stops everything outside it). Stopping is guarded. |
-| `create_group` / `edit_group` / `delete_group` | Makes, renames, changes the members of, or deletes a group. |
+| `project_files` | The folder's `*.project.json` files and which is served. |
+| `set_project_file` | Serves another project file; only while stopped. |
+| `start_group` / `stop_group` | Starts or stops a group (`only` also stops everything outside). Stopping is guarded. |
+| `create_group` / `edit_group` / `delete_group` | Makes, renames, changes members of, or deletes a group. |
 | `log` | The last lines of a project's Rojo log. |
-| `wait_for_studio` | Waits until a Studio place is synced to the project's session, and names it. |
-| `open_place` | Opens one of a project's places in Studio (`placeId`; may be left out when it has one), unless it is open: then it does nothing and says so. Only while `rojoHub.openPlaces` is on; agents cannot close places. |
+| `wait_for_studio` | Waits until a Studio place syncs to the session, and names it. |
+| `open_place` | Opens a project's place (`placeId`, optional when it has one) unless open, then does nothing and says so. Only with `rojoHub.openPlaces` on; agents cannot close places. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
 
-**Guarded.** `stop`, `stop_group`, `remove_project` and `start_group` with `only` are refused while
-another worktree holds the project's claim, or while a Studio place is synced to it and the agent
-holds no claim on it; the agent that holds the claim may stop its own project. The refusal says who
-or what is affected. `force` goes ahead, and the server tells agents to pass it only when you ask.
-Starting, adding and group edits never disturb anyone. `set_project_file` works only on a stopped
-project, like the panel. Which project a Studio place syncs with, agent registration and settings
-stay yours (spec 008).
+**Guarded.** `stop`, `stop_group`, `remove_project` and `start_group only` are refused while another
+worktree holds the claim, or while a Studio place is synced and the agent holds no claim; the claim
+holder may stop its own project. The refusal says who or what is affected. `force` overrides, and
+agents are told to pass it only when you ask. Starting, adding and group edits disturb no one.
+`set_project_file` works only on a stopped project. Which project a place syncs with, agent
+registration and settings stay yours (spec 008).
 
 **Rojo's errors come back.** After `serve_here`, `switch`, `new_branch` and `start`, the tool waits
-about a second (Rojo applies a switch in that time) and adds any error Rojo logged, and the card's
-warnings, to its answer.
+about a second (a switch applies in that time) and adds any Rojo error and the card's warnings.
 
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
-`new_branch` wait while another worktree holds the claim and take the project the moment it is
-released or runs out. Several agents waiting for one project are served in the order they asked.
+`new_branch` wait out another worktree's claim and take the project the moment it is released or
+expires; waiters are served in the order they asked.
 
-**Which Studio to look at.** `status`, `serve_here` and `switch` name the Studio places synced to
-the project, with their place IDs (from Rojo-Hub's Studio plugin), and `status` ends with every open
-place and what it syncs with. With several Studio windows open for different projects, an agent
-using a Roblox Studio tool picks the Studio with that place ID. The server's instructions also tell
-agents that Rojo overwrites what it syncs (so they change files, not Studio), that a switch reaches
-Studio within about a second, and that they cannot choose which project a place syncs with.
+**Which Studio to look at.** `status`, `serve_here` and `switch` name the synced places with place IDs
+(from Rojo-Hub's plugin), and `status` ends with every open place and what it syncs with, so an agent
+with a Studio tool picks the right Studio. The server's instructions also say Rojo overwrites what it
+syncs (change files, not Studio), a switch reaches Studio within about a second, and agents cannot
+choose which project a place syncs with.
 
-**Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them.
-So `serve_here` and `switch` claim the project for what they serve (a worktree, or a branch), for
-10 minutes from that call. While another target holds the claim, those tools refuse and say who
-holds it and until when (the agent can pass `force`, and is told to only when you say so).
+**Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them, so
+`serve_here` and `switch` claim the project for their target (worktree or branch) for 10 minutes.
+While another target holds it, they refuse, naming holder and expiry (`force` overrides, only when you
+say).
 
-- **Renewing.** A claim on a worktree is renewed, for another 10 minutes, by the `status`, `build`
-  and `sourcemap` calls that pass a `path` inside that worktree, and by `serve_here` (or `switch`)
-  for it again. `release` does not renew; it drops the claim. A claim that `switch` made for a
-  **branch** is never renewed by other calls (no worktree matches it); only switching to that branch
-  again sets it for another 10 minutes.
-- **`release`** drops the claim. Given a `path` in another worktree than the one holding the claim,
-  it refuses and leaves the claim alone; without a `path` it refuses unless the agent passes `force`
-  (there is no telling whose claim it is).
-- The project's card shows the claim (*Agent in new-ui until 14:05*, the worktree's folder name or
-  the branch), and a folded card shows a robot icon.
-- **Your own switches always go through** (the panel's picker, Open Menu's *Switch Branch…*, or
-  anything else that calls `POST /slots/:id/switch`), and *New branch*, clear the claim. Starting,
-  stopping and group actions leave a claim in place.
-- Claims are kept in `claims.json` in the service's folder, so a service restarted by an update or a
-  crash keeps them until they run out. Claims are per project: agents in different projects never
-  block each other. Removing a project drops its
-  claim.
+- **Renewing**: a worktree claim is renewed for 10 minutes by `status`, `build` and `sourcemap` calls
+  with a `path` inside it, and by `serve_here`/`switch` for it. `release` does not renew. A branch
+  claim from `switch` is renewed only by switching to that branch again.
+- **`release`** drops it; with a `path` in another worktree than the holder it refuses; without a
+  `path` it needs `force` (no telling whose claim it is).
+- The card shows *Agent in new-ui until 14:05* (worktree folder name or branch); folded, a robot icon.
+- **Your own switches always go through** (picker, *Switch Branch…*, anything calling
+  `POST /slots/:id/switch`) and, like *New branch*, clear the claim. Start, stop and group actions
+  keep it.
+- Claims live in `claims.json`, surviving a service restart (update, crash) until they expire. They
+  are per project, so different projects never block each other. Removing a project drops its claim.
 
-**Uninstalling** Rojo-Hub removes its Claude Code and Codex entries (only ones pointing at
-Rojo-Hub), the next time VS Code starts after the extension is gone from every profile, and then
-stops the background service and its Rojo processes.
+**Uninstalling** removes the Claude Code and Codex entries (only ones pointing at Rojo-Hub) on VS
+Code's next start once the extension is gone from every profile, then stops the service and its Rojo.
 
 ## 11. The background service
 
-VS Code extensions stop when their window closes, and you keep several windows open, so Rojo-Hub
-runs a separate background service that owns every project and its Rojo.
+Extensions stop with their window and you keep several open, so a separate service owns every
+project and its Rojo.
 
-- **You never manage it.** The panel has no service controls. The extension starts the service
-  whenever nothing answers on `127.0.0.1:34870`: when a window opens, when the panel refreshes, and
-  before any action. It uses VS Code's own runtime (no separate Node install needed) and keeps
-  running after windows close. What serves is decided only by starting and stopping projects and
-  groups, and *Stop all*.
-- **Rojo processes are independent of the service.** If the service stops or is replaced, Rojo keeps
-  serving and Studio stays connected; the next service *adopts* each Rojo that still answers with
-  its project's name.
-- **Restores on start**: projects that were serving when the service last stopped are adopted, or
-  started again.
-- **Crash recovery**: if a project's Rojo dies unexpectedly, the service starts it again on the
-  same port and shows *Rojo crashed at ‹time› and was restarted on the same port; places with
-  Rojo-Hub's Studio plugin reconnect by themselves …*,
-  followed by Rojo's own reason (or, right after a checkout in the served worktree, *Checking out
-  ‹branch› in ‹folder› removed a folder Rojo was watching, and Rojo 7.7 crashed …*). This is a new
-  session. A Rojo the service started itself is known to have exited at once;
-  one it adopted is looked for after three status checks in a row go unanswered, so a Rojo that is
-  only slow to answer (a big switch, a busy PC) is never restarted. If the restart fails too, the
-  project shows the error and can be stopped from its card, *Stop all* or its group.
-- **It keeps going.** An unexpected error inside the service (a folder deleted while it is being
-  watched, say) is written to `service.log` and the service carries on.
-- **It exits when idle**: after 15 minutes with nothing serving, no VS Code window open on it and
-  no request, so it does not keep VS Code's program in use (it runs as `Code.exe`, which shows in
-  Task Manager as Visual Studio Code). The next window starts it again.
-- **Another Windows user's service** on the same PC is never used or stopped; the panel says so
-  (see [Install](#3-install-update-uninstall)).
-- **If it cannot be started** (a broken install, say), the panel shows *Rojo-Hub could not start*
-  with the reason and *Try again*, and still lists projects and groups read from `registry.json`,
-  marked unavailable. It is not retried on every refresh, only on *Try again* or the next action,
-  so a broken install does not spawn a process every two seconds.
-- Projects and groups are never lost when the service stops: they live in `registry.json`, which is
-  written to disk before it replaces the old one. If it is ever damaged (a power cut, a hand edit),
-  the service keeps it as `registry.corrupt-<time>.json`, starts from the save before it
-  (`registry.json.bak`), and says so in `service.log`.
-- Only programs on this PC can use it. It listens on `127.0.0.1` only, and answers (with 403
-  otherwise) only requests that:
-  - are addressed to it: the `Host` header is `127.0.0.1:34870`, `localhost:34870` or
-    `[::1]:34870`, so a web page using DNS rebinding (its own name resolving to 127.0.0.1) cannot
-    even read it;
-  - come from no web page: a request with no `Origin` (the extension, the uninstall step, agents' MCP
-    clients) or with a `vscode-…://` `Origin` (VS Code's own windows) is allowed; any browser
-    `Origin` (`http://`, `https://`, or `null` from a file or sandboxed page) is refused, pages on
-    `localhost` included.
+- **You never manage it.** No service controls in the panel. The extension starts it whenever
+  nothing answers on `127.0.0.1:34870`: when a window opens, on refresh, and before any action. It
+  uses VS Code's runtime (no separate Node) and outlives windows. What serves is decided only by
+  starting and stopping projects and groups, and *Stop all*.
+- **Rojo is independent of it.** If the service stops or is replaced, Rojo keeps serving and Studio
+  stays connected; the next service *adopts* each Rojo still answering with its project's name.
+- **Restores on start**: projects serving when it last stopped are adopted or started again.
+- **Crash recovery**: a Rojo that dies is restarted on the same port with *Rojo crashed at ‹time› and
+  was restarted on the same port; places with Rojo-Hub's Studio plugin reconnect by themselves …* and
+  Rojo's reason (or, right after a checkout in the served worktree, *Checking out ‹branch› in ‹folder›
+  removed a folder Rojo was watching, and Rojo 7.7 crashed …*). A new session. A Rojo it started is
+  known to have exited at once; an adopted one is looked for only after three missed status checks in
+  a row, so a slow Rojo (big switch, busy PC) is never restarted. If the restart fails, the project
+  shows the error and can be stopped from its card, *Stop all* or its group.
+- **It keeps going**: unexpected errors (a watched folder deleted, say) go to `service.log` and it
+  carries on.
+- **Idle exit**: after 15 minutes with nothing serving, no window on it and no request, so it does not
+  hold VS Code's program (it runs as `Code.exe`, shown as Visual Studio Code in Task Manager). The
+  next window starts it.
+- **Another Windows user's service** is never used or stopped ([Install](#3-install-update-uninstall)).
+- **If it cannot start** (a broken install), the panel shows *Rojo-Hub could not start* with the
+  reason and *Try again*, still listing projects and groups from `registry.json`, marked unavailable.
+  Retried only on *Try again* or the next action, never every refresh.
+- **Nothing is lost**: projects and groups live in `registry.json`, written fully before replacing the
+  old one. A damaged one (power cut, hand edit) is kept as `registry.corrupt-<time>.json`, the service
+  starts from `registry.json.bak`, and `service.log` says so.
+- **Local only.** It listens on `127.0.0.1` and answers (403 otherwise) only requests that:
+  - are addressed to it: `Host` is `127.0.0.1:34870`, `localhost:34870` or `[::1]:34870`, so a DNS
+    rebinding page cannot read it;
+  - come from no web page: no `Origin` (extension, uninstall step, MCP clients) or a `vscode-…://`
+    `Origin` (VS Code windows). Any browser `Origin` (`http://`, `https://`, `null`) is refused,
+    `localhost` pages included.
 
 ### Local API
 
-JSON over HTTP on `127.0.0.1:34870`. The extension is its only client; listed here for scripts and
+JSON over HTTP on `127.0.0.1:34870`. The extension is its only client; listed for scripts and
 debugging.
 
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`: once at once, then on every change, within 150 ms. Each slot's `listedPlaces` are its places, whether open, and what is being done to them |
+| `GET /events` | | `text/event-stream` of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`: once at once, then on every change, within 150 ms. Each slot's `listedPlaces` are its places, whether open, and what is being done to them |
 | `GET /slots` | | Every project with its state |
-| `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; without `projectFile`, its `default.project.json` or only `*.project.json` |
+| `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; default: `default.project.json` or the only `*.project.json` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
 | `DELETE /slots/:id` | | Remove a project |
-| `GET /slots/:id/port-moves-on-remove` | | The projects whose port would change if this one were removed: `[{ id, projectName, from, to, serving }]` (for the Remove confirmation) |
+| `GET /slots/:id/port-moves-on-remove` | | Projects whose port would change on removal: `[{ id, projectName, from, to, serving }]` |
 | `POST /slots/:id/start`, `/stop` | | Start or stop serving |
-| `GET /slots/:id/targets` | | Worktrees and branches it can serve, from the service's cache |
+| `GET /slots/:id/targets` | | Cached worktrees and branches it can serve |
 | `POST /slots/:id/fetch` | | `git fetch --all --prune`, then the fresh list |
-| `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
-| `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output`, an absolute `.rbxl` or `.rbxlx` path |
+| `POST /slots/:id/branch` | `{ name, base }` | New branch in its own worktree (Orca's, else beside the repo), and switch to it |
+| `POST /slots/:id/build` | `{ output }` | `rojo build` into `output`, an absolute `.rbxl`/`.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
-| `POST /slots/:id/places/:placeId/open` | | Open one of the project's places in Studio unless it is open: `{ placeId, placeName, outcome: "opened" \| "already-open" }`. 409 while `openPlaces` is off, or for a place its project file does not list |
-| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when Rojo-Hub cannot tell which window it is) |
-| `POST /slots/:id/places/:placeId/reopen` | | Close it, then open it again once that Studio has exited; answers once the close was asked for |
-| `POST /slots/:id/places/open-all` | | Open each of the project's places that is not open: one result (or `{ placeId, error }`) per place |
-| `POST /slots/:id/switch` | `{ target }` | `target` is `{kind:"worktree",path}` or `{kind:"branch",ref}`. A user's switch: it also clears an agent's claim |
+| `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open" }`. 409 while `openPlaces` is off, or for an unlisted place |
+| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when its window is unknown) |
+| `POST /slots/:id/places/:placeId/reopen` | | Close, then open once that Studio exited; answers once the close was asked |
+| `POST /slots/:id/places/open-all` | | Open each place not open: one result (or `{ placeId, error }`) each |
+| `POST /slots/:id/switch` | `{ target }` | `{kind:"worktree",path}` or `{kind:"branch",ref}`. A user's switch: clears an agent's claim |
 | `GET /groups` | | Every group |
 | `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
-| `PUT /groups/:id` | `{ name?, slotIds?, groupIds? }` | Rename or change members; `groupIds` that would loop are refused (409) with the chain |
+| `PUT /groups/:id` | `{ name?, slotIds?, groupIds? }` | Rename or change members; looping `groupIds` refused (409) with the chain |
 | `DELETE /groups/:id` | | Delete a group |
 | `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped |
+| `POST /groups/:id/stop` | | Stop; the result lists projects `kept` by another running group |
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
-| `GET /order` | | The panel's display order: `{ projects, groups }` |
-| `PUT /order` | `{ projects?, groups? }` | Save a new display order (never changes a port) |
-| `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings (sent by the extension). Replaces them all: a missing field goes back to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`). A port settings change moves ports at once; turning `studioPlugin` on installs the Studio plugin |
-| `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
-| `GET /studio` | WebSocket | The Studio plugin's link (spec 007): JSON messages `welcome` → `hello` (place) → `match` (which project, pushed again on every change); `state` (what the place is synced to). Protocol 2. Refused with a browser `Origin`, like every route |
-| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open Studio place (`key` from the snapshot's `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` goes back to *Automatic*. Answers the new `studioPlaces` |
-| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (config unreadable), last error |
-| `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` takes it out (only for an installed agent, and never on `other` or `unknown`) |
-| `POST /mcp` | JSON-RPC | The MCP server for agents (see [Agents](#10-agents)): one request object per POST, answered with plain JSON; a notification gets 202 with no body. Any other method on `/mcp` gets 405 |
+| `GET /order` | | Display order: `{ projects, groups }` |
+| `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
+| `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
+| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
+| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (unreadable), last error |
+| `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` removes it (installed agents only; never on `other` or `unknown`) |
+| `POST /mcp` | JSON-RPC | The MCP server ([Agents](#10-agents)): one request per POST, plain JSON answer; a notification gets 202 with no body. Other methods on `/mcp`: 405 |
 
-Answers are JSON. Errors are `{ error }` with these statuses:
+Answers are JSON; errors are `{ error }`:
 
 | Status | Meaning |
 |---|---|
-| 400 | A missing or wrong field in the body (`path is required`, `target must be …`) |
-| 403 | Refused: not addressed to the loopback address and port, or sent from a web page |
-| 404 | No such project, group or route (`No route for ‹method› ‹path›`), or a folder or file that does not exist |
-| 409 | A conflict: a duplicate name or registration, a group loop, a port problem, a missing Rojo |
-| 500 | Anything else, including a body that is not valid JSON, an invalid new branch name and Rojo not coming up |
+| 400 | Missing or wrong body field (`path is required`, `target must be …`) |
+| 403 | Not addressed to the loopback address and port, or from a web page |
+| 404 | No such project, group or route (`No route for ‹method› ‹path›`), or a missing folder or file |
+| 409 | Conflict: duplicate name or registration, group loop, port problem, missing Rojo |
+| 500 | Anything else, including invalid JSON, an invalid new branch name, Rojo not coming up |
 
 ## 12. Files on disk
 
@@ -1053,137 +880,106 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project assigned to each Studio place in VS Code (`placeChoices`), the project each place last synced with (`placeSynced`), and the projects each place has accepted a first sync from (`placeAccepted`) |
-| `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
-| `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
-| `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect` and `openPlaces` |
-| `universes.json` | Each opened place's universe ID and name, looked up from Roblox once (see [Opening places](#opening-places-in-studio)); safe to delete |
-| `claims.json` | Agents' claims on projects (spec 004), so they survive a service restart until they run out |
-| `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
-| `service.log` | Service start and stop, recovered errors, a damaged registry, git problems, and each Studio place's hello and every change of what it is told to sync with |
+| `registry.json` | Projects (repo, port, target, whether to serve), groups (members, nested groups, running), display order, Studio place assignments (`placeChoices`), each place's last project (`placeSynced`), accepted first syncs (`placeAccepted`) |
+| `registry.json.bak` | The previous save, for recovery |
+| `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
+| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces` |
+| `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
+| `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
+| `agent-notice.json` | Until when the agent notice stays hidden |
+| `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and every change of what it is told to sync with |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
-| `slots\<id>\borrowed.project.json` | The generated copy used in borrowed mode |
-| `slots\<id>\rojo.log` | This Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |
-| `views\<id>\<commit>\` | Views: detached worktrees for branches with no worktree, named after the first 12 hex digits of the commit |
+| `slots\<id>\borrowed.project.json` | The borrowed-mode copy |
+| `slots\<id>\rojo.log` | Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |
+| `views\<id>\<commit>\` | Views, named after the first 12 hex digits of the commit |
 
-`<id>` is the project's internal id (made from its name when it was added), not its name.
+`<id>` is the project's internal id (from its name when added), not its name.
 
-Outside that folder, Rojo-Hub writes:
+Outside that folder Rojo-Hub writes:
 
-- the agent entries you tick in *Agent access*, through Claude Code's and Codex's own CLIs: into
-  Claude Code's user config (`$CLAUDE_CONFIG_DIR/.claude.json` if `CLAUDE_CONFIG_DIR` is set and that
-  file exists, else `~/.claude.json`) and Codex's (`config.toml` in `CODEX_HOME`, else
-  `~/.codex/config.toml`);
-- the port settings in VS Code's user `settings.json`, when you press *Save* or *Reset* in Port
-  settings, and `rojoHub.agents` when you change a switch;
-- `sourcemap.json` in a served worktree, only where it is gitignored or already exists (see
-  [Sourcemaps](#sourcemaps)), or once when you ask with *Update sourcemap.json*;
-- a new worktree in `<repo>-worktrees/<name>` beside the repo when you make a *New branch* in a repo
-  Orca does not know (see [Switching branches](#8-switching-branches));
+- agent entries you tick, through Claude Code's and Codex's CLIs, into Claude Code's user config
+  (`$CLAUDE_CONFIG_DIR/.claude.json` if set and existing, else `~/.claude.json`) and Codex's
+  (`config.toml` in `CODEX_HOME`, else `~/.codex/config.toml`);
+- port settings in VS Code's user `settings.json` on *Save* or *Reset*, and `rojoHub.agents` when a
+  switch changes;
+- `sourcemap.json` in a served worktree where gitignored or existing ([Sourcemaps](#sourcemaps)), or
+  once on *Update sourcemap.json*;
+- a worktree in `<repo>-worktrees/<name>` for *New branch* in a repo Orca does not know;
 - place files where you save them with *Build place file…*;
-- its Studio plugin, `RojoHub.rbxm`, in Studio's local plugins folder (`%LOCALAPPDATA%RobloxPlugins`),
-  taking out other `RojoHub*.rbxm(x)` files there, unless `rojoHub.studioPlugin` is off (see
-  [Connecting Studio](#7-connecting-studio)).
+- `RojoHub.rbxm` in `%LOCALAPPDATA%\Roblox\Plugins`, removing other `RojoHub*.rbxm(x)` there, unless
+  `rojoHub.studioPlugin` is off ([Connecting Studio](#7-connecting-studio)).
 
-It never edits your project files. Git also records the view worktrees it registers (visible in
-`git worktree list`) and removes again.
+It never edits your project files. Git also records the view worktrees it registers and removes
+(visible in `git worktree list`).
 
 ## 13. Settings
 
-All are **user settings that apply to every project and window**; a workspace cannot override them.
+All are **user settings for every project and window**; workspaces cannot override them.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
-| `rojoHub.excludedPorts` | `[]` | Ports never given to a project by hashing: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 are always excluded. A `servePort` still wins (see [Ports](#6-ports)). An invalid entry is ignored with a warning on every card. |
-| `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
-| `rojoHub.studioAutoConnect` | `"remembered"` | Which places the Studio plugin connects by itself: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) and places assigned in Studio places; `"remembered"` also a place's last synced project (see [Connecting Studio](#7-connecting-studio)). |
-| `rojoHub.openPlaces` | `false` | Open, close and reopen a project's Studio places from its card, and let agents open them (`open_place`). A place that is open is never opened again (see [Opening places](#opening-places-in-studio)). Off: none of it does anything. |
-| `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies (see [Connecting Studio](#7-connecting-studio)). Off: the folder is left alone. |
-| `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents can use Rojo-Hub's MCP server (see [Agents](#10-agents)). Shown as checkboxes. Not synced by Settings Sync. |
-| `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |
+| `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last`. Invalid: ignored with a warning on every card; default used. |
+| `rojoHub.excludedPorts` | `[]` | Ports never hashed to: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 always excluded. A `servePort` still wins ([Ports](#6-ports)). Invalid entries ignored with a warning on every card. |
+| `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` current in each served worktree ([Sourcemaps](#sourcemaps)). |
+| `rojoHub.studioAutoConnect` | `"remembered"` | Which places connect by themselves: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) or assigned in Studio places; `"remembered"` also a place's last project ([Connecting Studio](#7-connecting-studio)). |
+| `rojoHub.openPlaces` | `false` | Open, close and reopen places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. |
+| `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies. Off: the folder is left alone. |
+| `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents get the MCP server ([Agents](#10-agents)). Checkboxes. Not synced by Settings Sync (it describes this machine's agent configs). |
+| `rojoHub.notifyOnStudioDisconnect` | `false` | Message when Studio disconnects from a serving project, in the window with it open (else the focused one). |
 
-An invalid `rojoHub.portRange` is ignored with a warning on every card, and the default range is
-used.
+The panel's **Port settings** edits the two port settings; *Open Menu → Port Settings* opens VS
+Code's Settings on them. Changes apply within seconds, and ports they move move at once
+([Ports](#6-ports)).
 
-The panel's **Port settings** section edits the two port settings; *Open Menu → Port Settings* opens
-VS Code's Settings on them instead. Changes apply within a few seconds, and a port they move, moves
-at once (see [Ports](#6-ports)).
-
-**`rojoHub.agents` is not synced** by VS Code's Settings Sync: it says which agent configs on *this*
-machine have Rojo-Hub's entry, so a choice made on another machine never adds or removes entries
-here.
-
-**Where they are saved.** The port settings are VS Code user settings, written for you when you press *Save* or
-*Reset*. They are marked as applying to every VS Code profile, so VS Code keeps them in the main
-user `settings.json` (`%APPDATA%\Code\User\settings.json`) and every profile shares them. *Reset*
-removes `rojoHub.portRange` from that file, so the default applies again. The service keeps a copy of
-the last values in `%LOCALAPPDATA%\RojoHub\settings.json` so it can start projects with no window open.
+**Where they are saved.** Port settings are written on *Save* or *Reset*, marked as applying to every
+profile, so VS Code keeps them in the main user `settings.json` (`%APPDATA%\Code\User\settings.json`),
+shared by all profiles. *Reset* removes `rojoHub.portRange` so the default applies. The service keeps
+a copy in `%LOCALAPPDATA%\RojoHub\settings.json` to start projects with no window open.
 
 ## 14. Commands
 
-Everything is in the panel (see [Where to find it](#4-where-to-find-it-in-vs-code)). The command
-palette has **Rojo-Hub: Open Menu**, which offers the same actions as menus (including *Port
-Settings* and *Agent Access*, which open VS Code's Settings on those settings), and **Rojo-Hub: Copy Agent Setup Commands** / **Copy Agent Setup Prompt** (see
-[Agents](#10-agents)). The panel's title
-bar has Open Menu, Refresh and Collapse All, and its `…` menu has Add Project, New Group and Stop All. Clicking the status bar item opens the panel on that window's project.
+Everything is in the panel ([Where to find it](#4-where-to-find-it-in-vs-code)). The command palette
+has **Rojo-Hub: Open Menu** (the same actions as menus, including *Port Settings* and *Agent Access*,
+which open VS Code's Settings on them) and **Rojo-Hub: Copy Agent Setup Commands** / **Copy Agent
+Setup Prompt** ([Agents](#10-agents)). The panel's title bar has Open Menu, Refresh and Collapse All;
+its `…` menu has Add Project, New Group and Stop All. The status bar item opens the panel on that
+window's project.
 
 ## 15. Known limits and troubleshooting
 
-**Deleting a folder under a served project crashes Rojo 7.7** (a Rojo bug, not Rojo-Hub's: rojo-rbx/rojo#1305,
-fix pending in PR #1319). It happens with plain `rojo serve` too. Anything that removes a folder
-containing files under a served tree triggers it: deleting it in Explorer, a `git checkout` or
-rebase that removes a folder, deleting a worktree the project served earlier in the same session.
-Rojo-Hub restarts Rojo on the same port and tells you (naming the checkout when one caused it);
-places with Rojo-Hub's plugin reconnect by themselves. Switching with the picker instead of checking out in the served folder avoids it.
+**Deleting a folder under a served project crashes Rojo 7.7** (Rojo's bug, rojo-rbx/rojo#1305, fix
+pending in PR #1319; plain `rojo serve` too). Anything removing a folder with files under a served
+tree triggers it: Explorer, a `git checkout` or rebase, deleting a worktree the project served earlier
+in the session. Rojo-Hub restarts Rojo on the same port and says so (naming the checkout if one
+caused it); Rojo-Hub's plugin reconnects. Switch with the picker instead of checking out in the
+served folder.
 
-**"Port 34870 is used by another Windows user's Rojo-Hub"**: someone else signed in to this PC runs
-Rojo-Hub. Only one signed-in user can run it at a time; it works again once they sign out.
+| Symptom | Fix |
+|---|---|
+| *Port 34870 is used by another Windows user's Rojo-Hub* | Another signed-in user runs it; one user at a time. Works once they sign out. |
+| *Rojo-Hub could not start* | The service did not come up; the message and `%LOCALAPPDATA%\RojoHub\service.log` say why. Projects and groups are saved. Fix it and press *Try again*. |
+| Nothing shows after installing | Reload the window; check it is installed in this profile. |
+| *Port … is held by another program* | Stop that program, or exclude the port in `rojoHub.excludedPorts`. |
+| *… is already named …* | Two repos share a project `name`; rename one. |
+| *servePort 34870 is Rojo-Hub's own service port* / *servePort … is also set by …* | Pick another `servePort` ([Ports](#6-ports)). |
+| An agent shows *Can't read config* | The config could not be parsed just now (usually mid-write); Rojo-Hub rechecks. If it stays, check the file. |
+| Studio disconnected | The session changed: stop and start, a port move, or a crash restart (the project says which). Never a branch switch. |
+| A switch does not appear in Studio | *Show Rojo Log*: an invalid project file in the served tree is logged and Rojo keeps serving the previous tree; the project shows the error. |
+| Borrowed-package warnings | The worktree has not run Wally; run it there. |
 
-**"Rojo-Hub could not start"**: the background service did not come up. The message says why;
-`%LOCALAPPDATA%\RojoHub\service.log` has more. Your projects and groups are still saved. Fix the
-cause and press *Try again*.
-
-**Nothing shows up after installing**: reload the window, and check the extension is installed
-in the VS Code profile you are using (profiles have separate extension lists).
-
-**"Port … is held by another program"**: something outside Rojo-Hub uses that port. Stop it, or
-exclude the port in `rojoHub.excludedPorts`.
-
-**"… is already named …"**: two repos have the same Rojo project `name`. Rename one in its project
-file.
-
-**"servePort 34870 is Rojo-Hub's own service port"** / **"servePort … is also set by …"**: the
-project file's `servePort` cannot be used; pick another port in it (see [Ports](#6-ports)).
-
-**An agent switch shows *Can't read config***: the agent's config file exists but could not be
-parsed just now (usually while the agent writes it). Rojo-Hub leaves it alone and looks again; if it
-stays, check the file.
-
-**Studio disconnected**: the Rojo session changed. Causes: the project was stopped and started, its
-port moved, or Rojo crashed and was restarted (the project says which). Switching branches never
-causes it.
-
-**A switch does not appear in Studio**: open *Show Rojo Log*. If the served tree's project file is
-invalid, Rojo logs the error and keeps serving the previous tree; the project shows the error.
-
-**Warnings about borrowed packages**: the served worktree has not run Wally. Run it there to serve
-the branch's own packages.
-
-**Windows only for now.** The live switch depends on a Windows path detail in Rojo (see the spec).
-On other systems the panel says *Rojo-Hub supports Windows only for now* and does not start the
-service.
+**Windows only for now.** Live switching depends on a Windows path detail in Rojo (see the spec).
+Elsewhere the panel says *Rojo-Hub supports Windows only for now* and does not start the service.
 
 ## 16. For developers
 
-Source layout, commands and the rules that must not be simplified away are in
-[`CLAUDE.md`](../CLAUDE.md). In short: `src/service` is the background service, `src/extension`
-the VS Code front end, `src/common/api.ts` the protocol between them (and with the Studio plugin);
-`plugin/` the Studio plugin, Rojo 7.7.0's with Rojo-Hub's changes listed in `plugin/UPSTREAM.md`, built
-into `dist/RojoHub.rbxm` by `npm run build` with Rokit's Rojo 7.7.0; `npm test` runs unit tests and
-end-to-end tests against a real Rojo; `tools/` holds the original measurement scripts.
+Source layout, commands and the rules not to simplify away are in [`CLAUDE.md`](../CLAUDE.md).
+`src/service` is the background service, `src/extension` the VS Code front end, `src/common/api.ts`
+the protocol between them (and with the plugin); `plugin/` is the Studio plugin, Rojo 7.7.0's with
+changes listed in `plugin/UPSTREAM.md`, built into `dist/RojoHub.rbxm` by `npm run build` with
+Rokit's Rojo 7.7.0; `npm test` runs unit and end-to-end tests against a real Rojo; `tools/` holds the
+original measurement scripts.
 
 `THIRD-PARTY-NOTICES.md` credits everything of others' that ships in the `.vsix` and the release's
 `.rbxm` (the Rojo plugin and its packages, the npm packages esbuild bundles, the codicon font), with
 each licence's text, and ships in the `.vsix`. `node tools/notices.mjs` regenerates it; the unit tests
-fail when it is out of date or when a bundle pulls in an npm package it does not list.
+fail when it is out of date or a bundle pulls in an unlisted npm package.
