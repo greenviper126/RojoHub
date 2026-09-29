@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.20.0, 2026-09-29. For why each design choice was made, with the
+documentation. Version 0.20.1, 2026-09-29. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -1182,3 +1182,8 @@ the VS Code front end, `src/common/api.ts` the protocol between them (and with t
 `plugin/` the Studio plugin, Rojo 7.7.0's with Rojo-Hub's changes listed in `plugin/UPSTREAM.md`, built
 into `dist/RojoHub.rbxm` by `npm run build` with Rokit's Rojo 7.7.0; `npm test` runs unit tests and
 end-to-end tests against a real Rojo; `tools/` holds the original measurement scripts.
+
+`THIRD-PARTY-NOTICES.md` credits everything of others' that ships in the `.vsix` and the release's
+`.rbxm` (the Rojo plugin and its packages, the npm packages esbuild bundles, the codicon font), with
+each licence's text, and ships in the `.vsix`. `node tools/notices.mjs` regenerates it; the unit tests
+fail when it is out of date or when a bundle pulls in an npm package it does not list.

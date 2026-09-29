@@ -52,7 +52,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $vsix = Get-ChildItem rojo-hub-*.vsix | Select-Object -First 1
-          $notes = "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md). Install: Extensions view → ⋯ → Install from VSIX…, or ``code --install-extension $($vsix.Name)``."
+          $notes = "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md). Install: Extensions view → ⋯ → Install from VSIX…, or ``code --install-extension $($vsix.Name)``. Rojo-Hub is MIT; the Studio plugin is Rojo's own (MPL-2.0, source in [plugin/](https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/plugin)) and both bundle other open-source work, credited in [THIRD-PARTY-NOTICES.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/THIRD-PARTY-NOTICES.md)."
           # The Studio plugin too, for installing by hand (the extension installs it by itself).
           Copy-Item dist/RojoHub.rbxm "RojoHub-${{ github.ref_name }}.rbxm"
           gh release create "${{ github.ref_name }}" $vsix.FullName "RojoHub-${{ github.ref_name }}.rbxm" --title "Rojo-Hub ${{ github.ref_name }}" --notes $notes

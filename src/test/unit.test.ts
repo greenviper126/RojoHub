@@ -795,6 +795,10 @@ test("the Studio plugin says the same version as the service", () => {
 	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
 });
 
+test("THIRD-PARTY-NOTICES.md is current and lists every bundled npm package", () => {
+	execFileSync(process.execPath, ["tools/notices.mjs", "--check"], { cwd: resolve(__dirname, "..", ".."), stdio: "pipe" });
+});
+
 test("agents' claims survive a service restart, and run out as before", () => {
 
 	const home = mkdtempSync(join(tmpdir(), "rojo-hub-claims-"));

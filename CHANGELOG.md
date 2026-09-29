@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.1
+
+- Credits the open-source work Rojo-Hub ships: `THIRD-PARTY-NOTICES.md` (in the extension and
+  linked from each release) lists Rojo's Studio plugin (MPL-2.0, with where to get its source), the
+  Roact, Flipper, Promise, t, Highlighter, msgpack-luau and rbx-dom code in it, the bundled npm
+  packages (smol-toml, jsonc-parser, @msgpack/msgpack) and the codicon font, each with its licence.
+  No change in behaviour.
+
 ## 0.20.0
 
 - **Open places from VS Code** (off by default; turn on `rojoHub.openPlaces`). Each project card
