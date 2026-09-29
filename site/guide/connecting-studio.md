@@ -1,26 +1,21 @@
 # Connecting Studio
 
-Rojo-Hub installs its own Studio plugin: Rojo's plugin, changed to connect **by itself**. Open a
-place and it syncs with its project. No port to type, no button to press, and it comes back on its
-own when Rojo restarts.
+Rojo-Hub installs its own Studio plugin (Rojo 7.7's, changed to connect by itself). Open a place and
+it syncs with its project. No port to type, and it reconnects after any Rojo restart.
 
-## How a place finds its project
+After installing or updating Rojo-Hub, **reopen open places**: Studio loads a plugin only when a
+place opens.
 
-Everything is decided in VS Code; Studio only shows what Rojo-Hub decided. When a place opens, the
-plugin tells Rojo-Hub which place it is, and Rojo-Hub answers, in this order:
+## Which project a place syncs with
 
-1. the project you **assigned** to the place in the panel's **Studio places** section;
-2. the project whose **`servePlaceIds`** lists the place;
-3. the project whose **`placeId`** is the place's;
-4. the project this place **last synced with**.
+Decided in VS Code, in this order:
 
-::: tip Only listed places
-Set [`rojoHub.studioAutoConnect`](/reference/settings#rojohub-studioautoconnect) to `listed` and a
-place connects by itself only when a project file lists it (or you assign it in Studio places). Any
-other place you connect by hand each time: type the project's port into the Rojo window.
-:::
+1. the project you assigned it in the panel's **Studio places**;
+2. the project whose `servePlaceIds` lists it;
+3. the project whose `placeId` is it;
+4. the project it last synced with.
 
-So the easiest setup is to list your places in the project file, the way Rojo already supports:
+So list your places in the project file:
 
 ```json
 {
@@ -30,101 +25,40 @@ So the easiest setup is to list your places in the project file, the way Rojo al
 }
 ```
 
-One project can serve several places: open all of them and each syncs with it. A place listed in
-`blockedPlaceIds` never syncs with that project.
+Only a serving project is connected to; start it and the place syncs without reopening.
+`blockedPlaceIds` keeps a place away from a project.
 
-Only a **serving** project is connected to. If the place's project is stopped, Studio places and
-the Rojo window say so; start it in Rojo-Hub and the place syncs by itself, without reopening it.
-
-**The first sync asks, once.** The first time a place syncs with a project, Rojo shows its usual
-confirmation with the diff (Accept or Abort), because that sync can overwrite what was in the place.
-Accept it once and Rojo-Hub remembers: from then on that place and project connect without asking,
-when you reopen the place and after any Rojo restart. *Confirmation Behavior* in the plugin's
-settings still works: *Always* asks every time, *Never* never asks.
-
-## It reconnects by itself
-
-Switching branches **never** disconnects Studio. A new Rojo session does, and Rojo-Hub's plugin
-reconnects to it with no click:
-
-- you **stop and start** the project;
-- its **port moves** (you added a `servePort`, excluded its port, …); see
-  [When a port changes](./ports#when-a-port-changes);
-- Rojo **crashed** and Rojo-Hub restarted it; see [Crash recovery](./service#crash-recovery).
-
-If you press **Disconnect** (or **Abort** on the first sync), that session is left alone. Connect by
-hand, assign the project in VS Code, or start the project again, to sync once more.
+The **first sync** of a place with a project asks Accept or Abort, because it can overwrite the place.
+Accept once and that pair connects without asking from then on.
 
 ## Studio places
 
-The panel's **Studio places** section lists every open place with Rojo-Hub's plugin, what it syncs
-with (or waits for), and a list to **assign** it a project. *Automatic* follows the order above; pick
-a project and the place syncs with it at once. Assign a project when:
+The panel section lists every open place, what it syncs with, and a list to assign it a project.
+Assign one when the place is unsaved, unlisted, or claimed by two serving projects. A place that does
+not connect by itself also shows the serving projects' ports, to connect by hand.
 
-- **the place isn't saved to Roblox yet** (a new Baseplate, a local file). It shares its ID with
-  every other unsaved place, so the assignment lasts while that Studio window is open;
-- **no project lists the place**, and it has never synced. After one sync it is remembered;
-- **two serving projects claim the place** and it has not synced with either. Your assignment is
-  kept for that place.
+| Status | Do |
+|---|---|
+| *Synced* | Nothing. |
+| *Waiting* | Start its project. |
+| *Assign a project* | Pick one in the list. |
+| *Rojo too old* | Pin `rojo-rbx/rojo@7.7.0`. |
+| *Reopen the place* | Reopen it to load the new plugin. |
 
-A place that doesn't connect by itself also shows every serving project's port under its row, to
-copy and connect by hand. In Studio, a line under the Rojo window's buttons shows the same answer;
-the choices are all in VS Code.
-
-::: warning Rojo 7.7 or newer
-The plugin is Rojo 7.7's and speaks only to Rojo 7.7 or newer. A project pinning an older Rojo says
-so in the Rojo window: pin `rojo-rbx/rojo@7.7.0`. See
-[Which Rojo version](./requirements#which-rojo-version).
-:::
-
-## The plugin itself
-
-- Rojo-Hub puts `RojoHub.rbxm` in Studio's plugins folder (`%LOCALAPPDATA%\Roblox\Plugins`) and
-  keeps it up to date. **Studio loads a new or updated plugin when you next open a place**, so after
-  installing or updating Rojo-Hub, reopen your places.
-- In Studio it shows as **Rojo-Hub** in the Plugins tab, with the same window as Rojo's.
-- Rojo's own plugin can stay installed, but Studio then shows two Rojo windows; the Rojo-Hub panel
-  suggests removing `RojoManagedPlugin.rbxm`. Rojo-Hub's plugin does everything Rojo's does.
-- Without Rojo-Hub running, it behaves exactly like Rojo's plugin.
-- *Rojo-Hub Auto Connect* in the plugin's settings turns connecting by itself off.
-- To manage the plugin yourself, set
-  [`rojoHub.studioPlugin`](/reference/settings#rojohub-studioplugin) to false; Rojo-Hub then leaves
-  the plugins folder alone.
+Pressing **Disconnect** (or **Abort**) leaves that session alone. Use the green **Connect to
+‹project›** button in Studio to reconnect.
 
 ## Opening places from VS Code
 
-Off by default. Turn on [`rojoHub.openPlaces`](/reference/settings#rojohub-openplaces) and each
-project card lists the places its project file names (`servePlaceIds`, `placeId`), with whether each
-is open in Studio:
+Turn on `rojoHub.openPlaces`. Each card then lists its places with **Open**, **Close** and
+**Reopen**. An open place is never opened twice. Close lets Studio ask about unsaved changes. Agents
+can open places but never close them.
 
-- **Open** opens the place for editing in Studio, like the website's *Edit in Studio*. *Open all
-  places in Studio* in the card's ⋯ menu opens every one that is not open.
-- **A place that is already open is never opened again.** Studio would open a second copy, so
-  Rojo-Hub checks first: the place's Rojo-Hub plugin, and the command lines of running Studios.
-- **Close** asks the place's Studio window to close, like its ✕, so Studio still asks about unsaved
-  changes. Rojo-Hub never force-closes Studio.
-- **Reopen** closes the place, waits until Studio has exited (up to 5 minutes, while you answer its
-  prompt), and opens it again. Use it after a Rojo-Hub update, so the place loads the new plugin.
+## Good to know
 
-Opening needs the place's universe ID. Rojo-Hub uses the project file's `gameId` if it has one, and
-otherwise looks it up from Roblox once and keeps it. Close and Reopen work for places opened by
-Rojo-Hub or from the website; for a place opened from Studio's start page, close it in Studio.
-
-Agents can open a place too (`open_place`), but never close one.
-
-## Connecting by hand
-
-It still works like Rojo's plugin: set the address to `localhost` and the project's port (click the
-port on the project's card to copy it), then **Connect**. Rojo-Hub remembers that project for the
-place from then on.
-
-## How Rojo-Hub knows Studio is connected
-
-Rojo's log records each plugin connection opening and closing. Rojo-Hub counts them; the count
-drives the green dot and the *Connected* pill. Places running Rojo-Hub's plugin also say which place
-they are: hover the *Connected* pill to see them.
-
-::: tip Get told when Studio disconnects
-Turn on [`rojoHub.notifyOnStudioDisconnect`](/reference/settings#rojohub-notifyonstudiodisconnect)
-to see a message when Studio disconnects from a serving project.
-:::
+- Branch switches never disconnect. A new Rojo session (restart, crash, port move) does, and the
+  plugin reconnects by itself.
+- Rojo's own plugin can stay, but Studio then shows two Rojo windows; the panel suggests removing it.
+- Without Rojo-Hub running, the plugin behaves like Rojo's.
+- `rojoHub.studioAutoConnect: "listed"` connects only places a project file lists or you assign.
+- `rojoHub.studioPlugin: false` leaves Studio's plugins folder alone.

@@ -2,7 +2,7 @@
 
 Open the **Rojo-Hub** panel from the activity bar and click **+** on **Projects**.
 
-The panel lists the folders open in this window and the repos Orca knows about; click one to add it. **Browse…** picks any other folder that has a `default.project.json`, or another `*.project.json` (you can switch a project to another project file later from its ⋯ menu).
+The panel lists the folders open in this window and the repos Orca knows about; click one to add it. **Browse…** picks any other folder that has a `default.project.json`, or another `*.project.json` (you can pick another project file later from the card).
 
 Each project gets its own port:
 

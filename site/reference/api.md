@@ -1,14 +1,7 @@
 # Local API
 
-The background service speaks JSON over HTTP on `127.0.0.1:34870`. The extension is its only
-client; the API is listed here for scripts and debugging. It is not a stable public interface and may
-change between versions.
-
-::: warning Local programs only
-The service answers only requests addressed to `127.0.0.1:34870`, `localhost:34870` or
-`[::1]:34870`, and not from a web page (no `Origin`, or VS Code's own `vscode-…://` one). Anything
-else is refused with 403. See [Security](/guide/service#security).
-:::
+JSON over HTTP on `127.0.0.1:34870`, for scripts and debugging. Not a stable interface. Requests from
+web pages are refused ([Security](./service#security)).
 
 ```sh
 curl http://127.0.0.1:34870/health
@@ -19,7 +12,7 @@ curl http://127.0.0.1:34870/health
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order }`: once at once, then on every change, within 150 ms |
+| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`, then again on every change |
 | `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings (sent by the extension). Replaces them all: a missing field goes back to its default. |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
@@ -60,6 +53,13 @@ In the API a project is a *slot*.
 | `DELETE /groups/:id` | | Delete a group |
 | `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped (agents' `start_group only`; the panel no longer offers it) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
+
+## Studio
+
+| Method and path | Body | Does |
+|---|---|---|
+| `GET /studio` | WebSocket | The Studio plugin's link |
+| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place; `null` goes back to *Automatic* |
 
 ## Agents
 

@@ -95,7 +95,7 @@ changed to sync each place with its project without a port typed or a button pre
 ## 0.18.2 — first public release
 
 **Requirements** are checked and explained: Windows 10/11, VS Code 1.101+, git 2.31+, and Rojo
-installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoHub/guide/requirements)).
+installed by Rokit (see the [requirements](https://greenviper126.github.io/RojoHub/guide/getting-started)).
 
 **The panel is live and immediate.**
 - It follows the background service as a stream, so changes made anywhere (another window, an agent,
