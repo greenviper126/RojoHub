@@ -201,6 +201,30 @@ Answered from Rojo 7.7.0's source (2026-09-28, `plugin/` at tag `v7.7.0`):
   pins an older rojo. Of the five registered projects on 2026-09-28, two pin 7.7.0, one pins 7.3.0
   (VluxySF, `aftman.toml`) and two pin none. See open question 4.
 
+## Checked in Studio (2026-09-28)
+
+Studio 0.740.19, two published test places ("Rojo-Hub Test1" 108404263554868, "Test2"
+89386659316315), a throwaway project listing both in `servePlaceIds`, served by rojo 7.7.0 through
+this branch's service on 34870. Checked with the Studio MCP (`execute_luau`, console output) and the
+service's `/slots`.
+
+- **Opening the places** with the plugin installed connected each one by itself ("Rojo-Hub:
+  connecting to RojoHubStudioTest on port 35272"); `ReplicatedStorage.RojoHubTest.Hello` synced in
+  both, and the card listed both places (`connections 2`).
+- **Stop, change a file, start** (a new session): both places reconnected by themselves in the second
+  the new session came up, with the changed file. Test2 first tried the dying session once ("Couldn't
+  connect"), which the plugin now avoids by counting a just-lost session as tried.
+- **A crash** (rojo killed by PID): the service restarted it on the same port and both places
+  reconnected by themselves in the same second.
+- **The service replaced** (0.18.3 build by 0.19.0): the plugins re-linked by themselves; rojo and
+  the synced places were not disturbed (same session).
+- Found: once synced, a place's `game.Name` is the project's name (Rojo sets the DataModel name), so
+  the plugin reports the name from `MarketplaceService:GetProductInfo` instead.
+
+Not yet checked live: Disconnect and Abort being respected, the Sync with… picker, two projects
+claiming one place in Studio (covered by unit tests), an unsaved place, and the panel's new tooltip
+and notice (need the extension installed).
+
 ## Acceptance criteria
 
 - [ ] Opening a place whose `PlaceId` is in a running project's `servePlaceIds` connects it with no
