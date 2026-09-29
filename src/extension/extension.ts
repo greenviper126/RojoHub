@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -50,6 +50,8 @@ let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
+/** The Studio plugin's install, from the last snapshot (spec 007). */
+let lastStudioPlugin: StudioPluginStatus | null = null;
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -199,6 +201,7 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastSlots = snapshot.slots;
 	lastGroups = snapshot.groups;
 	lastOrder = snapshot.order;
+	lastStudioPlugin = snapshot.studioPlugin ?? null;
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
 	render();
@@ -291,6 +294,7 @@ function render(): void {
 		order: lastOrder,
 		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
+		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
 	});
 	updateStatus();
 }
@@ -822,7 +826,7 @@ async function addProject(): Promise<void> {
 	const added = await run("Adding project", () => client.add(path!, file));
 	if (!added) return;
 	const start = await vscode.window.showInformationMessage(
-		`${added.projectName} has port ${added.port}. Connect its Studio places to localhost:${added.port} once; with the plugin's Auto Reconnect on, they reconnect by themselves.`,
+		`${added.projectName} has port ${added.port}. Its Studio places sync by themselves with Rojo-Hub's plugin when its project file lists them in servePlaceIds; otherwise pick it once in the place's Rojo window.`,
 		"Start Serving",
 	);
 	if (start) await run(`Starting ${added.projectName}`, () => client.start(added.id));
@@ -957,7 +961,7 @@ async function buildPlace(slot: SlotView): Promise<void> {
 async function confirmRemove(slot: SlotView): Promise<boolean> {
 	const moves = await client.portMovesOnRemove(slot.id).catch(() => []);
 	const detail = moves
-		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects and must reconnect to ${move.to}` : ""}.`)
+		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects (places with Rojo-Hub's plugin reconnect by themselves)` : ""}.`)
 		.join("\n");
 	const sure = await vscode.window.showWarningMessage(
 		`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,
@@ -1230,6 +1234,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			order: lastOrder,
 			agents: { url: MCP_URL, vscode: false, list: [] },
 			agentNudge: false,
+			studioPlugin: null,
 		});
 		void vscode.window.showWarningMessage(message);
 		return;

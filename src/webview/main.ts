@@ -227,12 +227,19 @@ function dot(slot: SlotView): string {
 	return `<span class="dot ${kind}" title="${title}"></span>`;
 }
 
+/** Which Studio places are synced, when their Rojo-Hub plugin said (spec 007); older plugins only count. */
+function connectedTitle(slot: SlotView): string {
+	const places = slot.places ?? [];
+	if (places.length === 0) return "Serving, and Studio is connected";
+	return `Serving, synced with ${places.map((place) => `${place.placeName} (${place.placeId})`).join(", ")}`;
+}
+
 /** A small coloured pill saying what the project is doing. */
 function statusPill(slot: SlotView): string {
 	if (stopping.has(slot.id)) return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Stopping…</span></span>`;
 	if (slot.state === "running") {
 		return slot.connections > 0
-			? `<span class="pill ok" title="Serving, and Studio is connected">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
+			? `<span class="pill ok" title="${escape(connectedTitle(slot))}">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
 			: `<span class="pill live" title="Serving, waiting for Studio: connect Studio's Rojo plugin to this port">${icon("broadcast")}<span class="ellipsis">Serving</span></span>`;
 	}
 	if (slot.state === "starting") return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Starting…</span></span>`;
@@ -774,6 +781,20 @@ function agentNudge(): string {
 	</div>`;
 }
 
+/*
+	The Studio plugin's install (spec 007), above Projects only when it needs the
+	user: it failed, or Rojo's own plugin is installed beside it.
+*/
+function studioPluginNotice(): string {
+	const plugin = state!.studioPlugin;
+	if (!plugin) return "";
+	if (plugin.state === "error") return `<div class="notice error">${icon("error")}<span>${escape(plugin.detail)}</span></div>`;
+	if (plugin.state === "installed" && plugin.officialRojo) {
+		return `<div class="notice warning">${icon("warning")}<span>Rojo's own Studio plugin (RojoManagedPlugin.rbxm) is installed next to Rojo-Hub's, so Studio shows two Rojo windows. Rojo-Hub's does all Rojo's does and connects by itself; remove RojoManagedPlugin.rbxm from Studio's plugins folder to keep one.</span></div>`;
+	}
+	return "";
+}
+
 /** A count's first word stays in a narrow panel; the rest ("serving") hides. */
 function countText(count: string): string {
 	const [lead, ...rest] = count.split(" ");
@@ -983,6 +1004,7 @@ function render(): void {
 		`
 		${banner}
 		${agentNudge()}
+		${studioPluginNotice()}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}

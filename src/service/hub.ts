@@ -27,6 +27,8 @@ const PROJECT_FILES_MS = 2000;
 	a crash, and restarting a healthy rojo would disconnect Studio.
 */
 const CRASH_MISSES = 3;
+/** A new session disconnects Studio; Rojo-Hub's plugin reconnects by itself (spec 007), Rojo's own does not. */
+const RECONNECT = "Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.";
 /** How long a new port assignment must hold before a slot is moved to it (see refreshPorts). */
 const MOVE_SETTLE_MS = 2500;
 
@@ -314,8 +316,8 @@ export class Hub {
 			const checkout = runtime.checkout && Date.now() - runtime.checkout.at < CHECKOUT_CRASH_MS ? runtime.checkout : null;
 			runtime.notes = [
 				checkout && slot.target.kind === "worktree"
-					? `Checking out ${checkout.branch} in ${basename(slot.target.path)} removed a folder Rojo was watching, and Rojo 7.7 crashed (rojo-rbx/rojo#1305). Rojo-Hub restarted it on the same port; reconnect Studio. Picking a branch in Rojo-Hub's picker switches without this.`
-					: `Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; reconnect Studio. ${reason ?? ""}`.trim(),
+					? `Checking out ${checkout.branch} in ${basename(slot.target.path)} removed a folder Rojo was watching, and Rojo 7.7 crashed (rojo-rbx/rojo#1305). Rojo-Hub restarted it on the same port; ${RECONNECT} Picking a branch in Rojo-Hub's picker switches without this.`
+					: `Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; ${RECONNECT} ${reason ?? ""}`.trim(),
 			];
 			await this.startLocked(slot);
 		}).catch(() => undefined);
@@ -366,7 +368,7 @@ export class Hub {
 				if (wasServing) await this.stopLocked(slot);
 				slot.port = now.port;
 				this.registry.save();
-				runtime.notes = [`Port moved from ${from} to ${slot.port}${wasServing ? "; reconnect Studio to the new port" : ""}.`];
+				runtime.notes = [`Port moved from ${from} to ${slot.port}${wasServing ? `. ${RECONNECT}` : "."}`];
 				if (wasServing && slot.wantRunning) await this.startLocked(slot);
 			})
 				.catch(() => undefined)

@@ -18,7 +18,26 @@ This folder is Rojo's Studio plugin, changed so that Rojo-Hub can connect it by 
 Kept to a minimum so moving to a new Rojo release is a merge. Everything Rojo-Hub adds lives in
 `src/RojoHub/`. Each change to an upstream file is listed here.
 
-(none yet)
+Each hook is marked `-- Rojo-Hub` in the file.
+
+- `src/App/init.lua`
+  - requires `Plugin.RojoHub`;
+  - in `App:init` (edit mode), starts the Rojo-Hub link instead of calling `tryAutoReconnect` at once,
+    and hands `tryAutoReconnect` + `checkSyncReminder` to it as the fallback when the service does
+    not answer;
+  - `App:setHubMatch` (new) keeps the service's answer in `state.hubMatch`;
+  - `App:checkSyncReminder` returns early while the service answers (the saved address may be stale);
+  - `App:willUnmount` stops the link;
+  - `App:endSession` and the Confirming page's `onAbort` tell the link the user ended or declined
+    that session, so it is not reconnected by itself;
+  - `pluginName` is `"Rojo-Hub"` rather than `"Rojo " .. version`: Studio refuses a second dock
+    widget with the same id, so the two plugins could not both load;
+  - the NotConnected page gets `hubEnabled`, `hubMatch` and `onHubPick`.
+- `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.StatusLine` under the buttons.
+- `src/App/StatusPages/Settings/init.lua`: a *Rojo-Hub Auto Connect* row (`hubAutoConnect`).
+- `src/Settings.lua`: `hubAutoConnect = true`; `checkForUpdates` defaults to `false`, since Rojo's update
+  check points at Rojo's own plugin and this one updates with Rojo-Hub.
+- `testez.yml` (Rojo's, for selene's `roblox+testez` std) is copied beside `selene.toml`.
 
 ## Moving to a new Rojo release
 

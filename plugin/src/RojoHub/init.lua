@@ -13,6 +13,7 @@
 ]]
 
 local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local RunService = game:GetService("RunService")
 
 local Rojo = script:FindFirstAncestor("Rojo")
@@ -57,6 +58,9 @@ function Hub.new(app)
 		attempt = nil,
 		-- What was last reported to the service as synced, to send only changes.
 		reported = nil,
+		reportedSession = nil,
+		-- The place's name on Roblox; Studio names every DataModel "Place1".
+		placeName = nil,
 		stopped = false,
 		connections = {},
 	}, Hub)
@@ -75,9 +79,11 @@ function Hub:start(fallback)
 	table.insert(
 		self.connections,
 		game:GetPropertyChangedSignal("PlaceId"):Connect(function()
+			self:lookUpPlaceName()
 			self:sendHello()
 		end)
 	)
+	self:lookUpPlaceName()
 	self.thread = task.spawn(function()
 		while not self.stopped do
 			if self.client == nil and os.clock() >= self.nextAttempt then
@@ -191,6 +197,22 @@ function Hub:receive(text)
 	end
 end
 
+-- The published name, for the Rojo-Hub panel; looked up once per place ID, then hello is sent again.
+function Hub:lookUpPlaceName()
+	local placeId = game.PlaceId
+	self.placeName = nil
+	if ignorePlaceIds[tostring(placeId)] then
+		return
+	end
+	task.spawn(function()
+		local ok, info = pcall(MarketplaceService.GetProductInfo, MarketplaceService, placeId)
+		if ok and type(info) == "table" and type(info.Name) == "string" and game.PlaceId == placeId then
+			self.placeName = info.Name
+			self:sendHello()
+		end
+	end)
+end
+
 function Hub:sendHello()
 	if not self.active then
 		return
@@ -204,7 +226,7 @@ function Hub:sendHello()
 		-- As strings: JSONEncode may round integers this large.
 		placeId = placeId,
 		gameId = tostring(game.GameId),
-		placeName = game.Name,
+		placeName = self.placeName or game.Name,
 		unsaved = ignorePlaceIds[placeId] == true,
 		remembered = prior.projectName,
 	})
@@ -234,8 +256,13 @@ function Hub:report()
 	if connected then
 		-- The user connected (or an auto-connect worked): nothing is declined any more.
 		self.declined = nil
+	elseif self.reportedSession then
+		-- The session just ended. The service may still name it for a moment (its rojo
+		-- is stopping), so it counts as tried: only a new session is connected at once.
+		self.attempt = { sessionId = self.reportedSession, at = os.clock() }
 	end
 	self.reported = key
+	self.reportedSession = connected and connected.sessionId
 	self:send({ type = "state", connected = connected })
 end
 

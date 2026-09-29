@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.18.3, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.0, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -519,22 +519,66 @@ so; add that port to `rojoHub.excludedPorts` and the project moves.
 
 ## 7. Connecting Studio
 
-1. Open the place in Studio.
-2. In the Rojo plugin, set the address to `localhost` and the project's port (*Copy Port*).
-3. Connect.
-4. In the plugin's settings, turn on **Auto Reconnect**.
+Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.0's plugin, changed to connect by
+itself. With it, a place connects with no port typed and no click.
 
-The plugin remembers, per place, the address and project name it last connected to (for 150
-days). With Auto Reconnect on, opening the place connects it again, but only if the server at that
-address reports the same project name. This is why project names must be unique and must never
-change across branch switches.
+**Which project a place syncs with.** When a place opens, the plugin tells the service its
+`PlaceId`, and the service answers from the project files, in this order:
 
-If the project file lists `servePlaceIds`, the plugin refuses (or asks about) places not on the
-list. Rojo-Hub passes `servePlaceIds`, `blockedPlaceIds`, `placeId`, `gameId` and
-`emitLegacyScripts` through from the primary checkout's project file.
+1. a project whose `servePlaceIds` lists the place;
+2. a project whose `placeId` is the place's;
+3. the project this place last synced with (the plugin remembers it per place, like Rojo's plugin).
+
+A project that lists the place in `blockedPlaceIds` never matches. Only a **serving** project is
+connected to. If the first step that finds a project finds only stopped ones, the plugin says which
+project to start rather than falling back to a later step. One project may serve several places
+(`servePlaceIds` is a list); each open place syncs with it on its own.
+
+**Both directions.** The plugin keeps a WebSocket to the service (`ws://127.0.0.1:34870/studio`), so
+it connects when the place opens, when its project is started later, and again, with no click, when
+the project's Rojo restarts with a new session (a crash, a port move, a project file change). A
+branch switch keeps the session, so nothing happens.
+
+**When it does not connect by itself**, the Rojo window's Not Connected page says why under the
+buttons, with a **Sync with…** list of every serving project:
+
+- the place is not saved to Roblox (`PlaceId` 0, or a Roblox template's ID such as a new
+  Baseplate's): pick a project; once saved, it is remembered;
+- no project lists the place and it has never synced: pick one, and it is remembered;
+- two serving projects claim it: pick one; the service remembers the pick for that place
+  (`placeChoices` in `registry.json`), and removing the project forgets it;
+- its project runs a Rojo older than 7.7: the plugin speaks only protocol 5. Pin
+  `rojo-rbx/rojo@7.7.0`;
+- you pressed **Disconnect**, or **Abort** on the first sync: that session is not connected again by
+  itself. Connecting by hand, or a new session, lifts it;
+- *Rojo-Hub Auto Connect* is off in the plugin's settings.
+
+Rojo's confirmation for the first sync is kept (*Confirmation Behavior*, default *Initial*: once per
+project per Studio session), since connecting writes into the place. Nothing connects during a
+playtest. With the Rojo-Hub service not running, the plugin behaves like Rojo's own, Auto Reconnect
+included.
+
+**Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`) into Studio's
+local plugins folder, `%LOCALAPPDATA%RobloxPlugins`, when it starts and when it is updated, and
+only when the file there differs. Studio loads a new or changed plugin only when a place is opened,
+so an update reaches each open place when it is next opened. Other `RojoHub*.rbxm` or `.rbxmx` files
+there (a copy downloaded from a GitHub release) are removed. Rojo's own plugin
+(`RojoManagedPlugin.rbxm`, from `rojo plugin install`) is left alone; the panel suggests removing it,
+because Studio then shows two Rojo windows. `rojoHub.studioPlugin` set to false stops all of this.
+Uninstalling Rojo-Hub removes `RojoHub.rbxm` (unless that setting was off).
+
+**Connecting by hand** still works as with Rojo's plugin: `localhost` and the project's port
+(*Copy Port*), then Connect. Project names must be unique and must never change across branch
+switches, because a place remembers its project by name.
+
+If the project file lists `servePlaceIds`, Rojo itself refuses places not on the list. Rojo-Hub
+passes `servePlaceIds`, `blockedPlaceIds`, `placeId`, `gameId` and `emitLegacyScripts` through from
+the primary checkout's project file.
 
 **How Rojo-Hub knows Studio is connected**: Rojo's log records each plugin connection opening and
-closing. Rojo-Hub counts them; that count drives the filled/outlined icon and the tooltip.
+closing. Rojo-Hub counts them; that count drives the filled/outlined icon and the tooltip. Places
+running Rojo-Hub's plugin also report which place they are, so the *Connected* pill's tooltip names
+them.
 
 ## 8. Switching branches
 
@@ -853,7 +897,7 @@ debugging.
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order }`: once at once, then on every change, within 150 ms |
+| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin }`: once at once, then on every change, within 150 ms |
 | `GET /slots` | | Every project with its state |
 | `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; without `projectFile`, its `default.project.json` or only `*.project.json` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
@@ -875,8 +919,11 @@ debugging.
 | `GET /order` | | The panel's display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save a new display order (never changes a port) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps? }` | Settings (sent by the extension). Replaces all three: a missing field goes back to its default (`""`, `[]`, `true`). A port settings change moves ports at once |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin? }` | Settings (sent by the extension). Replaces all four: a missing field goes back to its default (`""`, `[]`, `true`, `true`). A port settings change moves ports at once; turning `studioPlugin` on installs the Studio plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
+| `GET /studio` | WebSocket | The Studio plugin's link (spec 007): JSON messages `welcome` → `hello` (place) → `match` (which project, pushed again on every change); `state` (what the place is synced to) and `choose` (a pick among several). Refused with a browser `Origin`, like every route |
+| `GET /place-choices` | | The project picked per Studio place: `{ placeId: slotId }` |
+| `DELETE /place-choices/:placeId` | | Forget one pick |
 | `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (config unreadable), last error |
 | `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` takes it out (only for an installed agent, and never on `other` or `unknown`) |
 | `POST /mcp` | JSON-RPC | The MCP server for agents (see [Agents](#10-agents)): one request object per POST, answered with plain JSON; a notification gets 202 with no body. Any other method on `/mcp` gets 405 |
@@ -897,10 +944,10 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), and the panel's display order |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, and the project picked per Studio place where several claim it (`placeChoices`) |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
-| `settings.json` | The settings last sent by VS Code: port range, excluded ports and `sourcemaps` |
+| `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |
 | `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
 | `service.log` | Service start and stop, recovered errors, a damaged registry, git problems |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
@@ -936,6 +983,7 @@ All are **user settings that apply to every project and window**; a workspace ca
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to a project by hashing: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 are always excluded. A `servePort` still wins (see [Ports](#6-ports)). An invalid entry is ignored with a warning on every card. |
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
+| `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies (see [Connecting Studio](#7-connecting-studio)). Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents can use Rojo-Hub's MCP server (see [Agents](#10-agents)). Shown as checkboxes. Not synced by Settings Sync. |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |
 

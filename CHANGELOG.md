@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0
+
+**Studio connects by itself.** Rojo-Hub now installs its own Studio plugin: Rojo 7.7's plugin,
+changed to sync each place with its project without a port typed or a button pressed.
+- A place finds its project from the project files: `servePlaceIds`, then `placeId`, then the project
+  it last synced with. One project can serve several places at once.
+- It connects when the place opens, when its project is started later, and again after Rojo
+  restarts (a crash, a port move, a project file change), with no click.
+- When it cannot tell (an unsaved place, no match, two projects claiming the place), the Rojo window
+  says why and offers every serving project to pick; a pick between two is remembered per place.
+- Disconnect and Abort are respected: that session is not reconnected by itself.
+- The plugin is kept up to date in Studio's plugins folder and removed on uninstall; the new
+  `rojoHub.studioPlugin` setting turns that off. Studio loads an update when a place is next opened.
+- Rojo 7.7 or newer only; a project pinning older Rojo says so in the Rojo window.
+
 ## 0.18.3
 
 - Listing details reworded for the VS Code Marketplace: a clearer description and keywords

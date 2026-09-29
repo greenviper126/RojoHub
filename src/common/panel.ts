@@ -4,7 +4,7 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption } from "./api";
+import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption , StudioPluginStatus } from "./api";
 
 /*
 	Something to add to or take out of a group: a project, a nested group, or
@@ -51,6 +51,8 @@ export interface PanelState {
 	agents: { url: string; vscode: boolean; list: AgentStatus[] };
 	/** Show the "let agents use Studio" notice above Projects (see agentNudge in the extension). */
 	agentNudge: boolean;
+	/** Rojo-Hub's Studio plugin install (spec 007); null before the service says. */
+	studioPlugin: StudioPluginStatus | null;
 }
 
 export type ToPanel =

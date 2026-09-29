@@ -1,6 +1,6 @@
 # 007 — Studio auto-connect
 
-Status: **planned**. Asked for by Viper: "i want to be able to auto connect from both sides", "make a
+Status: **implemented in 0.19.0** (branch `feat/studio-auto-connect`; see *Checked in Studio* for what was tried live). Asked for by Viper: "i want to be able to auto connect from both sides", "make a
 custom rojo plugin on the roblox side that just pulls the rojo code but we modify it ... we use that
 to auto connect and we listen to vscode on what were connecting too", "put that all in a folder
 called plugin", "if rojo disconnects we try to run the port again", and "if its possible just
