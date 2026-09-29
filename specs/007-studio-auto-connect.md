@@ -44,6 +44,26 @@ provided in the json?" `rojoHub.studioAutoConnect`: `"remembered"` (default) as 
 skips step 3 (the remembered project), so only a place a project file names, or one assigned in the
 panel (an explicit choice, per place), connects by itself.
 
+### Its own Connect button, never the address boxes (0.19.7)
+
+Asked for by Viper: "what if on rojo i remove the port number that was put there and then connect?
+maybe auto connecting should be a separate button thats like green or blue and it just internally
+knows the port and only pops up if it sees a chance to auto connect". Until 0.19.6 the plugin
+connected by typing `localhost` and the project's port into Rojo's address boxes and pressing
+Connect, and Rojo saved that port per place, so it was in the boxes on every open. Clearing the port
+and pressing Connect then went to Rojo's default port, 34872, which Rojo-Hub never serves.
+
+- The address boxes are Rojo's manual entry only. Rojo-Hub never writes them, and a session it
+  connects saves the boxes' values as the place's last address, not its own port (the project name
+  is still saved, for *remembered*).
+- A green **Connect to `<project>`** button, right-aligned under Rojo's Connect like a tab, shows
+  only while the service answers *connect* for the place (its project is serving and nothing needs
+  choosing). It connects to the port the service gives, whatever is in the boxes. Its tooltip gives
+  the address.
+- Connecting by itself goes the same way. The button also shows while *Rojo-Hub Auto Connect* is off
+  or after **Disconnect**/**Abort**: pressing it is connecting by hand, so it lifts the decline.
+- Only the plugin changes: `STUDIO_PROTOCOL` stays 2.
+
 ### Where the connect information comes from
 
 The project file is the source. Nothing Rojo-Hub-specific is added to the repo (no TOML), and no
@@ -136,7 +156,8 @@ open the plugin reports `confirming`, so the panel and agents can say a place wa
   settings; the Team Create sync lock (`ServerStorage.__Rojo_SessionLock`) stays shared, so the two
   never sync one place at once.
 - Keeps Rojo's UI. Adds one read-only Rojo-Hub line under the Not Connected page's buttons with the
-  service's answer; no choices in Studio.
+  service's answer, and the *Connect to `<project>`* button when there is one to connect to; no
+  choices in Studio.
 - Sends its version and a protocol number (`STUDIO_PROTOCOL`, now 2). The service answers a plugin on
   another protocol with *incompatible* ("close and reopen the place"); the panel shows each place's
   plugin version. Across ordinary updates the protocol stays, so older plugins in open places keep
@@ -316,6 +337,9 @@ profiles for that), the plugin's read-only line after reopening the places, and 
 - [x] A plugin on another protocol is told to reopen the place. *(unit test; seen live)*
 - [x] `npm test` builds the plugin; the matching, assignment and WebSocket rules have unit tests. The
       Studio side was checked by hand, recorded above.
+- [ ] Rojo-Hub never writes Rojo's address boxes; clearing them and pressing Rojo's Connect goes to
+      Rojo's default, as in Rojo's plugin. The *Connect to `<project>`* button shows only for a
+      *connect* answer and connects to the service's port. *(not yet tried in Studio)*
 - [x] `docs/how-it-works.md`, the site (Connecting Studio, Studio places, troubleshooting) and the
       README describe it.
 
@@ -326,7 +350,8 @@ profiles for that), the plugin's read-only line after reopening the places, and 
 - A Creator Store release of the plugin. Local install only, so plugin and service versions match.
 - A per-project place list in the panel. The project file lists places; the panel assigns open places.
 - Group-level place overrides.
-- Choices in Studio, or changing Rojo's sync behaviour or UI beyond the read-only Rojo-Hub line.
+- Choices in Studio, or changing Rojo's sync behaviour or UI beyond the read-only Rojo-Hub line and
+  the button that connects to what the service answered.
 
 ## Open questions
 

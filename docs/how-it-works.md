@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.6, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.7, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -563,6 +563,11 @@ place ID (`placeChoices` in `registry.json`; removing the project forgets it). A
 so its assignment is kept only while that Studio window is open. Studio's Rojo window only shows the
 service's answer in a line under its buttons; it has no choices of its own.
 
+**Connect to `<project>`.** While a place's project is serving, a green button under Rojo's Connect
+names it. It connects to the port Rojo-Hub serves the project on, whatever is typed in the address
+boxes, and it works after **Disconnect** or **Abort** and with *Rojo-Hub Auto Connect* off. Rojo-Hub
+never writes the address boxes: they are for connecting by hand, and keep what you last typed.
+
 **When it does not connect by itself**, the Studio places row and the line in Studio say why:
 
 - the place is not saved to Roblox: assign it a project in VS Code;
@@ -572,7 +577,7 @@ service's answer in a line under its buttons; it has no choices of its own.
 - its project runs a Rojo older than 7.7: the plugin speaks only protocol 5. Pin
   `rojo-rbx/rojo@7.7.0`;
 - you pressed **Disconnect**, or **Abort** on the first sync: that session is not connected again by
-  itself. Connecting by hand, assigning it a project in VS Code, or a new session, lifts it;
+  itself. *Connect to `<project>`*, connecting by hand, assigning it a project in VS Code, or a new session, lifts it;
 - *Rojo-Hub Auto Connect* is off in the plugin's settings.
 
 Rojo's confirmation (Accept or Abort, with the diff) is asked **once per place and project**: the
