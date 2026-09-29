@@ -44,7 +44,6 @@ Pick a group in Open Menu:
 | Item | Does |
 |---|---|
 | **Start Group** | Serves every project in it. |
-| **Singleton** | Serves only this group, stopping every other project (asks first, with a dialog). |
 | **Stop Group** | Stops its projects, except those another running group holds. |
 | **Add Project to Group** | Adds a project or group. |
 | **Rename Group** | Renames it. |

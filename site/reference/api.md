@@ -54,7 +54,7 @@ In the API a project is a *slot*.
 | `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
 | `PUT /groups/:id` | `{ name?, slotIds?, groupIds? }` | Rename or change members; `groupIds` that would loop are refused (409) with the chain |
 | `DELETE /groups/:id` | | Delete a group |
-| `POST /groups/:id/start` | `{ only? }` | Start; `only` (Singleton) also stops projects outside it and marks other groups stopped |
+| `POST /groups/:id/start` | `{ only? }` | Start; `only` also stops projects outside it and marks other groups stopped (agents' `start_group only`; the panel no longer offers it) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
 
 ## Agents

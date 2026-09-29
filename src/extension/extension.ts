@@ -490,25 +490,6 @@ function groupMembers(group: GroupView): SlotView[] {
 	return group.projectIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
 }
 
-/** Serving projects that Singleton would stop for this group. */
-function wouldStop(group: GroupView): SlotView[] {
-	return lastSlots.filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
-}
-
-/*
-	Singleton stops everything outside the group, so it always asks first and
-	says exactly what it will stop.
-*/
-async function confirmOnly(group: GroupView): Promise<boolean> {
-	const stopping = wouldStop(group);
-	const detail =
-		stopping.length === 0
-			? "Nothing outside this group is serving, so this only starts the group."
-			: `This stops: ${stopping.map((slot) => slot.projectName).join(", ")}. Studio places connected to them disconnect.`;
-	const answer = await vscode.window.showWarningMessage(`Singleton: serve only ${group.name}?`, { modal: true, detail }, "Singleton");
-	return answer === "Singleton";
-}
-
 async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
 	if (typeof argument === "string") return lastGroups.find((group) => group.id === argument);
 	await refresh();
@@ -634,11 +615,10 @@ async function removeMember(group: GroupView, member: GroupMember): Promise<void
 	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));
 }
 
-async function startGroup(argument: unknown, only: boolean): Promise<void> {
-	const group = await pickGroup(argument, only ? "Singleton: serve only which group?" : "Start which group?");
+async function startGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Start which group?");
 	if (!group) return;
-	if (only && !(await confirmOnly(group))) return;
-	reportGroup(await run(only ? `Serving only ${group.name}` : `Starting ${group.name}`, () => client.startGroup(group.id, only)));
+	reportGroup(await run(`Starting ${group.name}`, () => client.startGroup(group.id, false)));
 }
 
 async function stopGroup(argument: unknown): Promise<void> {
@@ -653,8 +633,7 @@ async function groupMenu(id: string): Promise<void> {
 	if (!group) return openMenu();
 	const members = groupMembers(group);
 	const items: MenuItem[] = [
-		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id, false) },
-		{ label: "$(target) Singleton", description: "serve only this group: stop every other project", run: () => startGroup(group.id, true) },
+		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id) },
 		{ label: "$(debug-stop) Stop Group", run: () => stopGroup(group.id) },
 		{ label: "$(add) Add Project to Group", run: () => addToGroup(group.id) },
 		{ label: "$(edit) Rename Group", run: () => renameGroup(group.id) },
@@ -1264,8 +1243,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.addToGroup": (argument) => addToGroup(argument),
 		"rojoHub.focusProject": (argument) => (typeof argument === "string" ? panel.focus(argument) : vscode.commands.executeCommand(`${HubPanel.viewId}.focus`)),
 		"rojoHub.deleteGroup": (argument) => deleteGroup(argument),
-		"rojoHub.startGroup": (argument) => startGroup(argument, false),
-		"rojoHub.soloGroup": (argument) => startGroup(argument, true),
+		"rojoHub.startGroup": (argument) => startGroup(argument),
 		"rojoHub.stopGroup": (argument) => stopGroup(argument),
 		"rojoHub.groupMenu": (argument) => (typeof argument === "string" ? groupMenu(argument) : openMenu()),
 		"rojoHub.switch": (argument) => switchSlot(argument),

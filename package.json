@@ -148,12 +148,6 @@
         "icon": "$(play)"
       },
       {
-        "command": "rojoHub.soloGroup",
-        "title": "Singleton",
-        "category": "Rojo-Hub",
-        "icon": "$(target)"
-      },
-      {
         "command": "rojoHub.stopGroup",
         "title": "Stop Group",
         "category": "Rojo-Hub",
@@ -345,10 +339,6 @@
           "when": "false"
         },
         {
-          "command": "rojoHub.soloGroup",
-          "when": "false"
-        },
-        {
           "command": "rojoHub.stopGroup",
           "when": "false"
         },
@@ -499,7 +489,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "Groups hold projects and other groups. Start runs them all; Singleton runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups hold projects and other groups. Start runs them all; Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },

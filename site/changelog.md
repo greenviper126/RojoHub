@@ -9,6 +9,8 @@ Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/rele
   in the place. After you accept, that place and project connect without asking, across Studio
   sessions and Rojo restarts. *Always* and *Never* in the plugin's settings still work.
 - The panel and agents say when a place is waiting for you to accept.
+- Groups: the **Singleton** button (and its menu item and command) is gone. Start / Stop sits at the
+  bottom right like a project's, and a folded group has it as a small ▶ / ■ in its header.
 
 ## 0.19.4
 

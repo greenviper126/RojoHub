@@ -85,8 +85,6 @@ const ui = {
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
 	confirmDelete: null as string | null,
-	/** The group whose Singleton is waiting for Yes/No. */
-	confirmOnly: null as string | null,
 	/** "Stop all" is waiting for Yes/No. */
 	confirmStopAll: false,
 	/** Agent access's "Other agents and manual setup" is open. */
@@ -557,11 +555,6 @@ function portChip(slot: SlotView, host = false): string {
 	return `<button class="port${copied ? " copied" : ""}" data-action="copy" data-id="${escape(slot.id)}" title="${title}"><span>${host ? `<span class="host">localhost</span>` : ""}:${slot.port}</span>${icon(copied ? "check" : "copy", "port-icon")}</button>`;
 }
 
-/** Serving projects that Singleton would stop for a group. */
-function wouldStop(group: GroupView): SlotView[] {
-	return (state?.slots ?? []).filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
-}
-
 function groupCard(group: GroupView): string {
 	// A group just created here, before the service has given it an id: its name, nothing to click yet.
 	if (group.id.startsWith(PENDING_GROUP)) {
@@ -589,7 +582,17 @@ function groupCard(group: GroupView): string {
 			? `<div class="member confirm-row">${icon("warning")}<span class="grow">Delete <strong>${escape(group.name)}</strong>? What's in it stays.</span>${button("delete-group", "Delete", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}</div>`
 			: "";
 	const headAttributes = renaming ? "" : foldable(`group:${group.id}`, "groups", !open);
-	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head" ${headAttributes}>${head}</div>${deleteConfirm}</article>`;
+	const startStop = group.active
+		? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", title: "Stop this group's projects, except ones another running group uses" })
+		: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` });
+	if (!open) {
+		const icons = renaming
+			? ""
+			: group.active
+				? iconButton("stop-group", "debug-stop", `Stop ${group.name}`, { id: group.id })
+				: iconButton("start-group", "play", `Start ${group.name}`, { id: group.id }, everyProject.length === 0);
+		return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head" ${headAttributes}>${head}${icons}</div>${deleteConfirm}</article>`;
+	}
 
 	const nestedRows = nested
 		.map((child) => {
@@ -657,17 +660,6 @@ function groupCard(group: GroupView): string {
 				}
 			</select></div>`;
 
-	const stopping = wouldStop(group);
-	const onlyConfirm =
-		ui.confirmOnly === group.id
-			? `<div class="notice warning confirm-only">${icon("warning")}<span class="grow">${
-					stopping.length === 0
-						? `Singleton: serve only ${escape(group.name)}? Nothing outside it is serving, so this just starts it.`
-						: `Singleton: serve only ${escape(group.name)}? This stops <strong>${stopping.map((slot) => escape(slot.projectName)).join(", ")}</strong>, and Studio places connected to them disconnect.`
-				}</span></div>
-				<div class="row">${button("solo-group-yes", "Yes, singleton", { icon: "target", data: { id: group.id }, kind: "primary" })}${button("solo-group-no", "Cancel", { kind: "secondary" })}</div>`
-			: "";
-
 	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}>
 		<div class="row head" ${headAttributes}>${head}</div>
 		${deleteConfirm}
@@ -676,15 +668,10 @@ function groupCard(group: GroupView): string {
 			${nested.length + members.length === 0 ? `<div class="muted pad small">Empty. Add projects or other groups below.</div>` : ""}
 		</div>
 		${adder}
-		<div class="row actions">
-			${
-				group.active
-					? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", title: "Stop this group's projects, except ones another running group uses" })
-					: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })
-			}
-			${button("solo-group", "Singleton", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: everyProject.length === 0, title: "Serve only this group: stop every other project (asks first)" })}
+		<div class="row card-foot">
+			<span class="grow"></span>
+			${startStop}
 		</div>
-		${onlyConfirm}
 	</article>`;
 }
 
@@ -1076,7 +1063,6 @@ function dropStale(drawn: PanelState): void {
 	if (ui.menu && !slot(ui.menu)) ui.menu = null;
 	if (ui.renaming && !group(ui.renaming.id)) ui.renaming = null;
 	if (ui.confirmDelete && !group(ui.confirmDelete)) ui.confirmDelete = null;
-	if (ui.confirmOnly && !group(ui.confirmOnly)) ui.confirmOnly = null;
 	if (ui.confirmRemoveMember) {
 		const [groupId, kind, memberId] = ui.confirmRemoveMember.split("|");
 		const holder = group(groupId);
@@ -1242,23 +1228,17 @@ function setProjectFile(id: string, file: string): void {
 	render();
 }
 
-/*
-	Start and Singleton, as the service does them: every project in the group
-	that is stopped starts; Singleton also stops every serving project outside
-	it and marks every other group stopped.
-*/
-function startGroup(id: string, only: boolean): void {
+/* Start, as the service does it: every project in the group that is stopped starts. */
+function startGroup(id: string): void {
 	const group = state?.groups.find((entry) => entry.id === id);
 	if (!state || !group || bounced(`group:${id}`)) return;
 	const key = `group:${id}`;
 	for (const slot of state.slots) {
 		const member = group.projectIds.includes(slot.id);
 		if (member && (slot.state === "stopped" || stopping.has(slot.id))) pending.starting(slot.id, key);
-		else if (!member && only && (slot.state === "running" || slot.state === "starting" || slot.state === "error")) pending.stopping(slot.id, key);
 	}
-	if (only) for (const other of state.groups) if (other.id !== id && other.active) pending.groupActive(other.id, false, key);
 	pending.groupActive(id, true, key);
-	sendTracked(key, { type: "startGroup", id, only });
+	sendTracked(key, { type: "startGroup", id, only: false });
 	render();
 }
 
@@ -1572,16 +1552,7 @@ document.addEventListener("click", (event) => {
 			ui.confirmRemoveMember = null;
 			return removeMember(id, { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" });
 		case "start-group":
-			return startGroup(id, false);
-		case "solo-group":
-			ui.confirmOnly = id;
-			return render();
-		case "solo-group-no":
-			ui.confirmOnly = null;
-			return render();
-		case "solo-group-yes":
-			ui.confirmOnly = null;
-			return startGroup(id, true);
+			return startGroup(id);
 		case "stop-group":
 			return stopGroup(id);
 		case "rename": {

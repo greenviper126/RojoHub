@@ -279,9 +279,9 @@ projects are serving (green when all are). Inside:
   jumps to its card);
 - an **Add a project, group or workspace…** dropdown: workspaces (adding each of their projects),
   projects not in it yet, then groups, with groups that would make a loop greyed out;
-- one **Start** / **Stop** button (Start while the group is not running, Stop while it is; Stop
-  keeps projects another running group uses), then **Singleton** (serve only this group, stopping
-  every other project; asks first, naming what it will stop);
+- one **Start** / **Stop** button at the bottom right, as on a project card (Start while the group
+  is not running, Stop while it is; Stop keeps projects another running group uses); a folded group
+  has the same as a small ▶ / ■ at the right of its header;
 - a green *Running* pill and a green rail on the left edge while the group is running (the pill
   hides when the sidebar is narrow);
 - ✎ rename (edit the name in place; Enter saves, Escape cancels) and 🗑 delete (asks *Delete …?* on
@@ -763,12 +763,12 @@ over all of them.
 |---|---|
 | **Start** / **Stop** | One button: Start while the group is not running, Stop while it is. |
 | **Start** | Serves every project the group holds, each on its own port. Projects already serving are left alone, so their Studio sessions continue. |
-| **Singleton** | Serves the group and stops every other project (the profile switch). **Asks first**, naming exactly which projects it will stop; Open Menu asks with a dialog. |
 | **Stop** | Stops the group's projects, **except any that another running group also holds**: that project is in use elsewhere, so its port keeps serving. Rojo-Hub says which projects it kept and why. |
 | ✎ **Rename** | Edit the name in place; Enter saves, Escape cancels. |
 | 🗑 **Delete** | Asks *Delete?* in place. Deletes the group only. |
 
-A group is **running** from Start or Singleton until Stop, or until another group's Singleton. The
+A group is **running** from Start until Stop. (0.19.5 removed *Singleton*, which also stopped every
+project outside the group; agents' `start_group` keeps it as `only`.) The
 card then shows a green *running* badge and a green edge. Running is about what you started, not
 about whether all its projects happen to be serving, so a group you never started never keeps a
 project alive. Stopping a single project from its own card does not change which groups are

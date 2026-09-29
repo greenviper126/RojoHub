@@ -266,7 +266,7 @@ export interface GroupView {
 	slotIds: string[];
 	/** Groups directly in the group. */
 	groupIds: string[];
-	/** Started (Start or Singleton) and not stopped since. */
+	/** Started (Start, or a start with only) and not stopped since. */
 	active: boolean;
 	/** Every project the group holds, through nested groups, each once. */
 	projectIds: string[];

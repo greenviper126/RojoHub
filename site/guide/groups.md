@@ -29,7 +29,8 @@ the panel, below Projects.
   to jump to its card.
 - **How many of its projects are serving**, for example `2/3` (green when all are). The count is
   over every project inside it, through nested groups.
-- **Start** or **Stop**, then **Singleton**.
+- **Start** or **Stop**, at the bottom right as on a project card (a folded group shows it as a small
+  ▶ / ■ in its header).
 - A green *Running* pill and a green rail on the left edge while it is running.
 - **✎ Rename** and **🗑 Delete**, shown when the pointer is on the card.
 
@@ -39,14 +40,13 @@ the panel, below Projects.
 |---|---|
 | **Start** | Serves every project the group holds, each on its own port. Projects already serving are left alone, so their Studio sessions continue. |
 | **Stop** | Stops the group's projects, **except any another running group also holds**: that project is in use elsewhere, so its port keeps serving. Rojo-Hub says which projects it kept and why. |
-| **Singleton** | Serves this group and stops **every other project** (the profile switch). **Asks first**, naming exactly which projects it will stop. |
 | **✎ Rename** | Edit the name in place; Enter saves, Escape cancels. |
 | **🗑 Delete** | Asks *Delete?* in place. Deletes the group only; its projects stay registered and keep serving. |
 
 The Start / Stop button is one button: Start while the group is not running, Stop while it is.
 
 ::: info What "running" means
-A group is **running** from Start or Singleton until Stop, or until another group's Singleton. It is
+A group is **running** from Start until Stop. It is
 about what you started, not whether all its projects happen to be serving, so a group you never
 started never keeps a project alive. Stopping a single project from its own card does not change
 which groups are running.
