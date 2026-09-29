@@ -648,7 +648,10 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 	let candidates: PlaceCandidate[] = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111 })];
 	const assigned = new Map<number, string>();
 	const synced = new Map<number, string>();
+	const accepted = new Set<string>();
 	const memory: PlaceMemory = {
+		accepted: (id, name) => accepted.has(`${id}:${name}`),
+		accept: (id, name) => void accepted.add(`${id}:${name}`),
 		assigned: (id) => assigned.get(id) ?? null,
 		assign: (id, slot) => void (slot ? assigned.set(id, slot) : assigned.delete(id)),
 		synced: (id) => synced.get(id) ?? null,
@@ -688,6 +691,7 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		const first = await lobby.next();
 		assert.equal(first.status, "connect");
 		assert.equal(first.target?.port, 35111);
+		assert.equal(first.target?.accepted, false, "a place's first sync with a project is confirmed by the user");
 
 		// the project's rojo restarts: the new session reaches the plugin without it asking
 		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
@@ -699,6 +703,8 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
 		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
 		assert.equal(synced.get(111), "game");
+		assert.equal((await lobby.next()).target?.accepted, true, "once synced, the pair is not confirmed again");
+		assert.ok(accepted.has("111:game"));
 
 		// a second claimant appears: the place keeps to the project it syncs with
 		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];

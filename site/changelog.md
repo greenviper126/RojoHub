@@ -2,6 +2,14 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.19.5
+
+- Rojo's confirmation is asked **once per place and project**: the first time a place syncs with a
+  project, whether its `servePlaceIds` lists the place or not, since that sync can overwrite what was
+  in the place. After you accept, that place and project connect without asking, across Studio
+  sessions and Rojo restarts. *Always* and *Never* in the plugin's settings still work.
+- The panel and agents say when a place is waiting for you to accept.
+
 ## 0.19.4
 
 - A Studio place its project does not list in `servePlaceIds` asks to accept its first sync once per

@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.19.4";
+export const SERVICE_VERSION = "0.19.5";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -100,6 +100,8 @@ export interface StudioHello {
 export interface StudioState {
 	type: "state";
 	connected: { port: number; projectName: string; sessionId: string } | null;
+	/** Rojo's first-sync confirmation is open in this place, waiting for the user (missing from older plugins). */
+	confirming?: boolean;
 }
 
 export type StudioToService = StudioHello | StudioState;
@@ -113,6 +115,8 @@ export interface StudioProject {
 	targetLabel: string;
 	/** Why it is this place's project. */
 	reason: "assigned" | "servePlaceIds" | "placeId" | "remembered";
+	/** This place has synced with this project before, so its first-sync confirmation was already accepted. */
+	accepted: boolean;
 }
 
 /*
@@ -156,6 +160,8 @@ export interface StudioPlaceView {
 	assigned: string | null;
 	/** Synced now, with this project name. */
 	syncedWith: string | null;
+	/** Rojo's first-sync confirmation is open in the place, waiting for the user. */
+	confirming: boolean;
 }
 
 /*

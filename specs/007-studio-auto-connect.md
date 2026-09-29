@@ -102,11 +102,16 @@ closes, so the panel can show which places are connected. (Earlier drafts planne
 Auto-connect runs only in edit mode, never inside a playtest (upstream has its own playtest
 setting, kept as it is). It can be turned off in the plugin's settings.
 
-Rojo's confirmation before a first sync is kept, but only for places the project does not list: the
-plugin's `confirmationBehavior` defaults to *Unlisted PlaceId* instead of upstream's *Initial*, so a
-place in `servePlaceIds` syncs with no click (asked for live: "its asking me to accept or abort from
-the plugin so that will prob have to change"), and any other place still asks once per project per
-Studio session, since connecting writes into the place.
+Rojo's confirmation is asked once per place and project, the first time they sync, listed or not.
+Asked for live: first "its asking me to accept or abort from the plugin so that will prob have to
+change", which led to *Unlisted PlaceId* (listed places never asked); then "would it be better if it
+asked to connect even if you have the places in the json but it only asks the first time?", with
+"aslong as you think this gives the user enough control". The first sync is the one that can
+overwrite what was in the place (a typo in servePlaceIds, edits made in Studio); after that, asking
+again only adds clicks. The service keeps accepted pairs (`placeAccepted`) and sends
+`target.accepted`; one hook in the plugin's confirm callback accepts those, unless *Always* is set.
+The plugin's `confirmationBehavior` is back to upstream's default, *Initial*. While a confirmation is
+open the plugin reports `confirming`, so the panel and agents can say a place waits for the user.
 
 ### The plugin
 
@@ -284,7 +289,7 @@ profiles for that), the plugin's read-only line after reopening the places, and 
 ## Acceptance criteria
 
 - [x] Opening a place whose `PlaceId` is in a running project's `servePlaceIds` connects it with no
-      click and no port typed. *(live; no confirmation with Unlisted PlaceId)*
+      port typed, after one confirmation the first time that place syncs with that project. *(live)*
 - [x] Starting a project connects every open Studio whose place matches it. *(live)*
 - [x] After rojo restarts on a project (crash, port move, project-file change), Studio reconnects by
       itself; the card's notes say places with the plugin reconnect by themselves. *(live: stop and

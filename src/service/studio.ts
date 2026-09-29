@@ -107,6 +107,8 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 				branch: project.branch,
 				targetLabel: project.targetLabel,
 				reason,
+				// Filled in by StudioLinks, which knows what each place has synced with.
+				accepted: false,
 			},
 			projectId: project.slotId,
 			reason,
@@ -164,6 +166,8 @@ interface Studio {
 	link: WebSocketLink;
 	hello: StudioHello | null;
 	connected: StudioStateConnected | null;
+	/** Rojo's first-sync confirmation is open in the place. */
+	confirming: boolean;
 	/** The last answer, for the panel. */
 	answer: PlaceAnswer | null;
 	lastSent: string;
@@ -187,9 +191,17 @@ export interface PlaceMemory {
 	*/
 	synced(placeId: number): string | null;
 	sync(placeId: number, projectName: string): void;
+	/*
+		Whether a place has synced with a project before. The first sync of a place
+		with a project is the one that can overwrite what was in the place, so
+		Rojo's confirmation is asked for it, once; after that the plugin accepts
+		by itself (spec 007).
+	*/
+	accepted(placeId: number, projectName: string): boolean;
+	accept(placeId: number, projectName: string): void;
 }
 
-const noMemory: PlaceMemory = { assigned: () => null, assign: () => undefined, synced: () => null, sync: () => undefined };
+const noMemory: PlaceMemory = { assigned: () => null, assign: () => undefined, synced: () => null, sync: () => undefined, accepted: () => false, accept: () => undefined };
 
 /*
 	The open plugin sockets. Each gets its place's answer after it says hello,
@@ -219,7 +231,7 @@ export class StudioLinks {
 	}
 
 	attach(link: WebSocketLink): void {
-		const studio: Studio = { id: randomUUID(), link, hello: null, connected: null, answer: null, lastSent: "" };
+		const studio: Studio = { id: randomUUID(), link, hello: null, connected: null, confirming: false, answer: null, lastSent: "" };
 		this.studios.add(studio);
 		link.send(JSON.stringify({ type: "welcome", protocol: STUDIO_PROTOCOL, serviceVersion: SERVICE_VERSION }));
 		link.onClose = () => {
@@ -249,9 +261,12 @@ export class StudioLinks {
 				this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}${studio.hello.unsaved ? ", unsaved" : ""}) said hello, plugin ${studio.hello.pluginVersion}`);
 			} else if (message.type === "state") {
 				studio.connected = message.connected ?? null;
+				studio.confirming = message.confirming === true;
 				const hello = studio.hello;
-				if (studio.connected && hello && !hello.unsaved && this.memory.synced(hello.placeId) !== studio.connected.projectName) {
-					this.memory.sync(hello.placeId, studio.connected.projectName);
+				if (studio.connected && hello && !hello.unsaved) {
+					if (this.memory.synced(hello.placeId) !== studio.connected.projectName) this.memory.sync(hello.placeId, studio.connected.projectName);
+					// Synced means the first-sync confirmation was accepted (or not needed): not asked again for this pair.
+					if (!this.memory.accepted(hello.placeId, studio.connected.projectName)) this.memory.accept(hello.placeId, studio.connected.projectName);
 				}
 			}
 			this.answer(studio, this.candidates());
@@ -294,6 +309,7 @@ export class StudioLinks {
 				reason: studio.answer?.target?.reason ?? studio.answer?.reason ?? null,
 				assigned: this.assignedFor(studio),
 				syncedWith: studio.connected?.projectName ?? null,
+				confirming: studio.confirming,
 			});
 		}
 		return views.sort((a, b) => a.placeName.localeCompare(b.placeName) || a.key.localeCompare(b.key));
@@ -336,6 +352,8 @@ export class StudioLinks {
 		} else {
 			const remembered = (hello.unsaved ? null : this.memory.synced(hello.placeId)) ?? hello.remembered;
 			studio.answer = matchPlace({ ...hello, remembered }, candidates, this.assignedFor(studio));
+			const target = studio.answer.target;
+			if (target && !hello.unsaved) studio.answer.target = { ...target, accepted: this.memory.accepted(hello.placeId, target.projectName) };
 		}
 		const { projectId: _projectId, ...answer } = studio.answer;
 		match = { type: "match", serviceVersion: SERVICE_VERSION, ...answer };

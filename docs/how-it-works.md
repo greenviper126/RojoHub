@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.4, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.5, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -573,10 +573,14 @@ service's answer in a line under its buttons; it has no choices of its own.
   itself. Connecting by hand, assigning it a project in VS Code, or a new session, lifts it;
 - *Rojo-Hub Auto Connect* is off in the plugin's settings.
 
-Rojo's confirmation before a first sync is kept for places the project does not list: the plugin's
-*Confirmation Behavior* defaults to *Unlisted PlaceId* (Rojo's own defaults to *Initial*), so a place
-in `servePlaceIds` syncs with no click and any other place asks once per project per Studio session,
-since syncing writes into the place. A place that last synced with one project waits for that
+Rojo's confirmation (Accept or Abort, with the diff) is asked **once per place and project**: the
+first time a place syncs with a project, listed in `servePlaceIds` or not, because that first sync is
+the one that can overwrite what was in the place. Once accepted, Rojo-Hub remembers the pair
+(`placeAccepted` in `registry.json`, shared by every Studio window) and the plugin accepts later
+syncs by itself: reopening the place, a Rojo restart, a crash. Abort declines that session and
+remembers nothing. *Confirmation Behavior* in the plugin's settings keeps Rojo's meaning on top: *Always*
+asks every time, *Never* never asks. Removing a project forgets its pairs. While a place's confirmation is open, Studio places and agents' `status` say it waits for
+you. A place that last synced with one project waits for that
 project while its Rojo restarts; it is never handed to another project that claims the place too. Nothing connects during a
 playtest. With the Rojo-Hub service not running, the plugin behaves like Rojo's own, Auto Reconnect
 included.
@@ -1005,7 +1009,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project assigned to each Studio place in VS Code (`placeChoices`), and the project each place last synced with (`placeSynced`) |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project assigned to each Studio place in VS Code (`placeChoices`), the project each place last synced with (`placeSynced`), and the projects each place has accepted a first sync from (`placeAccepted`) |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
 | `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |

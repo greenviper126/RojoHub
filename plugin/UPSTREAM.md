@@ -33,16 +33,14 @@ Each hook is marked `-- Rojo-Hub` in the file.
   - `pluginName` is `"Rojo-Hub"` rather than `"Rojo " .. version`: Studio refuses a second dock
     widget with the same id, so the two plugins could not both load;
   - the NotConnected page gets `hubEnabled` and `hubMatch`;
-  - the confirm callback's *Unlisted PlaceId* branch also accepts a project already accepted this
-    Studio session (`knownProjects`), so an unlisted place asks once per project per session, as
-    *Initial* does, instead of on every reconnect with changes.
+  - the confirm callback accepts, before Rojo's own rules, a patch for a project this place has
+    synced with before (`hub:accepted`, from the service), unless *Confirmation Behavior* is *Always*:
+    the first sync of a place with a project is asked once, not per Studio session.
 - `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.StatusLine` (read-only; projects are
   assigned to places in VS Code) under the buttons.
 - `src/App/StatusPages/Settings/init.lua`: a *Rojo-Hub Auto Connect* row (`hubAutoConnect`).
 - `src/Settings.lua`: `hubAutoConnect = true`; `checkForUpdates` defaults to `false`, since Rojo's update
-  check points at Rojo's own plugin and this one updates with Rojo-Hub; `confirmationBehavior`
-  defaults to `"Unlisted PlaceId"` rather than `"Initial"`, so a place its project lists in
-  `servePlaceIds` syncs without a click, and any other place still asks before its first sync.
+  check points at Rojo's own plugin and this one updates with Rojo-Hub.
 - `testez.yml` (Rojo's, for selene's `roblox+testez` std) is copied beside `selene.toml`.
 
 ## Moving to a new Rojo release

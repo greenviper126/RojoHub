@@ -253,6 +253,16 @@ function Hub:sendHello()
 	})
 end
 
+--[[
+	Whether this place has synced with the project before (the service keeps
+	that per place and project), so Rojo's first-sync confirmation is not asked
+	again. Asked by the confirm callback in App.
+]]
+function Hub:accepted(projectName)
+	local target = self.match and self.match.target
+	return target ~= nil and target.projectName == projectName and target.accepted == true
+end
+
 -- The session Rojo is synced to now, or nil.
 function Hub:currentSession()
 	local session = self.app.serveSession
@@ -270,7 +280,8 @@ end
 -- Tells the service what this place is synced to, when that changed.
 function Hub:report()
 	local connected = self:currentSession()
-	local key = if connected then `{connected.sessionId}@{connected.port}` else ""
+	local confirming = self.app.state.appStatus == "Confirming"
+	local key = (if connected then `{connected.sessionId}@{connected.port}` else "") .. (if confirming then "?" else "")
 	if key == self.reported then
 		return
 	end
@@ -284,7 +295,7 @@ function Hub:report()
 	end
 	self.reported = key
 	self.reportedSession = connected and connected.sessionId
-	self:send({ type = "state", connected = connected })
+	self:send({ type = "state", connected = connected, confirming = confirming })
 end
 
 --[[

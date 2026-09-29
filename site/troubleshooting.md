@@ -205,10 +205,10 @@ from Studio's plugin manager) to keep one.
 
 ### Studio asks to accept or abort the first sync {#confirm-first-sync}
 
-That is Rojo's confirmation, kept because syncing writes into the place. Rojo-Hub's plugin skips it
-for places the project lists in `servePlaceIds` (*Confirmation Behavior: Unlisted PlaceId*). A Studio
-that ran an early 0.19.0 build may still have Rojo's *Initial* saved: change it in the plugin's
-settings.
+That is Rojo's confirmation, kept because the first sync can overwrite what was in the place. It is
+asked once per place and project: accept it and that pair connects without asking from then on. If it
+asks every time, *Confirmation Behavior* in the plugin's settings is *Always*; set it back to
+*Initial*.
 
 ### A switch does not appear in Studio {#switch-not-in-studio}
 

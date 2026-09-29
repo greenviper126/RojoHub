@@ -523,6 +523,8 @@ export class Mcp {
 		const open = this.hub.studio.places();
 		const waiting = open.filter((place) => place.projectId === slot.id && place.syncedWith !== slot.projectName);
 		const waitingText = waiting.length > 0 ? ` Waiting for it: ${this.placeList(waiting)}.` : "";
+		const confirming = waiting.filter((place) => place.confirming);
+		const confirmText = confirming.length > 0 ? ` ${this.placeList(confirming)} ${confirming.length === 1 ? "waits" : "wait"} for the user to accept the first sync in Studio (Rojo asks once per place and project); ask the user to accept it.` : "";
 		if (slot.state === "running") {
 			const synced = slot.places ?? [];
 			if (synced.length > 0) {
@@ -531,9 +533,9 @@ export class Mcp {
 					return reason ? `, ${REASONS[reason] ?? reason}` : "";
 				};
 				const names = synced.map((place) => `${place.placeName} (${place.placeId ? `place ${place.placeId}` : "not saved to Roblox"}${why(place)}, plugin ${place.pluginVersion})`).join(", ");
-				return `Rojo is serving on port ${slot.port}. Studio places synced to it: ${names}; look at the Studio with that place ID.${waiting.length > 0 ? ` Connecting: ${this.placeList(waiting)}.` : ""}`;
+				return `Rojo is serving on port ${slot.port}. Studio places synced to it: ${names}; look at the Studio with that place ID.${waiting.length > 0 ? ` Connecting: ${this.placeList(waiting)}.${confirmText}` : ""}`;
 			}
-			if (waiting.length > 0) return `Rojo is serving on port ${slot.port}. Studio places connecting to it: ${this.placeList(waiting)}.`;
+			if (waiting.length > 0) return `Rojo is serving on port ${slot.port}. Studio places connecting to it: ${this.placeList(waiting)}.${confirmText}`;
 			if (slot.connections > 0) return `Rojo is serving on port ${slot.port} and Studio is connected (${slot.connections}), through Rojo's own plugin, so which place is not known.`;
 			return `Rojo is serving on port ${slot.port}, but no Studio place is synced to it. The user opens a place listed in the project's servePlaceIds (it syncs by itself), or assigns an open place in the Rojo-Hub panel's Studio places.`;
 		}
@@ -708,6 +710,9 @@ export class Mcp {
 			if (now.state === "running" && (now.places ?? []).length > 0) return this.health(now);
 			if (now.state === "stopped" || now.state === "error") return `${now.projectName} is not serving, so no Studio can sync to it. ${this.health(now)}`;
 			if (Date.now() >= deadline) return `No Studio place synced to ${now.projectName} in time. ${this.health(now)}`;
+			if (this.hub.studio.places().some((place) => place.projectId === now.id && place.confirming)) {
+				return `A Studio place is waiting for the user to accept its first sync with ${now.projectName}. ${this.health(now)}`;
+			}
 			await sleep(500);
 		}
 	}

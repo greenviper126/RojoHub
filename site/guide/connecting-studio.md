@@ -30,10 +30,11 @@ One project can serve several places: open all of them and each syncs with it. A
 Only a **serving** project is connected to. If the place's project is stopped, Studio places and
 the Rojo window say so; start it in Rojo-Hub and the place syncs by itself, without reopening it.
 
-A place listed in `servePlaceIds` syncs without asking. Any other place (one you assigned, or that
-synced before) shows Rojo's usual confirmation before the first sync of a project in a Studio
-session, because syncing writes into the place. Change this with *Confirmation Behavior* in the
-plugin's settings.
+**The first sync asks, once.** The first time a place syncs with a project, Rojo shows its usual
+confirmation with the diff (Accept or Abort), because that sync can overwrite what was in the place.
+Accept it once and Rojo-Hub remembers: from then on that place and project connect without asking,
+when you reopen the place and after any Rojo restart. *Confirmation Behavior* in the plugin's
+settings still works: *Always* asks every time, *Never* never asks.
 
 ## It reconnects by itself
 

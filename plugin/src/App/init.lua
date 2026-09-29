@@ -765,6 +765,16 @@ function App:startSession()
 			return "Accept"
 		end
 
+		-- Rojo-Hub: a place that synced with this project before is not asked again (spec 007)
+		if
+			self.hub
+			and self.hub:accepted(serverInfo.projectName)
+			and Settings:get("confirmationBehavior") ~= "Always"
+		then
+			Log.trace("Accepting patch without confirmation because this place synced with the project before")
+			return "Accept"
+		end
+
 		-- Play solo auto-connect does not require confirmation
 		if self:isAutoConnectPlaytestServerAvailable() then
 			Log.trace("Accepting patch without confirmation because play solo auto-connect is enabled")
@@ -798,11 +808,6 @@ function App:startSession()
 					)
 					return "Accept"
 				end
-			end
-			-- Rojo-Hub: an unlisted place asks once per project per Studio session, as "Initial" does, not on every reconnect
-			if self.knownProjects[serverInfo.projectName] then
-				Log.trace("Accepting patch without confirmation because the project was accepted before this session")
-				return "Accept"
 			end
 		elseif confirmationBehavior == "Never" then
 			Log.trace("Accepting patch without confirmation because behavior is set to Never")

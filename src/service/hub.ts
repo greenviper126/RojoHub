@@ -137,6 +137,12 @@ export class Hub {
 				else delete this.registry.placeChoices[String(placeId)];
 				this.registry.save();
 			},
+			accepted: (placeId, projectName) => this.registry.placeAccepted[String(placeId)]?.includes(projectName) ?? false,
+			accept: (placeId, projectName) => {
+				const names = (this.registry.placeAccepted[String(placeId)] ??= []);
+				if (!names.includes(projectName)) names.push(projectName);
+				this.registry.save();
+			},
 			synced: (placeId) => this.registry.placeSynced[String(placeId)] ?? null,
 			sync: (placeId, projectName) => {
 				this.registry.placeSynced[String(placeId)] = projectName;
@@ -708,6 +714,11 @@ export class Hub {
 			this.registry.slots = this.registry.slots.filter((entry) => entry.id !== id);
 			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
 			for (const [place, chosen] of Object.entries(this.registry.placeChoices)) if (chosen === id) delete this.registry.placeChoices[place];
+			// A project added again later with the same name asks each place's first sync again.
+			for (const [place, names] of Object.entries(this.registry.placeAccepted)) {
+				this.registry.placeAccepted[place] = names.filter((name) => name !== slot.projectName);
+				if (this.registry.placeAccepted[place].length === 0) delete this.registry.placeAccepted[place];
+			}
 			this.registry.save();
 			this.runtimes.delete(id);
 			this.claims.delete(id);

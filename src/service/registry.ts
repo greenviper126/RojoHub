@@ -47,6 +47,8 @@ interface RegistryFile {
 	placeChoices?: Record<string, string>;
 	/** The project name each Studio place last synced with, by place ID (spec 007). */
 	placeSynced?: Record<string, string>;
+	/** The projects each Studio place has synced with, so each pair's first-sync confirmation is asked once (spec 007). */
+	placeAccepted?: Record<string, string[]>;
 }
 
 export class Registry {
@@ -56,6 +58,7 @@ export class Registry {
 	order: DisplayOrder = { projects: [], groups: [] };
 	placeChoices: Record<string, string> = {};
 	placeSynced: Record<string, string> = {};
+	placeAccepted: Record<string, string[]> = {};
 	/** What happened when registry.json could not be read, for service.log; null when it read fine. */
 	readonly recovered: string | null = null;
 
@@ -94,6 +97,11 @@ export class Registry {
 		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
 		this.placeChoices = stringMap(parsed.placeChoices);
 		this.placeSynced = stringMap(parsed.placeSynced);
+		const accepted = parsed.placeAccepted;
+		this.placeAccepted =
+			accepted && typeof accepted === "object" && !Array.isArray(accepted)
+				? Object.fromEntries(Object.entries(accepted).map(([place, names]) => [place, Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : []]))
+				: {};
 	}
 
 	/*
@@ -109,6 +117,7 @@ export class Registry {
 			order: this.order,
 			placeChoices: this.placeChoices,
 			placeSynced: this.placeSynced,
+			placeAccepted: this.placeAccepted,
 		};
 		const temporary = this.file + ".tmp";
 		const fd = openSync(temporary, "w");
