@@ -43,6 +43,12 @@ interface RegistryFile {
 	groups?: GroupRecord[];
 	/** How the panel shows things; never affects ports (see DisplayOrder). */
 	order?: DisplayOrder;
+	/** The project picked for a Studio place that several serving projects claim, by place ID (spec 007). */
+	placeChoices?: Record<string, string>;
+	/** The project name each Studio place last synced with, by place ID (spec 007). */
+	placeSynced?: Record<string, string>;
+	/** The projects each Studio place has synced with, so each pair's first-sync confirmation is asked once (spec 007). */
+	placeAccepted?: Record<string, string[]>;
 }
 
 export class Registry {
@@ -50,6 +56,9 @@ export class Registry {
 	slots: SlotRecord[] = [];
 	groups: GroupRecord[] = [];
 	order: DisplayOrder = { projects: [], groups: [] };
+	placeChoices: Record<string, string> = {};
+	placeSynced: Record<string, string> = {};
+	placeAccepted: Record<string, string[]> = {};
 	/** What happened when registry.json could not be read, for service.log; null when it read fine. */
 	readonly recovered: string | null = null;
 
@@ -86,6 +95,13 @@ export class Registry {
 		this.slots = Array.isArray(parsed.slots) ? parsed.slots.filter(validSlot) : [];
 		this.groups = Array.isArray(parsed.groups) ? parsed.groups.filter(validGroup) : [];
 		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
+		this.placeChoices = stringMap(parsed.placeChoices);
+		this.placeSynced = stringMap(parsed.placeSynced);
+		const accepted = parsed.placeAccepted;
+		this.placeAccepted =
+			accepted && typeof accepted === "object" && !Array.isArray(accepted)
+				? Object.fromEntries(Object.entries(accepted).map(([place, names]) => [place, Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : []]))
+				: {};
 	}
 
 	/*
@@ -94,7 +110,15 @@ export class Registry {
 		cut at any point leaves one whole registry to start from.
 	*/
 	save(): void {
-		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order };
+		const body: RegistryFile = {
+			version: 1,
+			slots: this.slots,
+			groups: this.groups,
+			order: this.order,
+			placeChoices: this.placeChoices,
+			placeSynced: this.placeSynced,
+			placeAccepted: this.placeAccepted,
+		};
 		const temporary = this.file + ".tmp";
 		const fd = openSync(temporary, "w");
 		try {
@@ -127,6 +151,12 @@ export class Registry {
 }
 
 const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/** A { key: string } object from the file, without entries a hand edit broke. */
+function stringMap(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return Object.fromEntries(Object.entries(value).filter(([, entry]) => typeof entry === "string"));
+}
 
 function validSlot(slot: SlotRecord): boolean {
 	const target = slot?.target as { kind?: unknown; path?: unknown; ref?: unknown } | undefined;

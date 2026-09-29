@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import type { IncomingMessage } from "node:http";
 
-import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT } from "../common/api";
+import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, SERVICE_VERSION, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
 import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -22,9 +22,13 @@ import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
+import { Hub } from "../service/hub";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
+import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
+import { acceptWebSocket } from "../service/websocket";
+import { installPlugin, removePlugin } from "../service/studioPlugin";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -442,10 +446,20 @@ test("MCP: initialize, tools/list, notifications and unknown methods", async () 
 	assert.equal(unknownVersion.result.protocolVersion, "2025-11-25", "otherwise its newest");
 	assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null, "notifications get no answer");
 	const list = (await mcp.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
-	assert.deepEqual(list.result.tools.map((tool) => tool.name), ["status", "serve_here", "switch", "release", "build", "sourcemap"]);
-	assert.ok(!TOOLS.some((tool) => /^(start|stop|add|remove)/.test(tool.name)), "no tool starts, stops, adds or removes projects");
+	const names = list.result.tools.map((tool) => tool.name);
+	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap"]) {
+		assert.ok(names.includes(name), `the ${name} tool (spec 008)`);
+	}
+	assert.ok(!names.some((name) => /assign|setting|agent/.test(name)), "nothing for what stays the user's: place assignments, settings, agent registration");
+	for (const tool of TOOLS) {
+		const schema = tool.inputSchema as { type: string; properties: Record<string, unknown>; required?: string[] };
+		assert.equal(schema.type, "object", tool.name);
+		for (const required of schema.required ?? []) assert.ok(required in schema.properties, `${tool.name} requires ${required}, which it declares`);
+		assert.ok(tool.description.length > 20 && tool.description.length < 400, `${tool.name} has a short description`);
+	}
+	assert.match(init.result.instructions, /force only when the user asks/);
 	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 4, method: "nope" })) as { error: { code: number } }).error.code, -32601);
-	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "start" } })) as { error: { code: number } }).error.code, -32602);
+	assert.equal(((await mcp.handle({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "launch_missiles" } })) as { error: { code: number } }).error.code, -32602);
 	assert.deepEqual(await mcp.handle({ jsonrpc: "2.0", id: 6, method: "ping" }), { jsonrpc: "2.0", id: 6, result: {} });
 });
 
@@ -542,4 +556,253 @@ test("pathKey treats a short 8.3 path and its long form as one folder", { skip: 
 	assert.equal(pathKey(join(short, "Game")), pathKey(join(dir, "Game")));
 	assert.equal(pathKey(join(short, "not-made-yet")), pathKey(join(dir, "not-made-yet")), "also for a folder that does not exist yet");
 	assert.equal(pathKey(dir.toUpperCase() + "\\"), pathKey(dir), "case and a trailing slash");
+});
+
+const candidate = (over: Partial<PlaceCandidate> & { slotId: string }): PlaceCandidate => ({
+	projectName: over.slotId,
+	port: 35000,
+	state: "running",
+	sessionId: `session-${over.slotId}`,
+	branch: "main",
+	targetLabel: "main",
+	rojoVersion: "7.7.0",
+	servePlaceIds: null,
+	blockedPlaceIds: null,
+	placeId: null,
+	...over,
+});
+const place = (placeId: number, remembered: string | null = null, unsaved = false) => ({ placeId, remembered, unsaved });
+
+test("Studio places: servePlaceIds, then placeId, then the remembered project (spec 007)", () => {
+	const lobby = candidate({ slotId: "lobby", servePlaceIds: [111, 222] });
+	const byPlaceId = candidate({ slotId: "tools", placeId: 222 });
+	const old = candidate({ slotId: "old" });
+	assert.equal(matchPlace(place(222), [lobby, byPlaceId, old], null).target?.slotId, "lobby", "servePlaceIds wins over placeId");
+	assert.equal(matchPlace(place(222), [byPlaceId, old], null).target?.slotId, "tools");
+	const remembered = matchPlace(place(999, "old"), [lobby, byPlaceId, old], null);
+	assert.equal(remembered.target?.slotId, "old");
+	assert.equal(remembered.target?.reason, "remembered");
+	assert.equal(matchPlace(place(999), [lobby, byPlaceId, old], null).status, "none");
+	assert.equal(matchPlace(place(111), [lobby], null).target?.slotId, "lobby", "one project serves several places");
+
+	// rojoHub.studioAutoConnect "listed": the remembered project does not connect by itself; listed and assigned still do
+	const listedOnly = matchPlace(place(999, "old"), [lobby, byPlaceId, old], null, false);
+	assert.equal(listedOnly.status, "none");
+	assert.match(listedOnly.message, /only listed places connect by themselves/);
+	assert.equal(matchPlace(place(111, "old"), [lobby, old], null, false).target?.slotId, "lobby");
+	assert.equal(matchPlace(place(999, "old"), [lobby, old], "old", false).target?.reason, "assigned");
+});
+
+test("Studio places: an assignment from VS Code wins, for any place, saved or not", () => {
+	const lobby = candidate({ slotId: "lobby", servePlaceIds: [111] });
+	const other = candidate({ slotId: "other" });
+	const assigned = matchPlace(place(111), [lobby, other], "other");
+	assert.equal(assigned.target?.slotId, "other");
+	assert.equal(assigned.target?.reason, "assigned");
+	assert.equal(matchPlace(place(0, null, true), [lobby, other], "other").target?.slotId, "other", "an unsaved place too");
+	assert.equal(matchPlace(place(0, null, true), [lobby, other], null).status, "unsaved");
+	const waiting = matchPlace(place(111), [lobby, { ...other, state: "stopped", sessionId: null }], "other");
+	assert.equal(waiting.status, "stopped", "an assigned project that is not serving is waited for");
+	assert.equal(waiting.projectId, "other");
+	assert.equal(matchPlace(place(111), [lobby], "removed").target?.slotId, "lobby", "an assignment to a project that is gone is ignored");
+});
+
+test("Studio places: only running projects connect, and a stopped claimant is not skipped for a lower tier", () => {
+	const stopped = candidate({ slotId: "game", servePlaceIds: [111], state: "stopped", sessionId: null });
+	const other = candidate({ slotId: "other" });
+	const answer = matchPlace(place(111, "other"), [stopped, other], null);
+	assert.equal(answer.status, "stopped");
+	assert.equal(answer.target, null);
+	assert.match(answer.message, /Waiting for game/);
+	const starting = candidate({ slotId: "game", servePlaceIds: [111], state: "starting", sessionId: null });
+	assert.equal(matchPlace(place(111), [starting], null).status, "stopped");
+});
+
+test("Studio places: several serving claimants are assigned in VS Code; only serving ones compete", () => {
+	const a = candidate({ slotId: "a", servePlaceIds: [111] });
+	const b = candidate({ slotId: "b", servePlaceIds: [111] });
+	const choose = matchPlace(place(111), [a, b], null);
+	assert.equal(choose.status, "choose");
+	assert.match(choose.message, /VS Code/);
+	assert.equal(matchPlace(place(111), [a, b], "b").target?.slotId, "b");
+	assert.equal(matchPlace(place(111), [a, { ...b, state: "stopped", sessionId: null }], null).target?.slotId, "a");
+});
+
+test("Studio places: a place keeps to its own project while that one restarts", () => {
+	const mine = candidate({ slotId: "mine", servePlaceIds: [111] });
+	const fork = candidate({ slotId: "fork", servePlaceIds: [111] });
+	const restarting = { ...mine, state: "starting" as const, sessionId: null };
+	const waiting = matchPlace(place(111, "mine"), [restarting, fork], null);
+	assert.equal(waiting.status, "stopped");
+	assert.match(waiting.message, /^Waiting for mine/);
+	assert.equal(matchPlace(place(111, "mine"), [mine, fork], null).target?.slotId, "mine", "and goes back to it without being asked");
+	assert.equal(matchPlace(place(111), [restarting, fork], null).target?.slotId, "fork", "a place that never synced takes the only serving claimant");
+});
+
+test("Studio places: blocked places and old Rojo never connect", () => {
+	const blocked = candidate({ slotId: "x", servePlaceIds: [111], blockedPlaceIds: [111] });
+	assert.equal(matchPlace(place(111), [blocked], null).status, "none");
+	const old = matchPlace(place(111), [candidate({ slotId: "sf", servePlaceIds: [111], rojoVersion: "7.3.0" })], null);
+	assert.equal(old.status, "unsupported");
+	assert.match(old.message, /Rojo 7\.3\.0/);
+	assert.equal(speaksProtocol5("7.7.0"), true);
+	assert.equal(speaksProtocol5("8.0.1"), true);
+	assert.equal(speaksProtocol5("7.6.1"), false);
+});
+
+test("the Studio WebSocket: hello gets the place's answer, changes are pushed, VS Code assigns, web pages are refused", async () => {
+	const { createServer } = await import("node:http");
+	let candidates: PlaceCandidate[] = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111 })];
+	const assigned = new Map<number, string>();
+	const synced = new Map<number, string>();
+	const accepted = new Set<string>();
+	const memory: PlaceMemory = {
+		accepted: (id, name) => accepted.has(`${id}:${name}`),
+		accept: (id, name) => void accepted.add(`${id}:${name}`),
+		assigned: (id) => assigned.get(id) ?? null,
+		assign: (id, slot) => void (slot ? assigned.set(id, slot) : assigned.delete(id)),
+		synced: (id) => synced.get(id) ?? null,
+		sync: (id, name) => void synced.set(id, name),
+	};
+	const links = new StudioLinks(() => candidates, memory);
+	const server = createServer();
+	let port = 0;
+	server.on("upgrade", (request, socket, head) => {
+		if (!allowedRequest(request, port)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+		const link = acceptWebSocket(request, socket, head);
+		if (link) links.attach(link);
+	});
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	port = (server.address() as { port: number }).port;
+	const open = async (hello: StudioHello) => {
+		const socket = new WebSocket(`ws://127.0.0.1:${port}${STUDIO_PATH}`);
+		const inbox: StudioMatch[] = [];
+		socket.onmessage = (event) => {
+			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "welcome" | "ping" };
+			if (message.type === "welcome") socket.send(JSON.stringify(hello));
+			if (message.type === "match") inbox.push(message);
+		};
+		await new Promise((done, fail) => ((socket.onopen = done), (socket.onerror = fail)));
+		const next = async (): Promise<StudioMatch> => {
+			const deadline = Date.now() + 3000;
+			while (inbox.length === 0 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
+			const message = inbox.shift();
+			assert.ok(message, "an answer arrived");
+			return message;
+		};
+		return { socket, next };
+	};
+	try {
+		const hello: StudioHello = { type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "test", placeId: 111, gameId: 1, placeName: "Lobby", unsaved: false, remembered: null };
+		const lobby = await open(hello);
+		const first = await lobby.next();
+		assert.equal(first.status, "connect");
+		assert.equal(first.target?.port, 35111);
+		assert.equal(first.target?.accepted, false, "a place's first sync with a project is confirmed by the user");
+
+		// the project's rojo restarts: the new session reaches the plugin without it asking
+		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
+		assert.equal((await lobby.next()).target?.sessionId, "second");
+
+		// reporting the sync puts the place on the project's card and in the service's memory
+		lobby.socket.send(JSON.stringify({ type: "state", connected: { port: 35111, projectName: "game", sessionId: "second" } }));
+		await new Promise((done) => setTimeout(done, 100));
+		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
+		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
+		assert.equal(synced.get(111), "game");
+		assert.equal((await lobby.next()).target?.accepted, true, "once synced, the pair is not confirmed again");
+		assert.ok(accepted.has("111:game"));
+
+		// a second claimant appears: the place keeps to the project it syncs with
+		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];
+		await new Promise((done) => setTimeout(done, 400));
+		assert.equal(links.places()[0].projectId, "game", "its answer, and so nothing sent, is unchanged");
+
+		// VS Code assigns the fork: stored per place, and the plugin is told at once
+		links.assign("111", "fork");
+		assert.equal((await lobby.next()).target?.slotId, "fork");
+		assert.equal(assigned.get(111), "fork");
+		const [view] = links.places();
+		assert.equal(view.key, "111");
+		assert.equal(view.assigned, "fork");
+		assert.equal(view.syncedWith, "game");
+
+		// an unsaved place is assigned by window, and forgotten when the window closes
+		const unsaved = await open({ ...hello, placeId: 0, placeName: "Place1", unsaved: true });
+		assert.equal((await unsaved.next()).status, "unsaved");
+		const key = links.places().find((entry) => entry.unsaved)!.key;
+		assert.match(key, /^studio:/);
+		links.assign(key, "game");
+		assert.equal((await unsaved.next()).target?.slotId, "game");
+		assert.throws(() => links.assign("0", "game"), /not a place ID/);
+		unsaved.socket.close();
+
+		// a plugin speaking another protocol is told to reopen the place instead of being matched
+		lobby.socket.send(JSON.stringify({ ...hello, protocol: STUDIO_PROTOCOL + 1 }));
+		assert.equal((await lobby.next()).status, "incompatible");
+
+		lobby.socket.close();
+		await new Promise((done) => setTimeout(done, 200));
+		assert.equal(links.count, 0, "closed sockets are forgotten");
+
+		// Node's WebSocket sends no Origin, so a web page's handshake is sent by hand
+		const refused = await fetch(`http://127.0.0.1:${port}${STUDIO_PATH}`, {
+			headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", origin: "https://evil.example" },
+		}).then(
+			(response) => response.status,
+			() => "refused",
+		);
+		assert.notEqual(refused, 101, "a web page's WebSocket is refused");
+	} finally {
+		links.closeAll();
+		server.close();
+	}
+});
+
+test("the Studio plugin install: once, updated in place, our other copies removed, the official one only reported", () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-plugins-"));
+	const plugins = join(dir, "Plugins");
+	const source = join(dir, "RojoHub.rbxm");
+	writeFileSync(source, "v1");
+	const first = installPlugin(source, plugins);
+	assert.equal(first.state, "installed");
+	assert.match(first.detail, /next place you open/);
+	assert.equal(readFileSync(join(plugins, "RojoHub.rbxm"), "utf8"), "v1");
+	assert.equal(installPlugin(source, plugins).detail, "", "an identical file is left alone");
+
+	writeFileSync(source, "v2");
+	writeFileSync(join(plugins, "RojoHub-0.19.0.rbxm"), "downloaded");
+	writeFileSync(join(plugins, "rojohub.rbxmx"), "old");
+	writeFileSync(join(plugins, "RojoManagedPlugin.rbxm"), "official");
+	writeFileSync(join(plugins, "Other.rbxm"), "someone else's");
+	const second = installPlugin(source, plugins);
+	assert.match(second.detail, /Updated/);
+	assert.equal(readFileSync(join(plugins, "RojoHub.rbxm"), "utf8"), "v2");
+	assert.deepEqual(second.removed.sort(), ["RojoHub-0.19.0.rbxm", "rojohub.rbxmx"]);
+	assert.equal(second.officialRojo, true);
+	assert.deepEqual(readdirSync(plugins).sort(), ["Other.rbxm", "RojoHub.rbxm", "RojoManagedPlugin.rbxm"], "nothing else is touched, and no temporary file is left");
+
+	assert.equal(installPlugin(join(dir, "missing.rbxm"), plugins).state, "error");
+	assert.equal(removePlugin(plugins), true);
+	assert.equal(removePlugin(plugins), false);
+});
+
+test("the Studio plugin says the same version as the service", () => {
+	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "Version.lua"), "utf8");
+	assert.equal(/return "([^"]+)"/.exec(lua)?.[1], SERVICE_VERSION);
+	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "init.lua"), "utf8");
+	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
+});
+
+test("agents' claims survive a service restart, and run out as before", () => {
+
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-claims-"));
+	const first = new Hub(home);
+	first.setClaim("game", { key: "worktree:c:/work/feature", label: "feature", until: Date.now() + 60_000 });
+	first.setClaim("old", { key: "worktree:c:/work/old", label: "old", until: Date.now() - 1 });
+	const second = new Hub(home);
+	assert.equal(second.claimOf("game")?.label, "feature", "a new service keeps a claim that has not run out");
+	assert.equal(second.claimOf("old"), null, "a claim that ran out is not brought back");
+	second.setClaim("game", null);
+	assert.equal(new Hub(home).claimOf("game"), null, "a released claim stays released");
 });

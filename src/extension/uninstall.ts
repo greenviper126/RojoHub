@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { SERVICE_PORT, type Health } from "../common/api";
 import { pathKey } from "../common/paths";
 import { AGENTS, agentState, runCli } from "../service/agentConfig";
+import { loadPortSettings } from "../service/ports";
+import { removePlugin } from "../service/studioPlugin";
 
 /*
 	package.json's vscode:uninstall hook. VS Code runs it with its own Node, and
@@ -12,10 +14,14 @@ import { AGENTS, agentState, runCli } from "../service/agentConfig";
 	Claude Code's and Codex's user config, but only an entry that points at
 	Rojo-Hub: one the user made with another URL stays. Then it stops the
 	service and every rojo it serves, which would otherwise run on with nothing
-	left to manage them.
+	left to manage them. Last, it takes its Studio plugin out of Studio's plugins
+	folder, unless rojoHub.studioPlugin was off (then the plugin there is the
+	user's to manage).
 */
 
 const homeKey = pathKey;
+
+const hubHome = (): string => process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
 
 /*
 	Port 34870 is machine-wide: another signed-in Windows user's service can be
@@ -25,7 +31,7 @@ const homeKey = pathKey;
 */
 async function stopService(): Promise<void> {
 	const base = `http://127.0.0.1:${Number(process.env.ROJO_HUB_PORT ?? SERVICE_PORT)}`;
-	const home = process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
+	const home = hubHome();
 	try {
 		const health = (await (await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) })).json()) as Partial<Health>;
 		if (typeof health.home !== "string" || homeKey(health.home) !== homeKey(home)) return;
@@ -46,6 +52,7 @@ async function main(): Promise<void> {
 		await runCli(agent.cli, agent.remove).catch(() => undefined);
 	}
 	await stopService();
+	if (loadPortSettings(hubHome()).studioPlugin !== false) removePlugin();
 }
 
 void main();

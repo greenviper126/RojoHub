@@ -4,7 +4,7 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption } from "./api";
+import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption, StudioPluginStatus, StudioPlaceView } from "./api";
 
 /*
 	Something to add to or take out of a group: a project, a nested group, or
@@ -51,6 +51,10 @@ export interface PanelState {
 	agents: { url: string; vscode: boolean; list: AgentStatus[] };
 	/** Show the "let agents use Studio" notice above Projects (see agentNudge in the extension). */
 	agentNudge: boolean;
+	/** Rojo-Hub's Studio plugin install (spec 007); null before the service says. */
+	studioPlugin: StudioPluginStatus | null;
+	/** Open Studio places with Rojo-Hub's plugin, and what each syncs with (spec 007). */
+	studioPlaces: StudioPlaceView[];
 }
 
 export type ToPanel =
@@ -108,4 +112,6 @@ export type FromPanel =
 	| { type: "setAgent"; id: AgentId | "vscode"; on: boolean }
 	| { type: "copyAgentSetup"; what: "commands" | "prompt" }
 	/** The notice above Projects: Later hides it for a while, never for good. */
-	| { type: "agentNudge"; action: "later" | "never" };
+	| { type: "agentNudge"; action: "later" | "never" }
+	/** Studio places (spec 007): the project a place syncs with; null goes back to its project files. */
+	| { type: "assignPlace"; key: string; slotId: string | null };

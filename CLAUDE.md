@@ -10,9 +10,9 @@ changing how project files are generated or served.
 ```sh
 npm run typecheck
 npm test              # build, load the bundles (smoke), unit + end-to-end against a real rojo 7.7 and a temp git repo
-npm run build         # esbuild -> dist/extension.js, dist/service.js
+npm run build         # esbuild -> dist/extension.js, dist/service.js; rojo 7.7.0 (Rokit) -> dist/RojoHub.rbxm
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.18.3.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.19.6.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
@@ -21,7 +21,14 @@ are worked out by `src/service/ports.ts` (servePort, else a hash of the repo's f
 `rojoHub.portRange`, default 34873-35872, skipping `rojoHub.excludedPorts`); 34872, Rojo's default
 port, is always excluded. Bump
 `SERVICE_VERSION` in `src/common/api.ts` with the package version, so an updated extension replaces
-the running service.
+the running service, and `plugin/src/RojoHub/Version.lua` with it (a unit test checks).
+
+`plugin/` is Rojo 7.7.0's Studio plugin (MPL-2.0) with Rojo-Hub's changes (spec 007). Keep changes
+to Rojo's own files to small hooks marked `-- Rojo-Hub`, list every one in `plugin/UPSTREAM.md`, and
+put the rest in `plugin/src/RojoHub/`, so moving to a newer Rojo stays a merge. Which project a
+Studio place syncs with is decided in VS Code (the panel's Studio places); the plugin only connects
+and shows the answer. Bump `STUDIO_PROTOCOL` (and `PROTOCOL` in the plugin) whenever the messages
+between them change.
 
 ## Releasing
 
@@ -58,6 +65,14 @@ the running service.
   Changing a project's project file (spec 005) is not a switch; the panel only allows it while stopped.
 - Start the pinned rojo binary from Rokit's tool storage (`src/service/tools.ts`), never Rokit's
   `rojo` shim: the shim launches rojo as a console child, and Windows Terminal then pops a window.
+- Studio loads a new or changed local plugin only when a place is opened (spec 007, M3). An installed
+  plugin update reaches open places only after they are reopened, so the service must keep talking
+  to older plugins of the same `STUDIO_PROTOCOL`.
+- A plugin setting is one value shared by every Studio process, and each process writes back the
+  whole value it loaded: places open at once overwrite each other's entries (spec 007). Anything per
+  place that must last (the last synced project, assignments) is kept by the service.
+- Tests never touch the real Studio plugins folder: the service takes it from
+  `ROJO_HUB_STUDIO_PLUGINS` when set, and the smoke and end-to-end tests set it.
 
 ## Documentation
 

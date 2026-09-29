@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PortMove, PortSettings, SlotView, Target, TargetOption } from "../common/api";
+import type { PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
@@ -10,6 +10,8 @@ import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettin
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
+import { StudioLinks, type PlaceCandidate } from "./studio";
+import { installPlugin, PLUGIN_FILE } from "./studioPlugin";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
 
@@ -25,6 +27,8 @@ const PROJECT_FILES_MS = 2000;
 	a crash, and restarting a healthy rojo would disconnect Studio.
 */
 const CRASH_MISSES = 3;
+/** A new session disconnects Studio; Rojo-Hub's plugin reconnects by itself (spec 007), Rojo's own does not. */
+const RECONNECT = "Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.";
 /** How long a new port assignment must hold before a slot is moved to it (see refreshPorts). */
 const MOVE_SETTLE_MS = 2500;
 
@@ -58,6 +62,8 @@ interface Runtime {
 	rojo: StartedRojo | null;
 	/** Status checks in a row that went unanswered (see CRASH_MISSES). */
 	misses: number;
+	/** The version of the rojo serving, when known; the Studio plugin speaks only 7.7 and newer (spec 007). */
+	rojoVersion: string | null;
 	/** A status check is in flight, so the next tick does not start another. */
 	probing: boolean;
 }
@@ -90,7 +96,11 @@ export class Hub {
 	/** Slots with a port move queued, so a slow restart is not queued twice. */
 	private readonly moving = new Set<string>();
 
-	/** Agents' claims by slot id (spec 004). Kept in memory only: a new service starts with none. */
+	/*
+		Agents' claims by slot id (spec 004). Kept in claims.json too, so a service
+		restarted by an update (or a crash) does not free a project an agent is in
+		the middle of testing.
+	*/
 	private readonly claims = new Map<string, Claim>();
 
 	/** A port a slot is to move to, and since when it has been the one assigned (see refreshPorts). */
@@ -108,8 +118,38 @@ export class Hub {
 	/** The branch picker's lists, kept warm in the background (spec 002). */
 	readonly targetCache: TargetCache;
 
+	/** Each project file's place fields, reread only when the file changes (spec 007). */
+	private readonly placeFields = new Map<string, { mtime: number; fields: Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> }>();
+
+	/** The Studio plugins connected to the service (spec 007). */
+	readonly studio: StudioLinks;
+
+	/** The Studio plugin's install, for the panel (spec 007). */
+	studioPlugin: StudioPluginStatus = { state: "off", detail: "", removed: [], officialRojo: false };
+
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
+		this.loadClaims();
+		this.studio = new StudioLinks(() => this.placeCandidates(), {
+			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
+			assign: (placeId, slotId) => {
+				if (slotId) this.registry.placeChoices[String(placeId)] = slotId;
+				else delete this.registry.placeChoices[String(placeId)];
+				this.registry.save();
+			},
+			accepted: (placeId, projectName) => this.registry.placeAccepted[String(placeId)]?.includes(projectName) ?? false,
+			accept: (placeId, projectName) => {
+				const names = (this.registry.placeAccepted[String(placeId)] ??= []);
+				if (!names.includes(projectName)) names.push(projectName);
+				this.registry.save();
+			},
+			synced: (placeId) => this.registry.placeSynced[String(placeId)] ?? null,
+			sync: (placeId, projectName) => {
+				this.registry.placeSynced[String(placeId)] = projectName;
+				this.registry.save();
+			},
+		});
+		this.studio.rememberedAutoConnect = loadPortSettings(home).studioAutoConnect !== "listed";
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));
@@ -162,6 +202,7 @@ export class Hub {
 				rojo: null,
 				misses: 0,
 				probing: false,
+				rojoVersion: null,
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -189,6 +230,7 @@ export class Hub {
 		rojo that is still up and serving the same project, else starts one.
 	*/
 	async restore(): Promise<void> {
+		this.syncStudioPlugin();
 		this.poller = setInterval(() => this.pollLogs(), 1000);
 		this.poller.unref();
 		for (const slot of this.registry.slots) {
@@ -206,6 +248,7 @@ export class Hub {
 					if (info && info.projectName === slot.projectName && (await rojoAlive(this.slotFile(slot.id)))) {
 						runtime.state = "running";
 						runtime.sessionId = info.sessionId;
+						runtime.rojoVersion = info.serverVersion || null;
 						runtime.log.poll();
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
@@ -226,6 +269,8 @@ export class Hub {
 	*/
 	private pollLogs(): void {
 		if (++this.ticks % 3 === 0) this.refreshPorts();
+		// The plugins folder changes behind the service's back (Rojo's plugin removed, ours deleted): look again.
+		if (this.ticks % 5 === 0) this.syncStudioPlugin();
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			if (runtime.state !== "running") continue;
@@ -287,8 +332,8 @@ export class Hub {
 			const checkout = runtime.checkout && Date.now() - runtime.checkout.at < CHECKOUT_CRASH_MS ? runtime.checkout : null;
 			runtime.notes = [
 				checkout && slot.target.kind === "worktree"
-					? `Checking out ${checkout.branch} in ${basename(slot.target.path)} removed a folder Rojo was watching, and Rojo 7.7 crashed (rojo-rbx/rojo#1305). Rojo-Hub restarted it on the same port; reconnect Studio. Picking a branch in Rojo-Hub's picker switches without this.`
-					: `Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; reconnect Studio. ${reason ?? ""}`.trim(),
+					? `Checking out ${checkout.branch} in ${basename(slot.target.path)} removed a folder Rojo was watching, and Rojo 7.7 crashed (rojo-rbx/rojo#1305). Rojo-Hub restarted it on the same port; ${RECONNECT} Picking a branch in Rojo-Hub's picker switches without this.`
+					: `Rojo crashed at ${new Date().toLocaleTimeString()} and was restarted on the same port; ${RECONNECT} ${reason ?? ""}`.trim(),
 			];
 			await this.startLocked(slot);
 		}).catch(() => undefined);
@@ -339,7 +384,7 @@ export class Hub {
 				if (wasServing) await this.stopLocked(slot);
 				slot.port = now.port;
 				this.registry.save();
-				runtime.notes = [`Port moved from ${from} to ${slot.port}${wasServing ? "; reconnect Studio to the new port" : ""}.`];
+				runtime.notes = [`Port moved from ${from} to ${slot.port}${wasServing ? `. ${RECONNECT}` : "."}`];
 				if (wasServing && slot.wantRunning) await this.startLocked(slot);
 			})
 				.catch(() => undefined)
@@ -385,9 +430,30 @@ export class Hub {
 
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
+		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		savePortSettings(this.home, settings);
+		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
+		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
 		for (const slot of this.registry.slots) void this.enqueue(slot, () => this.syncSourcemap(slot)).catch(() => undefined);
+	}
+
+	/*
+		Installs or updates the Studio plugin built beside the service bundle, unless
+		rojoHub.studioPlugin is off; then the plugins folder is left alone.
+	*/
+	syncStudioPlugin(): void {
+		if (loadPortSettings(this.home).studioPlugin === false) {
+			this.studioPlugin = { state: "off", detail: "rojoHub.studioPlugin is off; Rojo-Hub leaves Studio's plugins folder alone.", removed: [], officialRojo: false };
+			return;
+		}
+		this.studioPlugin = installPlugin(join(__dirname, PLUGIN_FILE));
+	}
+
+	/** The last `count` lines of the slot's rojo log (agents' `log` tool, spec 008). */
+	logTail(id: string, count: number): string {
+		this.registry.get(id);
+		return this.runtime(id).log.tail(count);
 	}
 
 	/** The slot's claim, or null when there is none or it ran out. */
@@ -400,6 +466,26 @@ export class Hub {
 	setClaim(id: string, claim: Claim | null): void {
 		if (claim) this.claims.set(id, claim);
 		else this.claims.delete(id);
+		try {
+			const temporary = join(this.home, "claims.json.tmp");
+			writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.claims), null, "\t") + "\n");
+			renameSync(temporary, join(this.home, "claims.json"));
+		} catch {
+			// Claims still work for this service's life; only surviving a restart is lost.
+		}
+	}
+
+	private loadClaims(): void {
+		try {
+			const saved = JSON.parse(readFileSync(join(this.home, "claims.json"), "utf8")) as Record<string, Partial<Claim>>;
+			for (const [id, claim] of Object.entries(saved)) {
+				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number" && claim.until > Date.now()) {
+					this.claims.set(id, { key: claim.key, label: claim.label, until: claim.until });
+				}
+			}
+		} catch {
+			// none saved, or unreadable: start with none, as before
+		}
 	}
 
 	/*
@@ -446,7 +532,56 @@ export class Hub {
 			targetsAt: this.targetCache.stamp(slot.repoPath),
 			sourcemap: runtime.sourcemap?.status ?? { state: "off", detail: runtime.sourcemapOff },
 			claim: claim ? { label: claim.label, until: claim.until } : null,
+			places: runtime.state === "running" ? this.studio.placesOn(slot.port, runtime.sessionId) : [],
 		};
+	}
+
+	/*
+		What the Studio plugin's place matching needs about every project. The
+		place fields come from the primary checkout's project file, the one the
+		slot file copies them from (see SESSION_FIELDS in project.ts).
+	*/
+	placeCandidates(): PlaceCandidate[] {
+		return this.registry.slots.map((slot) => {
+			const runtime = this.runtime(slot.id);
+			return {
+				slotId: slot.id,
+				projectName: slot.projectName,
+				port: slot.port,
+				state: runtime.state,
+				sessionId: runtime.sessionId,
+				branch: runtime.branch,
+				targetLabel: runtime.targetLabel,
+				rojoVersion: runtime.rojoVersion,
+				...this.placeFieldsOf(slot),
+			};
+		});
+	}
+
+	private placeFieldsOf(slot: SlotRecord): Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> {
+		const file = join(slot.repoPath, slot.projectFile);
+		const cached = this.placeFields.get(file);
+		let mtime: number;
+		try {
+			mtime = statSync(file).mtimeMs;
+		} catch {
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+		}
+		if (cached && cached.mtime === mtime) return cached.fields;
+		const ids = (value: unknown): number[] | null => (Array.isArray(value) ? value.filter((id): id is number => Number.isInteger(id)) : null);
+		try {
+			const project = readProject(file);
+			const fields = {
+				servePlaceIds: ids(project.servePlaceIds),
+				blockedPlaceIds: ids(project.blockedPlaceIds),
+				placeId: Number.isInteger(project.placeId) ? (project.placeId as number) : null,
+			};
+			this.placeFields.set(file, { mtime, fields });
+			return fields;
+		} catch {
+			// Mid-edit (half-typed JSON): keep what was read last, like servePort (see portRequests).
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+		}
 	}
 
 	/** Nothing serving and nothing meant to be (see IDLE_EXIT_MS in main.ts). */
@@ -580,6 +715,12 @@ export class Hub {
 			rmSync(this.slotDir(id), { recursive: true, force: true });
 			this.registry.slots = this.registry.slots.filter((entry) => entry.id !== id);
 			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
+			for (const [place, chosen] of Object.entries(this.registry.placeChoices)) if (chosen === id) delete this.registry.placeChoices[place];
+			// A project added again later with the same name asks each place's first sync again.
+			for (const [place, names] of Object.entries(this.registry.placeAccepted)) {
+				this.registry.placeAccepted[place] = names.filter((name) => name !== slot.projectName);
+				if (this.registry.placeAccepted[place].length === 0) delete this.registry.placeAccepted[place];
+			}
 			this.registry.save();
 			this.runtimes.delete(id);
 			this.claims.delete(id);
@@ -760,6 +901,7 @@ export class Hub {
 					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}), which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it. The Studio-connected light also needs Rojo 7.7.`,
 				];
 			}
+			runtime.rojoVersion = rojo.version;
 			runtime.rojo = await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
 			runtime.sessionId = await this.waitForRojo(slot);
 			runtime.misses = 0;

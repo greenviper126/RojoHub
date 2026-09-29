@@ -18,14 +18,16 @@ playtest shows, without either of them knowing.
 - The service serves MCP (streamable HTTP, JSON responses, no sessions) at
   `http://127.0.0.1:34870/mcp`. MCP carries its own instructions and tool descriptions, so no skill
   file, AGENTS.md note or PATH entry is needed.
-- Tools: `status`, `serve_here`, `switch`, `release`, `build`, `sourcemap`. There are no tools to
-  start, stop, add or remove projects: starting rojo is a new Studio session, and that stays the
-  user's decision.
+- Tools: `status`, `serve_here`, `switch`, `release`, `build`, `sourcemap`. There were no tools to
+  start, stop, add or remove projects: starting rojo is a new Studio session, and that stayed the
+  user's decision. **Superseded by spec 008 (0.19.2)**: agents now have every common panel action,
+  with guards on what could pull Studio out from under someone.
 - **Claims.** `serve_here` and `switch` claim the project for what they serve (a worktree, or a
   branch) for 10 minutes. Any tool call from the same worktree renews it. While another target
   holds the claim, both tools refuse with who holds it and until when, unless `force: true`.
   `release` drops it. A switch by the user (panel, picker, menu) always goes through and clears the
-  claim. Claims live in the service's memory: a restarted service forgets them.
+  claim. Claims are kept in `claims.json` (since 0.19.1; before, in memory only, so a service
+    restarted by an update freed every project) and survive a restart until they run out.
 - **Registration**, the `rojoHub.agents` setting (application scope, checkboxes) and the panel's
   *Agent access* section, which show and change the same values:
   - *VS Code agents*: on by default. Registered with the provider API

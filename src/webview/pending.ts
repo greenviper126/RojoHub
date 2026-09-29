@@ -209,7 +209,7 @@ export function stopping(id: string, busy: string): void {
 	});
 }
 
-/** A group is Running (Start, Singleton) or not (Stop, Stop all, another group's Singleton). */
+/** A group is Running (Start) or not (Stop, Stop all, another group's start with only). */
 export function groupActive(id: string, active: boolean, busy: string): void {
 	expect(`active:${id}`, {
 		busy,

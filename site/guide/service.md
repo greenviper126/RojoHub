@@ -28,12 +28,14 @@ an [update](./install#update)), Rojo keeps serving and Studio stays connected. T
 If a project's Rojo dies unexpectedly, the service starts it again **on the same port** and the card
 says so:
 
-*Rojo crashed at ‹time› and was restarted on the same port; reconnect Studio. ‹Rojo's reason›*
+*Rojo crashed at ‹time› and was restarted on the same port; places with Rojo-Hub's Studio plugin
+reconnect by themselves … ‹Rojo's reason›*
 
 (Right after a checkout inside the served worktree, it says the checkout caused it instead; see
 [Checking out inside a served folder](./switching#checking-out-inside-a-served-folder).)
 
-This is a new session, so reconnect Studio.
+This is a new session. Places with Rojo-Hub's Studio plugin reconnect by themselves within a second;
+with Rojo's own plugin, reconnect Studio.
 
 - A Rojo the service started itself is known to have exited at once.
 - One it adopted is presumed gone only after **three status checks in a row** go unanswered and no

@@ -2,6 +2,68 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.19.6
+
+- New setting `rojoHub.studioAutoConnect`: set it to `listed` and a Studio place connects by itself
+  only when a project file lists it (`servePlaceIds`, `placeId`) or you assign it in Studio places;
+  other places are connected by hand. The default, `remembered`, also reconnects a place to the
+  project it last synced with.
+
+## 0.19.5
+
+- Rojo's confirmation is asked **once per place and project**: the first time a place syncs with a
+  project, whether its `servePlaceIds` lists the place or not, since that sync can overwrite what was
+  in the place. After you accept, that place and project connect without asking, across Studio
+  sessions and Rojo restarts. *Always* and *Never* in the plugin's settings still work.
+- The panel and agents say when a place is waiting for you to accept.
+- Groups: the **Singleton** button (and its menu item and command) is gone. Start / Stop sits at the
+  bottom right like a project's, and a folded group has it as a small ▶ / ■ in its header.
+
+## 0.19.4
+
+- A Studio place its project does not list in `servePlaceIds` asks to accept its first sync once per
+  project per Studio session, as documented. Before, it asked again on every reconnect that had
+  changes to apply (Rojo's *Unlisted PlaceId* ignores what was already accepted).
+
+## 0.19.3
+
+- The panel's **Active ports** section is gone: which projects serve shows on their cards and the
+  Projects header, and each card's port copies with a click. **Studio places** took over the one
+  thing left: a place that doesn't connect by itself lists the serving projects' ports to connect by
+  hand, and with no place open it says how many projects are serving.
+
+## 0.19.2
+
+**Agents control Rojo-Hub.** Rojo-Hub is mainly for several agents working at once, so agents now
+have every common panel action over MCP: start and stop projects and groups, add and remove
+projects, make, edit and delete groups, list branches, make a branch in a worktree of its own
+(through Orca when it manages the repo), list and change project files, read Rojo's log, and wait
+for Studio to sync.
+- What could pull Studio out from under someone is guarded: stopping or removing a project another
+  agent claimed, or that a Studio place is synced to, needs `force`; stopping everything always does.
+- `serve_here` and `switch` take `wait`: take the project as soon as another agent's claim ends, in
+  order, instead of being refused.
+- Answers include Rojo's own errors after a switch, which Studio places show the project (with place
+  IDs and why they sync), and warnings.
+- Claims survive a service restart.
+
+## 0.19.1
+
+**Studio connects by itself.** Rojo-Hub now installs its own Studio plugin: Rojo 7.7's plugin,
+changed to sync each place with its project without a port typed or a button pressed.
+- A place finds its project from the project files: `servePlaceIds`, then `placeId`, then the project
+  it last synced with. One project can serve several places at once.
+- It connects when the place opens, when its project is started later, and again after Rojo
+  restarts (a crash, a port move, a project file change), with no click.
+- Everything is decided in VS Code: a new **Studio places** section lists each open place, what it
+  syncs with, and a list to assign it a project (an unsaved place, one no project lists, or one two
+  projects claim). Studio only shows the answer.
+- A place keeps to the project it syncs with while that project's Rojo restarts.
+- Disconnect and Abort are respected: that session is not reconnected by itself.
+- The plugin is kept up to date in Studio's plugins folder and removed on uninstall; the new
+  `rojoHub.studioPlugin` setting turns that off. Studio loads an update when a place is next opened.
+- Rojo 7.7 or newer only; a project pinning older Rojo says so in the Rojo window.
+
 ## 0.18.3
 
 - Listing details reworded for the VS Code Marketplace: a clearer description and keywords

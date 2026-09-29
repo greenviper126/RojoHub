@@ -144,6 +144,7 @@ the card says so:
 Rojo 7.7 crashes when a folder it watches is deleted
 ([rojo-rbx/rojo#1305](https://github.com/rojo-rbx/rojo/issues/1305)). A `git checkout` or rebase
 that removes a folder in a served tree triggers it. Rojo-Hub restarts Rojo on the same port and the
-card says the checkout caused it, but it is a new session, so **Studio has to reconnect**.
+card says the checkout caused it. It is a new session: places with Rojo-Hub's Studio plugin reconnect
+by themselves, with Rojo's own plugin **Studio has to reconnect**.
 Switching with the picker never causes this.
 :::

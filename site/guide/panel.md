@@ -14,7 +14,7 @@ The panel has five sections that fold open and closed, and a footer.
 |---|---|---|
 | **Projects** | A card per project, grouped by [workspace](./workspaces). Header: how many are serving, a filter and `+` (add a project). | open |
 | **Groups** | A card per [group](./groups). Header: how many, and `+` (new group). | open |
-| **Active ports** | Every project serving right now, lowest port first, with its light, name, branch and `localhost:<port>`. Click the address to copy the port. Says *Nothing serving* when nothing is. | open |
+| **Studio places** | Every open Studio place with Rojo-Hub's plugin: what it syncs with, a list to assign it a project, and for a place that doesn't connect by itself the serving projects' ports to connect by hand (see [Connecting Studio](./connecting-studio#studio-places)). | open |
 | **Port settings** | The port range and excluded ports, with *Save*, *Undo* and *Reset* (see [Ports](./ports#port-settings-in-the-panel)). | folded |
 | **Agent access** | A switch per AI agent (see [Agents](./agents)). | folded |
 
@@ -109,17 +109,17 @@ tag after its own (`test` for `test.project.json`).
 
 ## Folding
 
-- **Projects, Groups and Active ports start open; Port settings and Agent access start folded.**
+- **Projects, Groups and Studio places start open; Port settings and Agent access start folded.**
 - Within Projects, **only the first item starts open**: the first workspace, or with no workspaces,
   the first project card.
 - Whatever you fold or open is **remembered**.
-- Opening a project from elsewhere (a group, Active ports, the status bar) unfolds its card and its
+- Opening a project from elsewhere (a group, the status bar) unfolds its card and its
   workspace.
 
 **Collapse All** (the icon at the top right of the panel's title bar, as in the Explorer) folds
 everything except what is running. Projects and Groups stay open, and inside them the cards of
 serving or starting projects, the workspaces that hold them, and running groups stay open. Every
-other card and group folds, as do Active ports and Port settings. Agent access is left as it was.
+other card and group folds, as does Port settings. Agent access is left as it was.
 
 ### Right-click menu
 
@@ -180,9 +180,9 @@ card's edge.
 | Sidebar width | What changes |
 |---|---|
 | below about 320px | A group's *Running* pill and Agent access's status chips hide. |
-| below about 280px | Counts lose their words (`2/5`) and the footer reads `3/5`. Ports lose `localhost`. Stop, Start and Agent access's *Copy commands* and *Copy prompt* become icons. Window badges, a folded card's error or warning icon (the card stays tinted), *not added* and *shown above* hide. A group's rename and delete show only on hover. The project file row shows just `default` or `test`. |
+| below about 280px | Counts lose their words (`2/5`) and the footer reads `3/5`. The hand-connect ports in Studio places lose their project names. Stop, Start and Agent access's *Copy commands* and *Copy prompt* become icons. Window badges, a folded card's error or warning icon (the card stays tinted), *not added* and *shown above* hide. A group's rename and delete show only on hover. The project file row shows just `default` or `test`. |
 | below about 270px | The status pill shrinks to its icon, and a workspace's *Group* button to its icon. |
-| below about 230px | Ports leave project headers and group members (Active ports still lists them). The footer's Refresh hides and Stop all becomes an icon. |
+| below about 230px | Ports leave project headers and group members (*Copy Port* in a project's menu still copies it). The footer's Refresh hides and Stop all becomes an icon. |
 | below 170px | The panel stops shrinking and scrolls sideways. |
 
 ## Other ways in

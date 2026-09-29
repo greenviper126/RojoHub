@@ -26,8 +26,8 @@ Press **+** next to one. The new project's card is highlighted.
 - A new project is **stopped** and serves its primary checkout.
 
 ::: warning Project names must be unique
-The Studio plugin reconnects a place only to a server reporting the project `name` it saved, so two
-repos with the same Rojo project `name` cannot both be added. Rename one in its project file.
+A place remembers the project it last synced with by its `name`, so two repos with the same Rojo
+project `name` cannot both be added. Rename one in its project file.
 :::
 
 ## 2. Start serving
@@ -49,9 +49,17 @@ If Rojo does not come up within 30 seconds, the card shows the end of Rojo's log
 
 ## 3. Connect Studio
 
-Click the **port** at the top right of the card to copy it, then connect the Rojo plugin in Studio
-to `localhost` and that port. Turn on **Auto Reconnect** in the plugin's settings and you never
-have to do it again. [Connecting Studio](./connecting-studio) has the details.
+Rojo-Hub installs its own Studio plugin, so there is no port to type. List the project's places in
+its project file:
+
+```json
+"servePlaceIds": [1234567890]
+```
+
+Then open the place in Studio: it syncs by itself (after installing Rojo-Hub, reopen places that were
+already open, so Studio loads the plugin). A place that isn't listed shows up in the panel's
+**Studio places** section, where you assign it the project once. [Connecting Studio](./connecting-studio)
+has the details.
 
 ## What next
 

@@ -15,7 +15,7 @@
 	of time, and the panel keeps them.
 */
 
-import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption } from "../common/api";
+import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
@@ -85,8 +85,6 @@ const ui = {
 	newGroup: null as null | { name: string },
 	renaming: null as null | { id: string; name: string },
 	confirmDelete: null as string | null,
-	/** The group whose Singleton is waiting for Yes/No. */
-	confirmOnly: null as string | null,
 	/** "Stop all" is waiting for Yes/No. */
 	confirmStopAll: false,
 	/** Agent access's "Other agents and manual setup" is open. */
@@ -227,12 +225,19 @@ function dot(slot: SlotView): string {
 	return `<span class="dot ${kind}" title="${title}"></span>`;
 }
 
+/** Which Studio places are synced, when their Rojo-Hub plugin said (spec 007); older plugins only count. */
+function connectedTitle(slot: SlotView): string {
+	const places = slot.places ?? [];
+	if (places.length === 0) return "Serving, and Studio is connected";
+	return `Serving, synced with ${places.map((place) => `${place.placeName} (${place.placeId})`).join(", ")}`;
+}
+
 /** A small coloured pill saying what the project is doing. */
 function statusPill(slot: SlotView): string {
 	if (stopping.has(slot.id)) return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Stopping…</span></span>`;
 	if (slot.state === "running") {
 		return slot.connections > 0
-			? `<span class="pill ok" title="Serving, and Studio is connected">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
+			? `<span class="pill ok" title="${escape(connectedTitle(slot))}">${icon("plug")}<span class="ellipsis">Connected${slot.connections > 1 ? ` · ${slot.connections}` : ""}</span></span>`
 			: `<span class="pill live" title="Serving, waiting for Studio: connect Studio's Rojo plugin to this port">${icon("broadcast")}<span class="ellipsis">Serving</span></span>`;
 	}
 	if (slot.state === "starting") return `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">Starting…</span></span>`;
@@ -550,11 +555,6 @@ function portChip(slot: SlotView, host = false): string {
 	return `<button class="port${copied ? " copied" : ""}" data-action="copy" data-id="${escape(slot.id)}" title="${title}"><span>${host ? `<span class="host">localhost</span>` : ""}:${slot.port}</span>${icon(copied ? "check" : "copy", "port-icon")}</button>`;
 }
 
-/** Serving projects that Singleton would stop for a group. */
-function wouldStop(group: GroupView): SlotView[] {
-	return (state?.slots ?? []).filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
-}
-
 function groupCard(group: GroupView): string {
 	// A group just created here, before the service has given it an id: its name, nothing to click yet.
 	if (group.id.startsWith(PENDING_GROUP)) {
@@ -582,7 +582,17 @@ function groupCard(group: GroupView): string {
 			? `<div class="member confirm-row">${icon("warning")}<span class="grow">Delete <strong>${escape(group.name)}</strong>? What's in it stays.</span>${button("delete-group", "Delete", { data: { id: group.id }, kind: "danger" })}${button("cancel-delete", "No", { kind: "secondary" })}</div>`
 			: "";
 	const headAttributes = renaming ? "" : foldable(`group:${group.id}`, "groups", !open);
-	if (!open) return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head" ${headAttributes}>${head}</div>${deleteConfirm}</article>`;
+	const startStop = group.active
+		? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", title: "Stop this group's projects, except ones another running group uses" })
+		: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` });
+	if (!open) {
+		const icons = renaming
+			? ""
+			: group.active
+				? iconButton("stop-group", "debug-stop", `Stop ${group.name}`, { id: group.id })
+				: iconButton("start-group", "play", `Start ${group.name}`, { id: group.id }, everyProject.length === 0);
+		return `<article class="card group${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}><div class="row head" ${headAttributes}>${head}${icons}</div>${deleteConfirm}</article>`;
+	}
 
 	const nestedRows = nested
 		.map((child) => {
@@ -650,17 +660,6 @@ function groupCard(group: GroupView): string {
 				}
 			</select></div>`;
 
-	const stopping = wouldStop(group);
-	const onlyConfirm =
-		ui.confirmOnly === group.id
-			? `<div class="notice warning confirm-only">${icon("warning")}<span class="grow">${
-					stopping.length === 0
-						? `Singleton: serve only ${escape(group.name)}? Nothing outside it is serving, so this just starts it.`
-						: `Singleton: serve only ${escape(group.name)}? This stops <strong>${stopping.map((slot) => escape(slot.projectName)).join(", ")}</strong>, and Studio places connected to them disconnect.`
-				}</span></div>
-				<div class="row">${button("solo-group-yes", "Yes, singleton", { icon: "target", data: { id: group.id }, kind: "primary" })}${button("solo-group-no", "Cancel", { kind: "secondary" })}</div>`
-			: "";
-
 	return `<article class="card group open${group.active ? " active" : ""}" id="group-${escape(group.id)}" ${dropAttributes("groups", group.id)}>
 		<div class="row head" ${headAttributes}>${head}</div>
 		${deleteConfirm}
@@ -669,15 +668,10 @@ function groupCard(group: GroupView): string {
 			${nested.length + members.length === 0 ? `<div class="muted pad small">Empty. Add projects or other groups below.</div>` : ""}
 		</div>
 		${adder}
-		<div class="row actions">
-			${
-				group.active
-					? button("stop-group", "Stop", { icon: "debug-stop", data: { id: group.id }, kind: "secondary", title: "Stop this group's projects, except ones another running group uses" })
-					: button("start-group", "Start", { icon: "play", data: { id: group.id }, kind: "primary", disabled: everyProject.length === 0, title: `Serve all ${everyProject.length} projects in this group` })
-			}
-			${button("solo-group", "Singleton", { icon: "target", data: { id: group.id }, kind: "secondary", disabled: everyProject.length === 0, title: "Serve only this group: stop every other project (asks first)" })}
+		<div class="row card-foot">
+			<span class="grow"></span>
+			${startStop}
 		</div>
-		${onlyConfirm}
 	</article>`;
 }
 
@@ -772,6 +766,70 @@ function agentNudge(): string {
 		<p class="muted small">Agents can put the worktree they are working in into Studio themselves, without restarting Rojo.</p>
 		<div class="row">${button("nudge-setup", "Set up", { icon: "robot", kind: "primary" })}${button("nudge-later", "Later", { kind: "secondary", title: "Remind me in 14 days" })}</div>
 	</div>`;
+}
+
+/*
+	The Studio plugin's install (spec 007), above Projects only when it needs the
+	user: it failed, or Rojo's own plugin is installed beside it.
+*/
+function studioPluginNotice(): string {
+	const plugin = state!.studioPlugin;
+	if (!plugin) return "";
+	if (plugin.state === "error") return `<div class="notice error">${icon("error")}<span>${escape(plugin.detail)}</span></div>`;
+	if (plugin.state === "installed" && plugin.officialRojo) {
+		return `<div class="notice warning">${icon("warning")}<span>Rojo's own Studio plugin is also installed, so Studio has two Rojo plugins. Rojo-Hub's plugin replaces it: delete RojoManagedPlugin.rbxm from %LOCALAPPDATA%\\Roblox\\Plugins. This goes away by itself once it is gone.</span></div>`;
+	}
+	return "";
+}
+
+/*
+	Studio places (spec 007): every open place with Rojo-Hub's plugin, what it
+	syncs with, and a list to assign it a project. Which project a place syncs
+	with is decided here, never in Studio.
+*/
+const PLACE_STATUS: Record<StudioPlaceView["status"], { icon: string; kind: string; label: string }> = {
+	connect: { icon: "plug", kind: "ok", label: "Synced" },
+	choose: { icon: "question", kind: "info", label: "Assign a project" },
+	stopped: { icon: "clock", kind: "", label: "Waiting" },
+	unsupported: { icon: "warning", kind: "bad", label: "Rojo too old" },
+	unsaved: { icon: "question", kind: "info", label: "Assign a project" },
+	none: { icon: "question", kind: "info", label: "Assign a project" },
+	incompatible: { icon: "warning", kind: "bad", label: "Reopen the place" },
+};
+
+function studioPlaces(): string {
+	const places = state!.studioPlaces;
+	const serving = state!.slots.filter((slot) => slot.state === "running");
+	const servingText = serving.length ? ` ${serving.length} project${serving.length === 1 ? " is" : "s are"} serving.` : " Nothing is serving.";
+	if (places.length === 0) {
+		return `<div class="empty compact">${icon("device-desktop", "empty-icon")}<p class="muted small">No Studio place is open with Rojo-Hub's plugin. Open one and it shows here; a place listed in a project's servePlaceIds syncs by itself.${servingText}</p></div>`;
+	}
+	/* Where a place does not connect by itself, the serving projects' ports, for connecting by hand (Rojo's own plugin too). */
+	const byHand = serving.length
+		? `<div class="by-hand muted small">or connect by hand: ${serving.map((slot) => `<span class="by-hand-port" title="${escape(slot.projectName)}">${escape(slot.projectName)} ${portChip(slot)}</span>`).join("")}</div>`
+		: "";
+	const rows = places
+		.map((place) => {
+			const shown = PLACE_STATUS[place.status];
+			const status = place.status === "connect" && !place.syncedWith ? { ...shown, icon: "loading", label: "Connecting" } : shown;
+			const options = state!.slots
+				.map((slot) => `<option value="${escape(slot.id)}"${place.assigned === slot.id ? " selected" : ""}>${escape(slot.projectName)}  :${slot.port}${slot.state === "running" ? "" : " (stopped)"}</option>`)
+				.join("");
+			const title = `${place.placeName} (${place.unsaved ? "not saved to Roblox" : place.placeId}) · plugin ${place.pluginVersion}`;
+			return `<div class="member studio-place">
+				<span class="grow two-line">
+					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}</span>
+					<span class="sub ellipsis" title="${escape(place.message)}">${escape(place.message)}</span>
+				</span>
+				<span class="pill ${status.kind}" title="${escape(place.message)}">${icon(status.icon, status.icon === "loading" ? "codicon-modifier-spin" : "")}<span class="ellipsis">${escape(status.label)}</span></span>
+				<select data-action="assign-place" data-key="${escape(place.key)}" title="The project this place syncs with. Automatic follows the project files (servePlaceIds, then placeId) and the last sync.">
+					<option value=""${place.assigned ? "" : " selected"}>Automatic</option>
+					${options}
+				</select>
+			</div>${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
+		})
+		.join("");
+	return `<div class="card studio-places">${rows}</div>`;
 }
 
 /** A count's first word stays in a narrow panel; the rest ("serving") hides. */
@@ -887,21 +945,6 @@ function projectsList(slots: SlotView[], filtering = false): string {
 	Every project serving right now, with its address to copy: the quickest way
 	to get a port into Studio's Rojo plugin.
 */
-function activePorts(serving: SlotView[]): string {
-	if (serving.length === 0) return `<div class="empty compact">${icon("plug", "empty-icon")}<p class="muted small">Nothing serving. Start a project or a group and its port shows here.</p></div>`;
-	const rows = [...serving]
-		.sort((a, b) => a.port - b.port)
-		.map(
-			(slot) => `<div class="member active-port">
-				${dot(slot)}
-				<span class="grow two-line"><button class="link ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">${escape(slot.targetLabel)}</span></span>
-				${portChip(slot, true)}
-			</div>`,
-		)
-		.join("");
-	return `<div class="card ports">${rows}</div>`;
-}
-
 /* ---------- whole panel ---------- */
 
 function render(): void {
@@ -983,9 +1026,10 @@ function render(): void {
 		`
 		${banner}
 		${agentNudge()}
+		${studioPluginNotice()}
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
-		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
+		${section("studio", "Studio places", "device-desktop", state.studioPlaces.length ? String(state.studioPlaces.length) : "", "", studioPlaces())}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
 		${section("agents", "Agent access", "robot", agentCount ? String(agentCount) : "", "", agentsBody())}
 		<footer class="footer">${footer}</footer>`,
@@ -1019,7 +1063,6 @@ function dropStale(drawn: PanelState): void {
 	if (ui.menu && !slot(ui.menu)) ui.menu = null;
 	if (ui.renaming && !group(ui.renaming.id)) ui.renaming = null;
 	if (ui.confirmDelete && !group(ui.confirmDelete)) ui.confirmDelete = null;
-	if (ui.confirmOnly && !group(ui.confirmOnly)) ui.confirmOnly = null;
 	if (ui.confirmRemoveMember) {
 		const [groupId, kind, memberId] = ui.confirmRemoveMember.split("|");
 		const holder = group(groupId);
@@ -1185,23 +1228,17 @@ function setProjectFile(id: string, file: string): void {
 	render();
 }
 
-/*
-	Start and Singleton, as the service does them: every project in the group
-	that is stopped starts; Singleton also stops every serving project outside
-	it and marks every other group stopped.
-*/
-function startGroup(id: string, only: boolean): void {
+/* Start, as the service does it: every project in the group that is stopped starts. */
+function startGroup(id: string): void {
 	const group = state?.groups.find((entry) => entry.id === id);
 	if (!state || !group || bounced(`group:${id}`)) return;
 	const key = `group:${id}`;
 	for (const slot of state.slots) {
 		const member = group.projectIds.includes(slot.id);
 		if (member && (slot.state === "stopped" || stopping.has(slot.id))) pending.starting(slot.id, key);
-		else if (!member && only && (slot.state === "running" || slot.state === "starting" || slot.state === "error")) pending.stopping(slot.id, key);
 	}
-	if (only) for (const other of state.groups) if (other.id !== id && other.active) pending.groupActive(other.id, false, key);
 	pending.groupActive(id, true, key);
-	sendTracked(key, { type: "startGroup", id, only });
+	sendTracked(key, { type: "startGroup", id, only: false });
 	render();
 }
 
@@ -1515,16 +1552,7 @@ document.addEventListener("click", (event) => {
 			ui.confirmRemoveMember = null;
 			return removeMember(id, { kind: target.dataset.kind === "group" ? "group" : "project", id: target.dataset.member ?? "" });
 		case "start-group":
-			return startGroup(id, false);
-		case "solo-group":
-			ui.confirmOnly = id;
-			return render();
-		case "solo-group-no":
-			ui.confirmOnly = null;
-			return render();
-		case "solo-group-yes":
-			ui.confirmOnly = null;
-			return startGroup(id, true);
+			return startGroup(id);
 		case "stop-group":
 			return stopGroup(id);
 		case "rename": {
@@ -1649,6 +1677,10 @@ document.addEventListener("change", (event) => {
 		return setAgent(box.dataset.agent as AgentStatus["id"] | "vscode", box.checked);
 	}
 	const select = event.target as HTMLSelectElement;
+	if (select.dataset.action === "assign-place") {
+		send({ type: "assignPlace", key: select.dataset.key ?? "", slotId: select.value || null });
+		return;
+	}
 	if (select.dataset.action !== "add-member" || !select.value) return;
 	const separator = select.value.indexOf(":");
 	const kind = select.value.slice(0, separator);
@@ -1728,7 +1760,6 @@ function collapseAll(): void {
 	const live = new Set(state.slots.filter((slot) => slot.state === "running" || slot.state === "starting").map((slot) => slot.id));
 	ui.collapsed.projects = false;
 	ui.collapsed.groups = false;
-	ui.collapsed.ports = true;
 	ui.collapsed.settings = true;
 	for (const slot of state.slots) ui.collapsed[`card:${slot.id}`] = !live.has(slot.id);
 	const inWorkspace = new Set<string>();

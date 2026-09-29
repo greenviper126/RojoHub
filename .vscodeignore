@@ -3,6 +3,7 @@
 !dist/service.js
 !dist/uninstall.js
 !dist/webview.js
+!dist/RojoHub.rbxm
 !dist/codicons/**
 !media/**
 !package.json

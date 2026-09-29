@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -50,6 +50,10 @@ let statusItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
+/** The Studio plugin's install, from the last snapshot (spec 007). */
+let lastStudioPlugin: StudioPluginStatus | null = null;
+/** Open Studio places, from the last snapshot (spec 007). */
+let lastStudioPlaces: StudioPlaceView[] = [];
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -199,6 +203,8 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastSlots = snapshot.slots;
 	lastGroups = snapshot.groups;
 	lastOrder = snapshot.order;
+	lastStudioPlugin = snapshot.studioPlugin ?? null;
+	lastStudioPlaces = snapshot.studioPlaces ?? [];
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
 	render();
@@ -291,6 +297,8 @@ function render(): void {
 		order: lastOrder,
 		agents: { url: MCP_URL, vscode: vscodeAgentsOn(), list: lastAgents },
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
+		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
+		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
 	});
 	updateStatus();
 }
@@ -313,7 +321,7 @@ function noticePortMoves(slots: SlotView[]): void {
 		if (!from || slot.port <= 0 || from === slot.port) continue;
 		if (!workspaceRepos.includes(pathKey(slot.repoPath)) && !vscode.window.state.focused) continue;
 		void vscode.window
-			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Set the Rojo plugin's port to ${slot.port} in its places.`, "Copy Port", "Show Project")
+			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, set its port to ${slot.port}.`, "Copy Port", "Show Project")
 			.then(async (choice) => {
 				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
 				if (choice === "Show Project") void panel.focus(slot.id);
@@ -482,25 +490,6 @@ function groupMembers(group: GroupView): SlotView[] {
 	return group.projectIds.map((id) => lastSlots.find((slot) => slot.id === id)).filter((slot): slot is SlotView => !!slot);
 }
 
-/** Serving projects that Singleton would stop for this group. */
-function wouldStop(group: GroupView): SlotView[] {
-	return lastSlots.filter((slot) => (slot.state === "running" || slot.state === "starting") && !group.projectIds.includes(slot.id));
-}
-
-/*
-	Singleton stops everything outside the group, so it always asks first and
-	says exactly what it will stop.
-*/
-async function confirmOnly(group: GroupView): Promise<boolean> {
-	const stopping = wouldStop(group);
-	const detail =
-		stopping.length === 0
-			? "Nothing outside this group is serving, so this only starts the group."
-			: `This stops: ${stopping.map((slot) => slot.projectName).join(", ")}. Studio places connected to them disconnect.`;
-	const answer = await vscode.window.showWarningMessage(`Singleton: serve only ${group.name}?`, { modal: true, detail }, "Singleton");
-	return answer === "Singleton";
-}
-
 async function pickGroup(argument: unknown, placeholder: string): Promise<GroupView | undefined> {
 	if (typeof argument === "string") return lastGroups.find((group) => group.id === argument);
 	await refresh();
@@ -626,11 +615,10 @@ async function removeMember(group: GroupView, member: GroupMember): Promise<void
 	await act(`group:${group.id}`, () => client.updateGroup(group.id, changes));
 }
 
-async function startGroup(argument: unknown, only: boolean): Promise<void> {
-	const group = await pickGroup(argument, only ? "Singleton: serve only which group?" : "Start which group?");
+async function startGroup(argument: unknown): Promise<void> {
+	const group = await pickGroup(argument, "Start which group?");
 	if (!group) return;
-	if (only && !(await confirmOnly(group))) return;
-	reportGroup(await run(only ? `Serving only ${group.name}` : `Starting ${group.name}`, () => client.startGroup(group.id, only)));
+	reportGroup(await run(`Starting ${group.name}`, () => client.startGroup(group.id, false)));
 }
 
 async function stopGroup(argument: unknown): Promise<void> {
@@ -645,8 +633,7 @@ async function groupMenu(id: string): Promise<void> {
 	if (!group) return openMenu();
 	const members = groupMembers(group);
 	const items: MenuItem[] = [
-		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id, false) },
-		{ label: "$(target) Singleton", description: "serve only this group: stop every other project", run: () => startGroup(group.id, true) },
+		{ label: "$(play) Start Group", description: "serve every project in it", run: () => startGroup(group.id) },
 		{ label: "$(debug-stop) Stop Group", run: () => stopGroup(group.id) },
 		{ label: "$(add) Add Project to Group", run: () => addToGroup(group.id) },
 		{ label: "$(edit) Rename Group", run: () => renameGroup(group.id) },
@@ -822,7 +809,7 @@ async function addProject(): Promise<void> {
 	const added = await run("Adding project", () => client.add(path!, file));
 	if (!added) return;
 	const start = await vscode.window.showInformationMessage(
-		`${added.projectName} has port ${added.port}. Connect its Studio places to localhost:${added.port} once; with the plugin's Auto Reconnect on, they reconnect by themselves.`,
+		`${added.projectName} has port ${added.port}. Its Studio places sync by themselves with Rojo-Hub's plugin when its project file lists them in servePlaceIds; otherwise pick it once in the place's Rojo window.`,
 		"Start Serving",
 	);
 	if (start) await run(`Starting ${added.projectName}`, () => client.start(added.id));
@@ -839,6 +826,8 @@ async function pushSettings(): Promise<void> {
 			portRange: config.get<string>("portRange", ""),
 			excludedPorts: config.get<(number | string)[]>("excludedPorts", []),
 			sourcemaps: config.get<boolean>("sourcemaps", true),
+			studioPlugin: config.get<boolean>("studioPlugin", true),
+			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
@@ -956,7 +945,7 @@ async function buildPlace(slot: SlotView): Promise<void> {
 async function confirmRemove(slot: SlotView): Promise<boolean> {
 	const moves = await client.portMovesOnRemove(slot.id).catch(() => []);
 	const detail = moves
-		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects and must reconnect to ${move.to}` : ""}.`)
+		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects (places with Rojo-Hub's plugin reconnect by themselves)` : ""}.`)
 		.join("\n");
 	const sure = await vscode.window.showWarningMessage(
 		`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,
@@ -1200,6 +1189,12 @@ async function handlePanel(message: FromPanel): Promise<void> {
 		case "agentNudge":
 			hideAgentNudge(hubHome, message.action);
 			return refresh();
+		case "assignPlace":
+			await act(`place:${message.key}`, async () => {
+				lastStudioPlaces = await client.assignPlace(message.key, message.slotId);
+				render();
+			});
+			return;
 	}
 }
 
@@ -1229,6 +1224,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			order: lastOrder,
 			agents: { url: MCP_URL, vscode: false, list: [] },
 			agentNudge: false,
+			studioPlugin: null,
+			studioPlaces: [],
 		});
 		void vscode.window.showWarningMessage(message);
 		return;
@@ -1247,8 +1244,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		"rojoHub.addToGroup": (argument) => addToGroup(argument),
 		"rojoHub.focusProject": (argument) => (typeof argument === "string" ? panel.focus(argument) : vscode.commands.executeCommand(`${HubPanel.viewId}.focus`)),
 		"rojoHub.deleteGroup": (argument) => deleteGroup(argument),
-		"rojoHub.startGroup": (argument) => startGroup(argument, false),
-		"rojoHub.soloGroup": (argument) => startGroup(argument, true),
+		"rojoHub.startGroup": (argument) => startGroup(argument),
 		"rojoHub.stopGroup": (argument) => stopGroup(argument),
 		"rojoHub.groupMenu": (argument) => (typeof argument === "string" ? groupMenu(argument) : openMenu()),
 		"rojoHub.switch": (argument) => switchSlot(argument),

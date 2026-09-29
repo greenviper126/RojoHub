@@ -9,7 +9,7 @@ Rojo-Hub needs a few things on your machine. Nothing else you have installed get
 | [Git](https://git-scm.com/downloads) | 2.31 or newer, on your `PATH` | `git --version` |
 | Windows PowerShell | built into Windows | |
 | [Rokit](https://github.com/rojo-rbx/rokit) | any | `rokit --version` |
-| Rojo and its Studio plugin | 7.7 or newer, installed by Rokit | `rojo --version` in the project |
+| Rojo | 7.7 or newer, installed by Rokit | `rojo --version` in the project |
 
 And in each project you serve:
 
@@ -60,11 +60,10 @@ rokit install
 
 :::
 
-**3. Install the Studio plugin** that matches that Rojo, from the project folder:
-
-```sh
-rojo plugin install
-```
+**3. The Studio plugin** comes with Rojo-Hub: it installs its own (Rojo 7.7's plugin, changed to
+connect by itself) into Studio's plugins folder. You do not need `rojo plugin install`; if Rojo's own
+plugin is installed, the panel suggests removing it, since Studio would show two Rojo windows. See
+[Connecting Studio](./connecting-studio).
 
 ### Coming from Aftman or Foreman
 
@@ -83,10 +82,10 @@ Use **Rojo 7.7 or newer** for every project.
 
 ::: warning One plugin, one protocol
 Studio has one Rojo plugin for every place, and it only connects to a server that speaks the same
-protocol. Rojo 7.7 is the first to speak protocol 5, so the 7.7 plugin refuses Rojo 7.0–7.6 with
-*"it's using a different protocol version, and is incompatible"*. Rojo-Hub still serves a project
-pinned to an older Rojo, with a warning on its card, but keep every project on 7.7 so one plugin
-connects to all of them.
+protocol. Rojo 7.7 is the first to speak protocol 5, and Rojo-Hub's plugin is Rojo 7.7's, so it does
+not connect to Rojo 7.0–7.6: the project's place shows *Rojo too old* in **Studio places**. Rojo-Hub
+still serves a project pinned to an older Rojo, with a warning on its card, but keep every project
+on 7.7 so the plugin connects to all of them.
 :::
 
 ### How Rojo-Hub picks the version

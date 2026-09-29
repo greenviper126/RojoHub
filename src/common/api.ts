@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.18.3";
+export const SERVICE_VERSION = "0.19.6";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -63,6 +63,125 @@ export interface SlotView {
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
 	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
 	claim: { label: string; until: number } | null;
+	/** Studio places whose Rojo-Hub plugin is synced to this project now (spec 007). */
+	places: StudioPlace[];
+}
+
+/*
+	The Studio plugin and the service talk over a WebSocket at
+	ws://127.0.0.1:34870/studio, in JSON text messages (spec 007).
+	STUDIO_PROTOCOL changes only when these messages do, so a place still
+	running an older plugin (Studio loads a new one only when a place is opened)
+	keeps working across ordinary updates.
+*/
+export const STUDIO_PATH = "/studio";
+export const STUDIO_PROTOCOL = 2;
+
+/*
+	The service greets each new socket with { type: "welcome", protocol,
+	serviceVersion }; the plugin answers with hello, and says hello again
+	whenever the place's ID changes (a publish). IDs travel as strings, since
+	Roblox's JSONEncode may round integers this large; the service reads both.
+*/
+export interface StudioHello {
+	type: "hello";
+	protocol: number;
+	pluginVersion: string;
+	placeId: number;
+	gameId: number;
+	placeName: string;
+	/** PlaceId 0 or a Roblox template's ID (Rojo's ignorePlaceIds): shared by unsaved places, so never matched. */
+	unsaved: boolean;
+	/** The project name this place last synced with, from the plugin's own saved places. */
+	remembered: string | null;
+}
+
+/** What the plugin is synced to, sent whenever that changes. */
+export interface StudioState {
+	type: "state";
+	connected: { port: number; projectName: string; sessionId: string } | null;
+	/** Rojo's first-sync confirmation is open in this place, waiting for the user (missing from older plugins). */
+	confirming?: boolean;
+}
+
+export type StudioToService = StudioHello | StudioState;
+
+export interface StudioProject {
+	slotId: string;
+	projectName: string;
+	port: number;
+	sessionId: string | null;
+	branch: string | null;
+	targetLabel: string;
+	/** Why it is this place's project. */
+	reason: "assigned" | "servePlaceIds" | "placeId" | "remembered";
+	/** This place has synced with this project before, so its first-sync confirmation was already accepted. */
+	accepted: boolean;
+}
+
+/*
+	The service's answer, sent after hello and again whenever it changes. Which
+	project a place syncs with is decided in VS Code (spec 007): the plugin only
+	connects to `target` and shows `message`.
+	- connect: `target` is this place's project, serving; connect to it.
+	- choose: several serving projects claim the place; assign one in VS Code.
+	- stopped: the place's project is not serving.
+	- unsupported: the place's project runs a Rojo the plugin cannot speak.
+	- unsaved / none: no project for this place; assign one in VS Code.
+	- incompatible: the plugin's protocol is not the service's.
+*/
+export interface StudioMatch {
+	type: "match";
+	serviceVersion: string;
+	status: "connect" | "choose" | "stopped" | "unsupported" | "unsaved" | "none" | "incompatible";
+	message: string;
+	target: StudioProject | null;
+}
+
+/*
+	An open Studio place with Rojo-Hub's plugin, as the panel lists it. `key`
+	names the place for an assignment: its place ID, or for an unsaved place
+	(which shares ID 0 with every other) "studio:<id>" for this one window,
+	forgotten when it closes.
+*/
+export interface StudioPlaceView {
+	key: string;
+	placeId: number;
+	placeName: string;
+	unsaved: boolean;
+	pluginVersion: string;
+	status: StudioMatch["status"];
+	message: string;
+	/** The project it should sync with, when there is one. */
+	projectId: string | null;
+	/** Why that is its project. */
+	reason: StudioProject["reason"] | null;
+	/** The project picked for it in VS Code, if any. */
+	assigned: string | null;
+	/** Synced now, with this project name. */
+	syncedWith: string | null;
+	/** Rojo's first-sync confirmation is open in the place, waiting for the user. */
+	confirming: boolean;
+}
+
+/*
+	Whether Rojo-Hub's Studio plugin is in Studio's plugins folder (spec 007).
+	"off": rojoHub.studioPlugin is false, so the folder is left alone.
+*/
+export interface StudioPluginStatus {
+	state: "installed" | "off" | "no-studio" | "error";
+	detail: string;
+	/** Other RojoHub*.rbxm(x) copies taken out of the folder by the last install. */
+	removed: string[];
+	/** The official Rojo plugin (rojo plugin install) is installed too. */
+	officialRojo: boolean;
+}
+
+/** An open Studio place, as the panel shows it under the project it is synced to. */
+export interface StudioPlace {
+	placeId: number;
+	placeName: string;
+	pluginVersion: string;
 }
 
 /*
@@ -73,6 +192,10 @@ export interface Snapshot {
 	slots: SlotView[];
 	groups: GroupView[];
 	order: DisplayOrder;
+	/** Missing from services older than 0.19.0. */
+	studioPlugin?: StudioPluginStatus;
+	/** Open Studio places with Rojo-Hub's plugin (spec 007); missing from services older than 0.19.0. */
+	studioPlaces?: StudioPlaceView[];
 }
 
 /** What POST /slots/:id/branch made. */
@@ -128,6 +251,15 @@ export interface PortSettings {
 	excludedPorts?: (number | string)[];
 	/** rojoHub.sourcemaps; missing means on. */
 	sourcemaps?: boolean;
+	/** rojoHub.studioPlugin: keep Rojo-Hub's Studio plugin installed (spec 007); missing means on. */
+	studioPlugin?: boolean;
+	/*
+		rojoHub.studioAutoConnect: "listed" connects a place by itself only when a
+		project file lists it (servePlaceIds, placeId) or it is assigned in the
+		panel; "remembered" (missing) also reconnects a place to the project it
+		last synced with.
+	*/
+	studioAutoConnect?: "listed" | "remembered";
 }
 
 /*
@@ -141,7 +273,7 @@ export interface GroupView {
 	slotIds: string[];
 	/** Groups directly in the group. */
 	groupIds: string[];
-	/** Started (Start or Singleton) and not stopped since. */
+	/** Started (Start, or a start with only) and not stopped since. */
 	active: boolean;
 	/** Every project the group holds, through nested groups, each once. */
 	projectIds: string[];

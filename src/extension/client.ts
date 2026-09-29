@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { pathKey } from "../common/paths";
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Snapshot, type Target, type TargetOption } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -150,5 +150,7 @@ export const client = {
 	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
 	agents: () => call<AgentStatus[]>("GET", "/agents"),
 	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
+	/** Assigns a project to an open Studio place (spec 007); null: back to its project files. */
+	assignPlace: (key: string, slotId: string | null) => call<StudioPlaceView[]>("PUT", `/studio/places/${encodeURIComponent(key)}`, { slotId }),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };

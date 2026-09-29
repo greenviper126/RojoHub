@@ -94,7 +94,8 @@ before(async () => {
 	gitIn(repo, "worktree", "add", "-q", featureTree, "feature");
 
 	service = spawn(process.execPath, [join(__dirname, "..", "service", "main.js")], {
-		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT) },
+		// A throwaway plugins folder: the service installs its Studio plugin (spec 007), never into the real Studio here.
+		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT), ROJO_HUB_STUDIO_PLUGINS: join(root, "Plugins") },
 		stdio: "inherit",
 	});
 	await until("service", () => fetch(api + "/health").then((r) => r.ok).catch(() => false));
@@ -451,6 +452,68 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.ok((await tool("build", { project: slot.projectName, output: "out.rbxl" })).isError, "a relative output is refused");
 
 	await call("DELETE", `/slots/${slot.id}`);
+});
+
+test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, branches, guarded stops, waiting for a claim", async () => {
+	const dir = await makeRepo("Controlly");
+	const other = join(root, "Controlly-other");
+	gitIn(dir, "worktree", "add", "-q", "-b", "other", other);
+	const ok = async (name: string, args: Record<string, unknown>) => {
+		const answer = await tool(name, args);
+		assert.ok(!answer.isError, `${name}: ${answer.text}`);
+		return answer.text;
+	};
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => pathKey(entry.repoPath) === pathKey(dir))!;
+
+	// an agent in an unregistered repo adds it, then starts it
+	assert.match(await ok("add_project", { path: join(dir, "src") }), /Added .* It is stopped/);
+	const name = (await view()).projectName;
+	assert.match(await ok("start", { path: dir }), /Started .*Rojo is serving/);
+	assert.match(await ok("start", { path: dir }), /already serving/, "starting a serving project is harmless");
+	assert.match(await ok("log", { path: dir, lines: 5 }), /Rojo log/);
+	assert.match(await ok("project_files", { path: dir }), /serves default\.project\.json/);
+	assert.match((await tool("set_project_file", { path: dir, file: "default.project.json" })).text, /stop it first/, "a project file changes only while stopped");
+	assert.match(await ok("branches", { path: dir }), /\* main[\s\S]*other: worktree/);
+
+	// stopping is guarded by another worktree's claim
+	await ok("serve_here", { path: other });
+	const guarded = await tool("stop", { path: dir });
+	assert.ok(guarded.isError);
+	assert.match(guarded.text, /claimed by an agent working in Controlly-other/);
+
+	// waiting: a second worktree asks with wait and gets the project as soon as the first releases it
+	const waiting = tool("serve_here", { path: dir, wait: 20 });
+	await new Promise((done) => setTimeout(done, 1200));
+	await ok("release", { path: other });
+	const waited = await waiting;
+	assert.ok(!waited.isError, waited.text);
+	assert.equal((await view()).claim?.label, basename(dir), "the waiter took it when it was released");
+	await ok("release", { path: dir });
+
+	// the holder of a claim may stop its own project; stop_all always needs force
+	assert.ok((await tool("stop_all", {})).isError, "stop_all without force is refused");
+	await ok("serve_here", { path: dir });
+	assert.match(await ok("stop", { path: dir }), /Stopped/, "the claim's holder may stop it");
+	await ok("release", { path: dir });
+
+	// groups
+	assert.match(await ok("create_group", { name: `Control-${process.pid}`, projects: [name] }), /Made group/);
+	assert.match(await ok("start_group", { group: `Control-${process.pid}` }), new RegExp(`Started: ${name}`));
+	assert.match(await ok("status", {}), new RegExp(`Control-${process.pid} \\(id [^)]+\\), running: ${name}`));
+	assert.match(await ok("edit_group", { group: `Control-${process.pid}`, name: `Renamed-${process.pid}` }), /Renamed-/);
+	assert.match(await ok("stop_group", { group: `Renamed-${process.pid}` }), new RegExp(`Stopped: ${name}`));
+	assert.match(await ok("delete_group", { group: `Renamed-${process.pid}` }), /Deleted group/);
+
+	// a new branch in a worktree of its own, served and claimed for it
+	const made = await ok("new_branch", { path: dir, name: "agent-work" });
+	assert.match(made, /Made branch agent-work .* Work in /);
+	const now = await view();
+	assert.equal(now.branch, "agent-work");
+	assert.match(now.claim?.label ?? "", /agent-work/);
+	await tool("release", { project: name, force: true });
+
+	assert.match(await ok("remove_project", { path: dir }), /Removed .* files are untouched/);
+	assert.equal(await view(), undefined);
 });
 
 test("project files: added by default or the only one, changed live with a restart, refused on a clash", async () => {

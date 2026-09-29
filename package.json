@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.18.3",
+  "version": "0.19.6",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -146,12 +146,6 @@
         "title": "Start Group",
         "category": "Rojo-Hub",
         "icon": "$(play)"
-      },
-      {
-        "command": "rojoHub.soloGroup",
-        "title": "Singleton",
-        "category": "Rojo-Hub",
-        "icon": "$(target)"
       },
       {
         "command": "rojoHub.stopGroup",
@@ -345,10 +339,6 @@
           "when": "false"
         },
         {
-          "command": "rojoHub.soloGroup",
-          "when": "false"
-        },
-        {
           "command": "rojoHub.stopGroup",
           "when": "false"
         },
@@ -396,6 +386,26 @@
           "scope": "application",
           "default": true,
           "markdownDescription": "Keep `sourcemap.json` up to date in the worktree each serving project serves, with its pinned `rojo sourcemap --watch`, whether or not luau-lsp or VS Code is open. It writes the same file luau-lsp's extension does, and only where `sourcemap.json` is gitignored or already exists."
+        },
+        "rojoHub.studioPlugin": {
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "markdownDescription": "Keep Rojo-Hub's Studio plugin (Rojo's plugin, changed to connect by itself) in Studio's local plugins folder, and take out other `RojoHub*.rbxm` copies. It syncs each place with the project whose `servePlaceIds` lists it, or the project it last synced with, and reconnects after Rojo restarts. Turn off to manage the plugin yourself; Rojo-Hub then leaves the folder alone."
+        },
+        "rojoHub.studioAutoConnect": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "remembered",
+            "listed"
+          ],
+          "enumDescriptions": [
+            "A place connects by itself when a project file lists it (servePlaceIds, placeId), when it is assigned in Studio places, and to the project it last synced with.",
+            "A place connects by itself only when a project file lists it (servePlaceIds, placeId) or it is assigned in Studio places. Other places are connected by hand every time."
+          ],
+          "default": "remembered",
+          "markdownDescription": "Which Studio places Rojo-Hub's plugin connects by itself. `listed`: only places a project file lists in `servePlaceIds` (or `placeId`), and places you assign in the panel's Studio places. `remembered` also reconnects a place to the project it last synced with."
         },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",
@@ -473,8 +483,8 @@
           },
           {
             "id": "studio",
-            "title": "Connect Studio once",
-            "description": "In Studio, connect the Rojo plugin to localhost and the project's port. Turn on the plugin's Auto Reconnect so the place reconnects by itself next time.",
+            "title": "Connect Studio",
+            "description": "List the project's places in servePlaceIds, then open them in Studio: Rojo-Hub's own Studio plugin syncs them by itself. Assign other places a project in the panel's Studio places section.",
             "media": {
               "markdown": "media/walkthrough/studio.md"
             }
@@ -493,7 +503,7 @@
           {
             "id": "groups",
             "title": "Group projects",
-            "description": "Groups hold projects and other groups. Start runs them all; Singleton runs just that group (after asking); Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
+            "description": "Groups hold projects and other groups. Start runs them all; Stop keeps projects another running group uses.\n[New Group](command:rojoHub.newGroup)",
             "media": {
               "markdown": "media/walkthrough/groups.md"
             },
