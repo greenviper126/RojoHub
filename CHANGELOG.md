@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.3
+
+- The panel's **Active ports** section is gone: which projects serve shows on their cards and the
+  Projects header, and each card's port copies with a click. **Studio places** took over the one
+  thing left: a place that doesn't connect by itself lists the serving projects' ports to connect by
+  hand, and with no place open it says how many projects are serving.
+
 ## 0.19.2
 
 **Agents control Rojo-Hub.** Rojo-Hub is mainly for several agents working at once, so agents now

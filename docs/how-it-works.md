@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.2, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.3, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -154,17 +154,17 @@ every two seconds until it is back.
 |---|---|
 | ![Rojo-Hub panel with projects, groups and settings](images/panel-overview.png) | ![Branch picker open inside a project card](images/panel-branch-picker.png) |
 
-It has six sections that fold open and closed (Projects, Groups, Studio places, Active ports, Port
-settings and Agent access), and a footer. **Projects, Groups, Studio places and Active ports start open; Port settings and Agent
+It has five sections that fold open and closed (Projects, Groups, Studio places, Port settings and
+Agent access), and a footer. **Projects, Groups and Studio places start open; Port settings and Agent
 access start folded.** Within Projects, **only the first item starts open**: the first workspace
 (or, with no workspaces, the first project card); the rest start folded. Whatever you fold or open
-is remembered. Opening a project from elsewhere (a group, Active ports, the status bar) unfolds its
+is remembered. Opening a project from elsewhere (a group, the status bar) unfolds its
 card and its workspace.
 
 **Collapse All** (the icon at the top right of the panel's title bar, as in the Explorer) folds
 everything except what is running: Projects and Groups stay open, and inside them the cards of
 serving or starting projects, the workspaces that hold them, and running groups stay open. Every
-other card and group folds, and Active ports and Port settings fold. Agent access is left as it was.
+other card and group folds, and Port settings folds. Agent access is left as it was.
 
 **Right-clicking a header** that folds (a section, a workspace, a project card or a group) opens a
 menu in place of Cut/Copy/Paste:
@@ -187,14 +187,15 @@ In a narrow sidebar the panel drops things in steps so names stay readable and n
 card's edge (the widths are the sidebar's, roughly; the panel measures its own content width):
 
 - below about 320px: a group's *Running* pill and Agent access's status chips hide;
-- below about 280px: counts lose their words ("2/5"), the footer reads "3/5", Active ports' addresses
-  lose `localhost`, the project file row shows just `default` or `test` without its *project file*
+- below about 280px: counts lose their words ("2/5"), the footer reads "3/5", the hand-connect ports in
+  Studio places lose their project names, the project file row shows just `default` or `test` without its *project file*
   label, the card's Stop and Start and Agent access's *Copy commands* and *Copy prompt* become icons,
   the window badges, a folded card's error or warning icon (the card stays tinted) and *not
   added*/*shown above* hide, and a group's rename and delete show only on hover;
 - below about 270px: the card's status pill shrinks to its icon, and a workspace's *Group* button to
   its icon;
-- below about 230px: ports leave project headers and group members (Active ports still lists them),
+- below about 230px: ports leave project headers and group members (*Copy Port* in a project's menu
+  still copies it),
   the footer's Refresh hides and Stop all becomes an icon.
 
 VS Code lets a sidebar be dragged as narrow as you like, so below 170px the panel stops shrinking and
@@ -290,12 +291,11 @@ projects are serving (green when all are). Inside:
 plugin, its name (and *unsaved*), what it syncs with or waits for, a status pill (*Synced*,
 *Connecting*, *Waiting*, *Assign a project*, *Rojo too old*, *Reopen the place*), and a list to assign
 it a project; *Automatic* follows its project files and its last sync (see
-[Connecting Studio](#7-connecting-studio)). It says so when no place is open.
-
-**Active ports** (below Studio places; the header shows how many): every project serving right now, lowest
-port first, with its status light, name and branch, and its address `localhost:<port>`; clicking
-the address copies the port number, for connecting by hand. It says *Nothing
-serving* when nothing is.
+[Connecting Studio](#7-connecting-studio)). A place that does not connect by itself (*Assign a
+project*) also gets an *or connect by hand:* line with every serving project's port to copy, for
+Rojo's own plugin or typing it in. With no place open it says so, and how many projects are serving.
+(0.19.3 removed the *Active ports* section this replaced: which projects serve shows on their cards
+and the Projects header, and each card's port copies with a click.)
 
 **Agent access** (below Port settings, folded by default; the header shows how many agents can use
 Rojo-Hub): a switch per AI agent, with a chip saying where it stands (*Connected*, *Off*, *Not

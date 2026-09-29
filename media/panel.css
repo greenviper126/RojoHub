@@ -1166,18 +1166,6 @@ button:focus-visible {
 	opacity: 0.7;
 }
 
-/* ---------- active ports ---------- */
-
-.card.ports {
-	gap: 1px;
-	padding: 4px;
-}
-
-.card.ports .member {
-	min-height: 38px;
-	padding: 3px 6px;
-}
-
 .two-line {
 	display: flex;
 	flex-direction: column;
@@ -1735,4 +1723,18 @@ button:focus-visible {
 
 .studio-place .pill {
 	flex: none;
+}
+
+.studio-places .by-hand {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 10px;
+	padding: 0 4px 4px 7px;
+}
+
+.studio-places .by-hand-port {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 }

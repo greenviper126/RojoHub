@@ -812,9 +812,15 @@ const PLACE_STATUS: Record<StudioPlaceView["status"], { icon: string; kind: stri
 
 function studioPlaces(): string {
 	const places = state!.studioPlaces;
+	const serving = state!.slots.filter((slot) => slot.state === "running");
+	const servingText = serving.length ? ` ${serving.length} project${serving.length === 1 ? " is" : "s are"} serving.` : " Nothing is serving.";
 	if (places.length === 0) {
-		return `<div class="empty compact">${icon("device-desktop", "empty-icon")}<p class="muted small">No Studio place is open with Rojo-Hub's plugin. Open one and it shows here; a place listed in a project's servePlaceIds syncs by itself.</p></div>`;
+		return `<div class="empty compact">${icon("device-desktop", "empty-icon")}<p class="muted small">No Studio place is open with Rojo-Hub's plugin. Open one and it shows here; a place listed in a project's servePlaceIds syncs by itself.${servingText}</p></div>`;
 	}
+	/* Where a place does not connect by itself, the serving projects' ports, for connecting by hand (Rojo's own plugin too). */
+	const byHand = serving.length
+		? `<div class="by-hand muted small">or connect by hand: ${serving.map((slot) => `<span class="by-hand-port" title="${escape(slot.projectName)}">${escape(slot.projectName)} ${portChip(slot)}</span>`).join("")}</div>`
+		: "";
 	const rows = places
 		.map((place) => {
 			const shown = PLACE_STATUS[place.status];
@@ -833,7 +839,7 @@ function studioPlaces(): string {
 					<option value=""${place.assigned ? "" : " selected"}>Automatic</option>
 					${options}
 				</select>
-			</div>`;
+			</div>${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
 		})
 		.join("");
 	return `<div class="card studio-places">${rows}</div>`;
@@ -952,21 +958,6 @@ function projectsList(slots: SlotView[], filtering = false): string {
 	Every project serving right now, with its address to copy: the quickest way
 	to get a port into Studio's Rojo plugin.
 */
-function activePorts(serving: SlotView[]): string {
-	if (serving.length === 0) return `<div class="empty compact">${icon("plug", "empty-icon")}<p class="muted small">Nothing serving. Start a project or a group and its port shows here.</p></div>`;
-	const rows = [...serving]
-		.sort((a, b) => a.port - b.port)
-		.map(
-			(slot) => `<div class="member active-port">
-				${dot(slot)}
-				<span class="grow two-line"><button class="link ellipsis" data-action="goto" data-id="${escape(slot.id)}" title="Show ${escape(slot.projectName)}">${escape(slot.projectName)}</button><span class="sub ellipsis">${escape(slot.targetLabel)}</span></span>
-				${portChip(slot, true)}
-			</div>`,
-		)
-		.join("");
-	return `<div class="card ports">${rows}</div>`;
-}
-
 /* ---------- whole panel ---------- */
 
 function render(): void {
@@ -1052,7 +1043,6 @@ function render(): void {
 		${section("projects", "Projects", "server-environment", slots.length ? `${servingCount}/${slots.length} serving` : "", (slots.length ? iconButton("toggle-filter", ui.filter === null ? "filter" : "filter-filled", ui.filter === null ? "Filter projects" : "Close the filter") : "") + iconButton("open-adder", "add", "Add a project"), projectsBody)}
 		${section("groups", "Groups", "layers", state.groups.length ? String(state.groups.length) : "", iconButton("open-new-group", "add", "New group"), groupsBody)}
 		${section("studio", "Studio places", "device-desktop", state.studioPlaces.length ? String(state.studioPlaces.length) : "", "", studioPlaces())}
-		${section("ports", "Active ports", "plug", serving.length ? String(serving.length) : "", "", activePorts(serving))}
 		${section("settings", "Port settings", "settings-gear", "", "", settingsBody())}
 		${section("agents", "Agent access", "robot", agentCount ? String(agentCount) : "", "", agentsBody())}
 		<footer class="footer">${footer}</footer>`,
@@ -1799,7 +1789,6 @@ function collapseAll(): void {
 	const live = new Set(state.slots.filter((slot) => slot.state === "running" || slot.state === "starting").map((slot) => slot.id));
 	ui.collapsed.projects = false;
 	ui.collapsed.groups = false;
-	ui.collapsed.ports = true;
 	ui.collapsed.settings = true;
 	for (const slot of state.slots) ui.collapsed[`card:${slot.id}`] = !live.has(slot.id);
 	const inWorkspace = new Set<string>();

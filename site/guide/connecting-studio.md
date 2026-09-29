@@ -60,8 +60,9 @@ a project and the place syncs with it at once. Assign a project when:
 - **two serving projects claim the place** and it has not synced with either. Your assignment is
   kept for that place.
 
-In Studio, a line under the Rojo window's buttons shows the same answer; the choices are all in VS
-Code.
+A place that doesn't connect by itself also shows every serving project's port under its row, to
+copy and connect by hand. In Studio, a line under the Rojo window's buttons shows the same answer;
+the choices are all in VS Code.
 
 ::: warning Rojo 7.7 or newer
 The plugin is Rojo 7.7's and speaks only to Rojo 7.7 or newer. A project pinning an older Rojo says
