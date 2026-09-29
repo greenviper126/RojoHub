@@ -34,8 +34,10 @@ local PROTOCOL = 1
 local RETRY_SECONDS = { 1, 2, 5, 10 }
 -- How often the connect decision is looked at again (sessions end, pages change).
 local TICK_SECONDS = 1
--- A failed auto-connect to one session is not tried again sooner than this.
+-- A failed auto-connect to one session is not tried again sooner than this,
+-- nor more than SESSION_TRIES times.
 local SESSION_RETRY_SECONDS = 10
+local SESSION_TRIES = 3
 -- If the service has not answered by then, Rojo's own Auto Reconnect runs instead.
 local FALLBACK_SECONDS = 3
 
@@ -54,7 +56,7 @@ function Hub.new(app)
 		nextAttempt = 0,
 		-- A session the user ended or declined; not connected to again by itself.
 		declined = nil,
-		-- The last auto-connect: { sessionId, at }.
+		-- The last auto-connect: { sessionId, at, tries }.
 		attempt = nil,
 		-- What was last reported to the service as synced, to send only changes.
 		reported = nil,
@@ -259,7 +261,7 @@ function Hub:report()
 	elseif self.reportedSession then
 		-- The session just ended. The service may still name it for a moment (its rojo
 		-- is stopping), so it counts as tried: only a new session is connected at once.
-		self.attempt = { sessionId = self.reportedSession, at = os.clock() }
+		self.attempt = { sessionId = self.reportedSession, at = os.clock(), tries = 1 }
 	end
 	self.reported = key
 	self.reportedSession = connected and connected.sessionId
@@ -297,11 +299,19 @@ function Hub:evaluate()
 	if self.declined == target.sessionId then
 		return
 	end
-	local attempt = self.attempt
-	if attempt and attempt.sessionId == target.sessionId and os.clock() - attempt.at < SESSION_RETRY_SECONDS then
+	if not app:isSyncLockAvailable() then
+		-- Team Create: a teammate is syncing this place. Trying would only show an error each time.
 		return
 	end
-	self.attempt = { sessionId = target.sessionId, at = os.clock() }
+	local attempt = self.attempt
+	local tries = 0
+	if attempt and attempt.sessionId == target.sessionId then
+		if os.clock() - attempt.at < SESSION_RETRY_SECONDS or attempt.tries >= SESSION_TRIES then
+			return
+		end
+		tries = attempt.tries
+	end
+	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = tries + 1 }
 
 	Log.info("Rojo-Hub: connecting to {} on port {}", target.projectName, target.port)
 	app.setHost("localhost")
