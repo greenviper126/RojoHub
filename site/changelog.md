@@ -2,6 +2,12 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.20.2
+
+- Shorter documentation: the README and the documentation site were rewritten to be brief, and the
+  site's guide merged into six pages (Get started, Projects, Connecting Studio, Switching branches,
+  Groups, Agents). No change in behaviour.
+
 ## 0.20.1
 
 - Credits the open-source work Rojo-Hub ships: `THIRD-PARTY-NOTICES.md` (in the extension and
