@@ -149,6 +149,7 @@ export class Hub {
 				this.registry.save();
 			},
 		});
+		this.studio.rememberedAutoConnect = loadPortSettings(home).studioAutoConnect !== "listed";
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));
@@ -431,6 +432,7 @@ export class Hub {
 	setPortSettings(settings: PortSettings): void {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		savePortSettings(this.home, settings);
+		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
 		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
 		for (const slot of this.registry.slots) void this.enqueue(slot, () => this.syncSourcemap(slot)).catch(() => undefined);

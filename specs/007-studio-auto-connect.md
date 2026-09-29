@@ -1,6 +1,6 @@
 # 007 — Studio auto-connect
 
-Status: **implemented in 0.19.1** (0.19.0 was only a local build) (branch `feat/studio-auto-connect`; see *Checked in Studio* for what was tried live). Asked for by Viper: "i want to be able to auto connect from both sides", "make a
+Status: **implemented in 0.19.6** (0.19.0 was only a local build) (branch `feat/studio-auto-connect`; see *Checked in Studio* for what was tried live). Asked for by Viper: "i want to be able to auto connect from both sides", "make a
 custom rojo plugin on the roblox side that just pulls the rojo code but we modify it ... we use that
 to auto connect and we listen to vscode on what were connecting too", "put that all in a folder
 called plugin", "if rojo disconnects we try to run the port again", and "if its possible just
@@ -36,6 +36,13 @@ with a list to assign it a project (`PUT /studio/places/:key`). An assignment co
 place: saved places keep it by place ID (`placeChoices`), an unsaved place (ID 0 or a template's,
 shared by all of them) only while its window is open. This replaced a *Sync with…* picker in the
 plugin, which needed a prop and a callback threaded through Rojo's page; the protocol went to 2.
+
+### Only listed places (setting)
+
+Asked for by Viper: "can you put a setting in the extension to only auto sync if a place id is
+provided in the json?" `rojoHub.studioAutoConnect`: `"remembered"` (default) as below; `"listed"`
+skips step 3 (the remembered project), so only a place a project file names, or one assigned in the
+panel (an explicit choice, per place), connects by itself.
 
 ### Where the connect information comes from
 

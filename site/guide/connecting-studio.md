@@ -14,6 +14,12 @@ plugin tells Rojo-Hub which place it is, and Rojo-Hub answers, in this order:
 3. the project whose **`placeId`** is the place's;
 4. the project this place **last synced with**.
 
+::: tip Only listed places
+Set [`rojoHub.studioAutoConnect`](/reference/settings#rojohub-studioautoconnect) to `listed` and a
+place connects by itself only when a project file lists it (or you assign it in Studio places). Any
+other place you connect by hand each time: type the project's port into the Rojo window.
+:::
+
 So the easiest setup is to list your places in the project file, the way Rojo already supports:
 
 ```json

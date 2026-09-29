@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.19.5",
+  "version": "0.19.6",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -392,6 +392,20 @@
           "scope": "application",
           "default": true,
           "markdownDescription": "Keep Rojo-Hub's Studio plugin (Rojo's plugin, changed to connect by itself) in Studio's local plugins folder, and take out other `RojoHub*.rbxm` copies. It syncs each place with the project whose `servePlaceIds` lists it, or the project it last synced with, and reconnects after Rojo restarts. Turn off to manage the plugin yourself; Rojo-Hub then leaves the folder alone."
+        },
+        "rojoHub.studioAutoConnect": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "remembered",
+            "listed"
+          ],
+          "enumDescriptions": [
+            "A place connects by itself when a project file lists it (servePlaceIds, placeId), when it is assigned in Studio places, and to the project it last synced with.",
+            "A place connects by itself only when a project file lists it (servePlaceIds, placeId) or it is assigned in Studio places. Other places are connected by hand every time."
+          ],
+          "default": "remembered",
+          "markdownDescription": "Which Studio places Rojo-Hub's plugin connects by itself. `listed`: only places a project file lists in `servePlaceIds` (or `placeId`), and places you assign in the panel's Studio places. `remembered` also reconnects a place to the project it last synced with."
         },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",

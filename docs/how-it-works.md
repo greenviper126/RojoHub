@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.5, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.19.6, 2026-09-28. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -539,7 +539,9 @@ plugin tells the service its `PlaceId`, and the service answers, in this order:
 1. the project assigned to the place in the panel's **Studio places** section (see below);
 2. a project whose `servePlaceIds` lists the place;
 3. a project whose `placeId` is the place's;
-4. the project this place last synced with. The service records it (`placeSynced` in `registry.json`)
+4. the project this place last synced with, unless `rojoHub.studioAutoConnect` is `"listed"`: then
+   only a place a project file lists, or one you assign, connects by itself, and any other place is
+   connected by hand each time. The service records it (`placeSynced` in `registry.json`)
    whenever a place with the plugin syncs; the plugin's own per-place record, like Rojo's, is only the
    fallback, since every open Studio shares that one settings value and overwrites the others' entries.
 
@@ -1052,6 +1054,7 @@ All are **user settings that apply to every project and window**; a workspace ca
 | `rojoHub.portRange` | `"34873-35872"` | Ports picked from, as `first-last` |
 | `rojoHub.excludedPorts` | `[]` | Ports never given to a project by hashing: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 are always excluded. A `servePort` still wins (see [Ports](#6-ports)). An invalid entry is ignored with a warning on every card. |
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
+| `rojoHub.studioAutoConnect` | `"remembered"` | Which places the Studio plugin connects by itself: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) and places assigned in Studio places; `"remembered"` also a place's last synced project (see [Connecting Studio](#7-connecting-studio)). |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies (see [Connecting Studio](#7-connecting-studio)). Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents can use Rojo-Hub's MCP server (see [Agents](#10-agents)). Shown as checkboxes. Not synced by Settings Sync. |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |

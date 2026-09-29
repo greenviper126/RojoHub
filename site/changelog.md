@@ -2,6 +2,13 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.19.6
+
+- New setting `rojoHub.studioAutoConnect`: set it to `listed` and a Studio place connects by itself
+  only when a project file lists it (`servePlaceIds`, `placeId`) or you assign it in Studio places;
+  other places are connected by hand. The default, `remembered`, also reconnects a place to the
+  project it last synced with.
+
 ## 0.19.5
 
 - Rojo's confirmation is asked **once per place and project**: the first time a place syncs with a

@@ -584,6 +584,13 @@ test("Studio places: servePlaceIds, then placeId, then the remembered project (s
 	assert.equal(remembered.target?.reason, "remembered");
 	assert.equal(matchPlace(place(999), [lobby, byPlaceId, old], null).status, "none");
 	assert.equal(matchPlace(place(111), [lobby], null).target?.slotId, "lobby", "one project serves several places");
+
+	// rojoHub.studioAutoConnect "listed": the remembered project does not connect by itself; listed and assigned still do
+	const listedOnly = matchPlace(place(999, "old"), [lobby, byPlaceId, old], null, false);
+	assert.equal(listedOnly.status, "none");
+	assert.match(listedOnly.message, /only listed places connect by themselves/);
+	assert.equal(matchPlace(place(111, "old"), [lobby, old], null, false).target?.slotId, "lobby");
+	assert.equal(matchPlace(place(999, "old"), [lobby, old], "old", false).target?.reason, "assigned");
 });
 
 test("Studio places: an assignment from VS Code wins, for any place, saved or not", () => {

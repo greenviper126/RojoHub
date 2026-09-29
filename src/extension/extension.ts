@@ -827,6 +827,7 @@ async function pushSettings(): Promise<void> {
 			excludedPorts: config.get<(number | string)[]>("excludedPorts", []),
 			sourcemaps: config.get<boolean>("sourcemaps", true),
 			studioPlugin: config.get<boolean>("studioPlugin", true),
+			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }

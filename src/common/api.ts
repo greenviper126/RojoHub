@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.19.5";
+export const SERVICE_VERSION = "0.19.6";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -253,6 +253,13 @@ export interface PortSettings {
 	sourcemaps?: boolean;
 	/** rojoHub.studioPlugin: keep Rojo-Hub's Studio plugin installed (spec 007); missing means on. */
 	studioPlugin?: boolean;
+	/*
+		rojoHub.studioAutoConnect: "listed" connects a place by itself only when a
+		project file lists it (servePlaceIds, placeId) or it is assigned in the
+		panel; "remembered" (missing) also reconnects a place to the project it
+		last synced with.
+	*/
+	studioAutoConnect?: "listed" | "remembered";
 }
 
 /*

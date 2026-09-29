@@ -10,6 +10,7 @@ workspace cannot override them. Open them with *File → Preferences → Setting
 | [`rojoHub.excludedPorts`](#rojohub-excludedports) | `[]` | Ports never given to a project |
 | [`rojoHub.sourcemaps`](#rojohub-sourcemaps) | `true` | Keep `sourcemap.json` up to date |
 | [`rojoHub.studioPlugin`](#rojohub-studioplugin) | `true` | Keep Rojo-Hub's Studio plugin installed |
+| [`rojoHub.studioAutoConnect`](#rojohub-studioautoconnect) | `"remembered"` | Which places connect by themselves |
 | [`rojoHub.agents`](#rojohub-agents) | `{ "vscode": true, "claudeCode": false, "codex": false }` | Which agents can use Rojo-Hub |
 | [`rojoHub.notifyOnStudioDisconnect`](#rojohub-notifyonstudiodisconnect) | `false` | Message when Studio disconnects |
 
@@ -50,6 +51,18 @@ Keep `sourcemap.json` up to date in the worktree each serving project serves, wi
 Keep Rojo-Hub's Studio plugin (`RojoHub.rbxm`) in Studio's local plugins folder, up to date, and take
 out other `RojoHub*.rbxm` copies. Off: Rojo-Hub leaves the plugins folder alone, and uninstalling
 Rojo-Hub does not remove the plugin. See [Connecting Studio](/guide/connecting-studio).
+
+## `rojoHub.studioAutoConnect`
+
+- **Default:** `"remembered"`
+
+Which Studio places Rojo-Hub's plugin connects by itself.
+
+- `"listed"`: only a place a project file lists in `servePlaceIds` (or `placeId`), and a place you
+  assign in the panel's Studio places. Every other place is connected by hand each time.
+- `"remembered"`: those, and also a place that synced with a project before, to that project.
+
+See [Connecting Studio](/guide/connecting-studio).
 
 ## `rojoHub.agents`
 

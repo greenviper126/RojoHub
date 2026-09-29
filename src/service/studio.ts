@@ -74,7 +74,7 @@ export type PlaceAnswer = Omit<StudioMatch, "type" | "serviceVersion"> & { proje
 	waits for it while its rojo restarts: it is never handed to another claimant
 	that happens to be the only one serving at that moment (seen live, spec 007).
 */
-export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned: string | null): PlaceAnswer {
+export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned: string | null, remembered = true): PlaceAnswer {
 	const running = (project: PlaceCandidate) => project.state === "running" && project.sessionId !== null;
 
 	const decide = (project: PlaceCandidate, reason: Reason): PlaceAnswer => {
@@ -129,6 +129,8 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 
 	const open = candidates.filter((project) => !project.blockedPlaceIds?.includes(place.placeId));
 	for (const tier of TIERS) {
+		// rojoHub.studioAutoConnect "listed": only what a project file names, or the panel assigned, connects by itself.
+		if (tier.reason === "remembered" && !remembered) continue;
 		const claiming = open.filter((project) => tier.claims(project, place));
 		if (claiming.length === 0) continue;
 		const own = claiming.length > 1 && place.remembered !== null ? claiming.find((project) => project.projectName === place.remembered) : undefined;
@@ -154,7 +156,9 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 	}
 	return {
 		status: "none",
-		message: `No project lists this place in servePlaceIds, and it has not synced with one. ${IN_VS_CODE}`,
+		message: remembered
+			? `No project lists this place in servePlaceIds, and it has not synced with one. ${IN_VS_CODE}`
+			: `No project lists this place in servePlaceIds, and only listed places connect by themselves (rojoHub.studioAutoConnect). Connect by hand, or ${IN_VS_CODE.charAt(0).toLowerCase()}${IN_VS_CODE.slice(1)}`,
 		target: null,
 		projectId: null,
 	};
@@ -211,6 +215,8 @@ const noMemory: PlaceMemory = { assigned: () => null, assign: () => undefined, s
 */
 export class StudioLinks {
 	private readonly studios = new Set<Studio>();
+	/** rojoHub.studioAutoConnect: false ("listed") connects only places a project file names, or that are assigned. */
+	rememberedAutoConnect = true;
 	/** Assignments of unsaved places, by window: they share place ID 0, so they are kept only while the window is open. */
 	private readonly unsavedAssigned = new Map<string, string>();
 
@@ -351,7 +357,7 @@ export class StudioLinks {
 			};
 		} else {
 			const remembered = (hello.unsaved ? null : this.memory.synced(hello.placeId)) ?? hello.remembered;
-			studio.answer = matchPlace({ ...hello, remembered }, candidates, this.assignedFor(studio));
+			studio.answer = matchPlace({ ...hello, remembered }, candidates, this.assignedFor(studio), this.rememberedAutoConnect);
 			const target = studio.answer.target;
 			if (target && !hello.unsaved) studio.answer.target = { ...target, accepted: this.memory.accepted(hello.placeId, target.projectName) };
 		}

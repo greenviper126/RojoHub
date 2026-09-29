@@ -199,6 +199,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					excludedPorts,
 					sourcemaps: input.sourcemaps !== false,
 					studioPlugin: input.studioPlugin !== false,
+					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 				});
 				return send(response, 200, { ok: true });
 			}
