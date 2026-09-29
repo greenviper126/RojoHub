@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { pathKey } from "../common/paths";
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type PlaceOpened, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -152,5 +152,10 @@ export const client = {
 	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
 	/** Assigns a project to an open Studio place (spec 007); null: back to its project files. */
 	assignPlace: (key: string, slotId: string | null) => call<StudioPlaceView[]>("PUT", `/studio/places/${encodeURIComponent(key)}`, { slotId }),
+	/** A project's places in Studio (spec 009); refused while rojoHub.openPlaces is off. */
+	openPlace: (id: string, placeId: number) => call<PlaceOpened>("POST", `/slots/${encodeURIComponent(id)}/places/${placeId}/open`),
+	closePlace: (id: string, placeId: number) => call<{ ok: true }>("POST", `/slots/${encodeURIComponent(id)}/places/${placeId}/close`),
+	reopenPlace: (id: string, placeId: number) => call<{ ok: true }>("POST", `/slots/${encodeURIComponent(id)}/places/${placeId}/reopen`),
+	openAllPlaces: (id: string) => call<(PlaceOpened | { placeId: number; error: string })[]>("POST", `/slots/${encodeURIComponent(id)}/places/open-all`),
 	shutdown: (stopServing: boolean) => call<{ ok: true }>("POST", "/shutdown", { stopServing }),
 };

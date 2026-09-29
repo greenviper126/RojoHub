@@ -690,3 +690,39 @@ test("robustness: events stream, racing adds, work after a remove, a deleted ser
 	stream.abort();
 	await reading;
 });
+
+test("opening places (spec 009): off by default, only a project's own places, several need a placeId", async () => {
+	// Refusals only: nothing here may open Studio.
+	const dir = await makeRepo("Placey");
+	const file = join(dir, "default.project.json");
+	const project = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+	writeFileSync(file, JSON.stringify({ ...project, servePlaceIds: [111, 222], blockedPlaceIds: [222], placeId: 333 }));
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	assert.deepEqual(
+		slot.listedPlaces?.map((place) => [place.placeId, place.open]),
+		[
+			[111, false],
+			[333, false],
+		],
+		"servePlaceIds then placeId, never a blocked place",
+	);
+
+	await assert.rejects(call("POST", `/slots/${slot.id}/places/111/open`), /turned off in Rojo-Hub's settings \(rojoHub\.openPlaces\)/);
+	await assert.rejects(call("POST", `/slots/${slot.id}/places/open-all`), /turned off in Rojo-Hub's settings/);
+	const off = await tool("open_place", { project: slot.projectName, placeId: 111 });
+	assert.ok(off.isError);
+	assert.match(off.text, /rojoHub\.openPlaces/);
+
+	await call("PUT", "/settings", { openPlaces: true });
+	try {
+		await assert.rejects(call("POST", `/slots/${slot.id}/places/999/open`), /Place 999 is not one of .*111, 333/);
+		await assert.rejects(call("POST", `/slots/${slot.id}/places/222/open`), /not one of/, "a blocked place is not the project's");
+		const several = await tool("open_place", { project: slot.projectName });
+		assert.ok(several.isError);
+		assert.match(several.text, /several places; pass placeId as one of: .*111.*333/);
+		assert.match((await tool("status", {})).text, /places: .*111.*open_place opens one/);
+	} finally {
+		await call("PUT", "/settings", {});
+		await call("DELETE", `/slots/${slot.id}`);
+	}
+});

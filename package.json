@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.19.7",
+  "version": "0.20.0",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -406,6 +406,12 @@
           ],
           "default": "remembered",
           "markdownDescription": "Which Studio places Rojo-Hub's plugin connects by itself. `listed`: only places a project file lists in `servePlaceIds` (or `placeId`), and places you assign in the panel's Studio places. `remembered` also reconnects a place to the project it last synced with."
+        },
+        "rojoHub.openPlaces": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
         },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",

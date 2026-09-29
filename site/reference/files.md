@@ -9,7 +9,8 @@ Everything Rojo-Hub keeps lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, project file, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), and the panel's display order |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service recovered from the `.bak` |
-| `settings.json` | The settings last sent by VS Code (port range, excluded ports, sourcemaps) |
+| `settings.json` | The settings last sent by VS Code (port range, excluded ports, sourcemaps, Studio settings) |
+| `universes.json` | Each opened place's universe ID and name, looked up from Roblox once; safe to delete |
 | `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
 | `service.log` | Service start and stop, recovered errors, a damaged registry, git problems |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |

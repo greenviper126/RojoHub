@@ -20,7 +20,7 @@ curl http://127.0.0.1:34870/health
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
 | `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order }`: once at once, then on every change, within 150 ms |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps? }` | Settings (sent by the extension). Replaces all three: a missing field goes back to its default. |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings (sent by the extension). Replaces them all: a missing field goes back to its default. |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | The panel's display order: `{ projects, groups }` |
@@ -42,6 +42,10 @@ In the API a project is a *slot*.
 | `GET /slots/:id/targets` | | Worktrees and branches it can serve, from the service's cache |
 | `POST /slots/:id/fetch` | | `git fetch --all --prune`, then the fresh list |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{ kind: "worktree", path }` or `{ kind: "branch", ref }`. Clears any agent claim. |
+| `POST /slots/:id/places/:placeId/open` | | Open one of the project's places in Studio, unless it is open (`outcome`: `opened` or `already-open`). Refused (409) while `rojoHub.openPlaces` is off |
+| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close; Studio still asks about unsaved changes |
+| `POST /slots/:id/places/:placeId/reopen` | | Close it, then open it again once that Studio has exited |
+| `POST /slots/:id/places/open-all` | | Open each of the project's places that is not open |
 | `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output`, an absolute `.rbxl` or `.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |

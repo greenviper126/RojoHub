@@ -54,6 +54,8 @@ let lastGroups: GroupView[] = [];
 let lastStudioPlugin: StudioPluginStatus | null = null;
 /** Open Studio places, from the last snapshot (spec 007). */
 let lastStudioPlaces: StudioPlaceView[] = [];
+/** rojoHub.openPlaces as the service has it (spec 009). */
+let lastOpenPlaces = false;
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -205,6 +207,7 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastOrder = snapshot.order;
 	lastStudioPlugin = snapshot.studioPlugin ?? null;
 	lastStudioPlaces = snapshot.studioPlaces ?? [];
+	lastOpenPlaces = snapshot.openPlaces === true;
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
 	render();
@@ -299,6 +302,8 @@ function render(): void {
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
 		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
+		// The service's copy of rojoHub.openPlaces decides; a service older than 0.20.0 cannot open places.
+		openPlaces: serviceHealth.running && lastOpenPlaces,
 	});
 	updateStatus();
 }
@@ -828,6 +833,7 @@ async function pushSettings(): Promise<void> {
 			sourcemaps: config.get<boolean>("sourcemaps", true),
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
+			openPlaces: config.get<boolean>("openPlaces", false),
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
@@ -1003,6 +1009,10 @@ function trackedKey(message: FromPanel): { key: string; count: number } | null {
 			return { key: "reorder", count: 1 };
 		case "setAgent":
 			return { key: `agent:${message.id}`, count: 1 };
+		case "placeAction":
+			return { key: `place:${message.id}:${message.placeId}`, count: 1 };
+		case "openAllPlaces":
+			return { key: `places:${message.id}`, count: 1 };
 		case "addProject":
 			return { key: "add", count: 1 };
 		case "addWorkspace":
@@ -1189,6 +1199,30 @@ async function handlePanel(message: FromPanel): Promise<void> {
 		case "agentNudge":
 			hideAgentNudge(hubHome, message.action);
 			return refresh();
+		case "placeAction": {
+			const name = slot?.listedPlaces?.find((place) => place.placeId === message.placeId)?.placeName ?? `place ${message.placeId}`;
+			await act(`place:${message.id}:${message.placeId}`, async () => {
+				if (message.action === "open") {
+					const opened = await client.openPlace(message.id, message.placeId);
+					if (opened.outcome === "already-open") void vscode.window.showInformationMessage(`Rojo-Hub: ${opened.placeName ?? name} is already open in Studio.`);
+					else void vscode.window.setStatusBarMessage(`$(device-desktop) Rojo-Hub is opening ${opened.placeName ?? name} in Studio`, 5000);
+				} else if (message.action === "close") {
+					await client.closePlace(message.id, message.placeId);
+				} else {
+					await client.reopenPlace(message.id, message.placeId);
+				}
+			});
+			return;
+		}
+		case "openAllPlaces":
+			await act(`places:${message.id}`, async () => {
+				const results = await client.openAllPlaces(message.id);
+				const failed = results.filter((result): result is { placeId: number; error: string } => "error" in result);
+				const opened = results.filter((result) => "outcome" in result && result.outcome === "opened").length;
+				if (failed.length > 0) void vscode.window.showErrorMessage(`Rojo-Hub: ${failed.map((result) => result.error).join(" ")}`);
+				void vscode.window.setStatusBarMessage(opened > 0 ? `$(device-desktop) Rojo-Hub is opening ${opened} place${opened === 1 ? "" : "s"} in Studio` : "Rojo-Hub: every place is already open", 5000);
+			});
+			return;
 		case "assignPlace":
 			await act(`place:${message.key}`, async () => {
 				lastStudioPlaces = await client.assignPlace(message.key, message.slotId);
@@ -1226,6 +1260,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			agentNudge: false,
 			studioPlugin: null,
 			studioPlaces: [],
+			openPlaces: false,
 		});
 		void vscode.window.showWarningMessage(message);
 		return;

@@ -89,6 +89,7 @@ once, in Orca worktrees or plain git ones, so an agent should not have to stop a
 | `create_group` / `edit_group` / `delete_group` | Makes, renames, changes the members of, or deletes a group. |
 | `log` | The last lines of a project's Rojo log. |
 | `wait_for_studio` | Waits until a Studio place is synced to the project's session, and names it. |
+| `open_place` | Opens one of a project's places in Studio, unless it is already open. Only while [`rojoHub.openPlaces`](/reference/settings#rojohub-openplaces) is on; agents cannot close places. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
 
@@ -123,6 +124,7 @@ released or runs out. Several agents waiting for one project are served in the o
 | `add_project` | `path`, `project_file?` |
 | `set_project_file` | `file`, `path?`, `project?` |
 | `wait_for_studio` | `path?`, `project?`, `timeout?` |
+| `open_place` | `placeId?` (needed when the project has several places), `path?`, `project?` |
 | `start_group` / `stop_group` | `group`, `only?` (start), `force?` |
 | `create_group` | `name`, `projects?`, `groups?` |
 | `edit_group` | `group`, `name?`, `add_projects?`, `remove_projects?`, `add_groups?`, `remove_groups?` |

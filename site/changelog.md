@@ -2,6 +2,16 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.20.0
+
+- **Open places from VS Code** (off by default; turn on `rojoHub.openPlaces`). Each project card
+  lists the places its project file names, with whether each is open in Studio, and **Open**, or
+  **Close** and **Reopen**. A place that is already open is never opened a second time. Close asks
+  Studio to close, so it still asks about unsaved changes; Reopen waits for Studio to exit, then opens
+  the place again, which is how an open place picks up a new plugin.
+- Agents get `open_place`, which opens one of a project's places unless it is open. Agents cannot
+  close places. `status` lists each project's places and whether they are open.
+
 ## 0.19.7
 
 - Studio: a green **Connect to `<project>`** button under Rojo's Connect shows while the place's

@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command and setting, what happens
 underneath, where files live, and the known limits. It is written to be the source for user
-documentation. Version 0.19.7, 2026-09-28. For why each design choice was made, with the
+documentation. Version 0.20.0, 2026-09-29. For why each design choice was made, with the
 measurements behind it, see [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -232,12 +232,17 @@ a project). Each project is a card:
   [Agents](#10-agents));
 - **warnings** (yellow) and **errors** (red), in full. An error from Rojo shows its first line, then
   up to the last five lines Rojo logged about it, with *Show full log*;
+- while `rojoHub.openPlaces` is on, the project's **places**: each place its project file lists
+  (`servePlaceIds`, then `placeId`, not `blockedPlaceIds`), whether it is open in Studio, and
+  **Open**, or **Reopen** and **Close** while it is open (see
+  [Opening places](#opening-places-in-studio));
 - a bottom row: a coloured **status pill** (*Connected* (Studio is connected; *Connected · 2* when
   more than one Studio is), *Serving* (waiting for Studio), *Starting…*, *Stopping…*, *Stopped*,
   *Error*, or *Unavailable* (the service is not running)), a **⋯** menu, and **Start** or **Stop** at
   the right (a project in error has both: Start to try again, Stop to stop it).
   The ⋯ menu has *Update sourcemap.json* with the sourcemap's status (for a project serving a
-  worktree; see [Sourcemaps](#sourcemaps)), *Build place file…*, *Show Rojo log* and *Remove from
+  worktree; see [Sourcemaps](#sourcemaps)), *Open all places in Studio* (while `rojoHub.openPlaces`
+  is on and one of its places is not open), *Build place file…*, *Show Rojo log* and *Remove from
   Rojo-Hub…* (which asks first). It opens downward or upward, whichever has more room.
 
 **Build place file…** runs the project's pinned `rojo build` on exactly what it serves, so a branch's
@@ -614,6 +619,33 @@ closing. Rojo-Hub counts them; that count drives the filled/outlined icon and th
 running Rojo-Hub's plugin also report which place they are, so the *Connected* pill's tooltip names
 them.
 
+### Opening places in Studio
+
+Off by default: turn on `rojoHub.openPlaces` (spec 009). Then each project card lists its places,
+and agents get `open_place`. Off, the card shows none of it, and the service's API and `open_place`
+answer that the setting is off.
+
+- **Open** opens the place for editing in Studio, the same way the website's *Edit in Studio* does
+  (a `roblox-studio:` link with the place's universe ID). Studio loads it; the plugin connects it as
+  usual. *Open all places in Studio* in the ⋯ menu opens every one that is not open.
+- **A place that is open is never opened again** (Studio would open a second copy). Rojo-Hub counts
+  a place as open when its Rojo-Hub plugin reports it, or when a running Studio's command line names
+  it, which covers the seconds before the plugin connects. Two opens at the same moment open it
+  once. A place opened another way (Studio's start page) whose plugin is off is not seen.
+- **The universe ID** is the project file's `gameId` when it has one, else looked up once from
+  Roblox (`apis.roblox.com`, no sign-in) and kept in `universes.json`, with the place's name for
+  the card. If the lookup fails (no internet), the card and the answer say which place and why; try
+  again.
+- **Close** asks the place's Studio window to close, as its ✕ does, so Studio still asks about
+  unsaved changes. Rojo-Hub never kills Studio. It can only tell which window a place is in when
+  Studio was started with the place's link (by Rojo-Hub or the website); for a place opened
+  otherwise, the card says to close it in Studio.
+- **Reopen** closes the place, waits (up to 5 minutes, while you answer Studio's prompt) until that
+  Studio has exited, then opens it again: how an open place picks up a new plugin.
+
+Agents can open a place (`open_place`), never close or reopen one: that window may be one you are
+working in.
+
 ## 8. Switching branches
 
 **Switch Branch…** lists:
@@ -843,7 +875,7 @@ mainly for several agents working at once, so an agent should not have to stop a
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, the Studio places synced to it (name, place ID, why, plugin version), what it serves and with which project file, who claimed it, its warnings and `sourcemap.json` state; then the groups and every open Studio place. Given the agent's folder, also whether its worktree is the one served. |
+| `status` | Every project: port, serving or not, the Studio places synced to it (name, place ID, why, plugin version), what it serves and with which project file, who claimed it, its warnings and `sourcemap.json` state, the places its project file lists and whether each is open; then the groups and every open Studio place. Given the agent's folder, also whether its worktree is the one served. |
 | `serve_here` | Switches the project of the repo the agent is in to the agent's worktree, live, and claims it; says which Studio places show it and any error Rojo logged. `wait` takes it as soon as another worktree's claim ends. |
 | `switch` | Switches a project to a branch (served from its worktree if it has one, else from a view) or a worktree, and claims it. Also takes `wait`. |
 | `new_branch` | Makes a branch in a worktree of its own (through Orca when Orca manages the repo), switches the project to it and claims it; answers the folder to work in. |
@@ -860,6 +892,7 @@ mainly for several agents working at once, so an agent should not have to stop a
 | `create_group` / `edit_group` / `delete_group` | Makes, renames, changes the members of, or deletes a group. |
 | `log` | The last lines of a project's Rojo log. |
 | `wait_for_studio` | Waits until a Studio place is synced to the project's session, and names it. |
+| `open_place` | Opens one of a project's places in Studio (`placeId`; may be left out when it has one), unless it is open: then it does nothing and says so. Only while `rojoHub.openPlaces` is on; agents cannot close places. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
 
@@ -970,7 +1003,7 @@ debugging.
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces }`: once at once, then on every change, within 150 ms |
+| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`: once at once, then on every change, within 150 ms. Each slot's `listedPlaces` are its places, whether open, and what is being done to them |
 | `GET /slots` | | Every project with its state |
 | `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; without `projectFile`, its `default.project.json` or only `*.project.json` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
@@ -982,6 +1015,10 @@ debugging.
 | `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output`, an absolute `.rbxl` or `.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
+| `POST /slots/:id/places/:placeId/open` | | Open one of the project's places in Studio unless it is open: `{ placeId, placeName, outcome: "opened" \| "already-open" }`. 409 while `openPlaces` is off, or for a place its project file does not list |
+| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when Rojo-Hub cannot tell which window it is) |
+| `POST /slots/:id/places/:placeId/reopen` | | Close it, then open it again once that Studio has exited; answers once the close was asked for |
+| `POST /slots/:id/places/open-all` | | Open each of the project's places that is not open: one result (or `{ placeId, error }`) per place |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{kind:"worktree",path}` or `{kind:"branch",ref}`. A user's switch: it also clears an agent's claim |
 | `GET /groups` | | Every group |
 | `POST /groups` | `{ name, slotIds?, groupIds? }` | Create a group |
@@ -992,7 +1029,7 @@ debugging.
 | `GET /order` | | The panel's display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save a new display order (never changes a port) |
 | `POST /groups/:id/stop` | | Stop the group; the result lists projects `kept` because another running group holds them |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin? }` | Settings (sent by the extension). Replaces all four: a missing field goes back to its default (`""`, `[]`, `true`, `true`). A port settings change moves ports at once; turning `studioPlugin` on installs the Studio plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings (sent by the extension). Replaces them all: a missing field goes back to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`). A port settings change moves ports at once; turning `studioPlugin` on installs the Studio plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
 | `GET /studio` | WebSocket | The Studio plugin's link (spec 007): JSON messages `welcome` → `hello` (place) → `match` (which project, pushed again on every change); `state` (what the place is synced to). Protocol 2. Refused with a browser `Origin`, like every route |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open Studio place (`key` from the snapshot's `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` goes back to *Automatic*. Answers the new `studioPlaces` |
@@ -1019,7 +1056,8 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project assigned to each Studio place in VS Code (`placeChoices`), the project each place last synced with (`placeSynced`), and the projects each place has accepted a first sync from (`placeAccepted`) |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
-| `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |
+| `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect` and `openPlaces` |
+| `universes.json` | Each opened place's universe ID and name, looked up from Roblox once (see [Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims on projects (spec 004), so they survive a service restart until they run out |
 | `agent-notice.json` | Until when the agent notice above Projects stays hidden (*Later*, ✕) |
 | `service.log` | Service start and stop, recovered errors, a damaged registry, git problems, and each Studio place's hello and every change of what it is told to sync with |
@@ -1060,6 +1098,7 @@ All are **user settings that apply to every project and window**; a workspace ca
 | `rojoHub.excludedPorts` | `[]` | Ports never given to a project by hashing: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 are always excluded. A `servePort` still wins (see [Ports](#6-ports)). An invalid entry is ignored with a warning on every card. |
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` up to date in each serving project's worktree (see [Sourcemaps](#sourcemaps)). |
 | `rojoHub.studioAutoConnect` | `"remembered"` | Which places the Studio plugin connects by itself: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) and places assigned in Studio places; `"remembered"` also a place's last synced project (see [Connecting Studio](#7-connecting-studio)). |
+| `rojoHub.openPlaces` | `false` | Open, close and reopen a project's Studio places from its card, and let agents open them (`open_place`). A place that is open is never opened again (see [Opening places](#opening-places-in-studio)). Off: none of it does anything. |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies (see [Connecting Studio](#7-connecting-studio)). Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents can use Rojo-Hub's MCP server (see [Agents](#10-agents)). Shown as checkboxes. Not synced by Settings Sync. |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects from a serving project, in the window that has the project open (or else the focused window). |

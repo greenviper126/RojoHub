@@ -1,11 +1,12 @@
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 
-import { SERVICE_VERSION, type GroupResult, type GroupView, type SlotView, type StudioPlace, type Target } from "../common/api";
+import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
 import { git, pathKey, primaryCheckout } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type Hub } from "./hub";
+import { OFF_MESSAGE } from "./places";
 import { Conflict, NotFound } from "./registry";
 
 /*
@@ -40,6 +41,8 @@ Which Studio to look at: serve_here, status and wait_for_studio name the Studio 
 Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
 
 Sharing: serve_here and switch claim the project for your worktree for 10 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
+
+Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
 Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.`;
 
@@ -155,6 +158,13 @@ export const TOOLS: Tool[] = [
 		description: "The last lines of a project's Rojo log: why a change did not reach Studio, sync errors, connections.",
 		inputSchema: project({ lines: { type: "number", description: "How many lines (default 40, up to 400)." } }),
 		annotations: { readOnlyHint: true },
+	},
+	{
+		name: "open_place",
+		title: "Open a place in Studio",
+		description:
+			"Opens one of a project's places (from its project file's servePlaceIds or placeId) in Roblox Studio, unless it is already open: then it does nothing and says so. Then call wait_for_studio. Only works when the user turned on rojoHub.openPlaces.",
+		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one. status lists them." } }),
 	},
 	{
 		name: "wait_for_studio",
@@ -347,6 +357,8 @@ export class Mcp {
 				return this.log(args);
 			case "wait_for_studio":
 				return this.waitForStudio(args);
+			case "open_place":
+				return this.openPlace(args);
 			case "start_group":
 				return this.startGroup(args);
 			case "stop_group":
@@ -717,6 +729,36 @@ export class Mcp {
 		}
 	}
 
+	private async openPlace(args: Args): Promise<string> {
+		const { slot, root } = await this.pick(args);
+		this.renew(slot, root);
+		if (!this.hub.openPlacesOn) throw new Refusal(`${OFF_MESSAGE} Ask the user to open the place in Studio instead.`);
+		const listed = slot.listedPlaces ?? [];
+		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to open. Ask the user to open the place in Studio.`);
+		let placeId: number;
+		if (args.placeId === undefined || args.placeId === null || args.placeId === "") {
+			if (listed.length > 1) throw new Refusal(`${slot.projectName} has several places; pass placeId as one of: ${this.listedText(listed)}.`);
+			placeId = listed[0].placeId;
+		} else {
+			placeId = Number(args.placeId);
+			if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(args.placeId)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
+		}
+		const result = await this.hub.openPlace(slot.id, placeId);
+		const name = result.placeName ? `${result.placeName} (place ${placeId})` : `Place ${placeId}`;
+		if (result.outcome === "already-open") return `${name} is already open in Studio; nothing was opened. ${this.health(this.hub.view(this.hub.registry.get(slot.id)))}`;
+		return `Opening ${name} in Studio. Studio takes a while to load; call wait_for_studio to know when it is synced with ${slot.projectName}${slot.state === "running" ? "" : " (the project is not serving: start it)"}.`;
+	}
+
+	/** `Lobby (place 111, open), place 222` */
+	private listedText(places: ListedPlace[]): string {
+		return places
+			.map((place) => {
+				const state = place.open ? "open" : "not open";
+				return place.placeName ? `${place.placeName} (place ${place.placeId}, ${state})` : `place ${place.placeId} (${state})`;
+			})
+			.join(", ");
+	}
+
 	private async startGroup(args: Args): Promise<string> {
 		const group = this.findGroup(args.group);
 		const groups = this.groupsOrFail();
@@ -799,6 +841,7 @@ export class Mcp {
 			const serves = slot.target.kind === "worktree" ? `${slot.targetLabel}${slot.branch && slot.branch !== slot.targetLabel ? ` (branch ${slot.branch})` : ""} at ${slot.target.path}` : `branch ${slot.targetLabel} (read-only copy)`;
 			lines.push(`${slot.projectName} (id ${slot.id}), port ${slot.port}: ${this.health(slot)}`, `  serves ${serves}, project file ${slot.projectFile}`, `  repo ${slot.repoPath}`);
 			if (claim) lines.push(`  claimed by an agent in ${claim.label} until ${time(claim.until)}`);
+			if (slot.listedPlaces?.length) lines.push(`  places: ${this.listedText(slot.listedPlaces)}${this.hub.openPlacesOn ? " (open_place opens one)" : ""}`);
 			for (const warning of slot.warnings) lines.push(`  note: ${warning}`);
 			if (slot.state === "running") lines.push(`  sourcemap.json: ${slot.sourcemap.detail}`);
 			if (repo && pathKey(slot.repoPath) === repo) {

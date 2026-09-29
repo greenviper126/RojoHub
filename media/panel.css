@@ -1711,6 +1711,22 @@ button:focus-visible {
 	color: var(--info);
 }
 
+/* A project's places, for opening them in Studio (spec 009) */
+.card-places {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 3px;
+	border-radius: var(--radius-sm);
+	background: var(--surface-sunken);
+	box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.card-place .pill,
+.card-place .btn {
+	flex: none;
+}
+
 /* Studio places (spec 007) */
 .studio-place select {
 	flex: none;

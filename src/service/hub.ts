@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
+import type { PlaceOpened, PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
+import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
@@ -14,6 +15,9 @@ import { StudioLinks, type PlaceCandidate } from "./studio";
 import { installPlugin, PLUGIN_FILE } from "./studioPlugin";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
+
+/** A project file's place fields; gameId is Rojo's name for the universe ID (spec 009). */
+type PlaceFields = Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> & { gameId: number | null };
 
 const READY_TIMEOUT_MS = 30000;
 const PORT_FREE_TIMEOUT_MS = 5000;
@@ -119,10 +123,13 @@ export class Hub {
 	readonly targetCache: TargetCache;
 
 	/** Each project file's place fields, reread only when the file changes (spec 007). */
-	private readonly placeFields = new Map<string, { mtime: number; fields: Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> }>();
+	private readonly placeFields = new Map<string, { mtime: number; fields: PlaceFields }>();
 
 	/** The Studio plugins connected to the service (spec 007). */
 	readonly studio: StudioLinks;
+
+	/** Opening a project's places in Studio (spec 009). */
+	readonly places: Places;
 
 	/** The Studio plugin's install, for the panel (spec 007). */
 	studioPlugin: StudioPluginStatus = { state: "off", detail: "", removed: [], officialRojo: false };
@@ -150,6 +157,11 @@ export class Hub {
 			},
 		});
 		this.studio.rememberedAutoConnect = loadPortSettings(home).studioAutoConnect !== "listed";
+		this.places = new Places(
+			home,
+			() => this.openPlacesOn,
+			() => this.studio.places().filter((place) => !place.unsaved),
+		);
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));
@@ -428,10 +440,18 @@ export class Hub {
 		return moves;
 	}
 
+	/** rojoHub.openPlaces (spec 009), read from settings.json once and then kept with each change. */
+	private openPlacesSetting: boolean | null = null;
+	get openPlacesOn(): boolean {
+		this.openPlacesSetting ??= loadPortSettings(this.home).openPlaces === true;
+		return this.openPlacesSetting;
+	}
+
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		savePortSettings(this.home, settings);
+		this.openPlacesSetting = settings.openPlaces === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
 		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
@@ -533,7 +553,61 @@ export class Hub {
 			sourcemap: runtime.sourcemap?.status ?? { state: "off", detail: runtime.sourcemapOff },
 			claim: claim ? { label: claim.label, until: claim.until } : null,
 			places: runtime.state === "running" ? this.studio.placesOn(slot.port, runtime.sessionId) : [],
+			listedPlaces: this.places.listed(this.listedPlaceIds(slot)),
 		};
+	}
+
+	/*
+		The places a slot's project file names, in order: servePlaceIds, then
+		placeId; never one in blockedPlaceIds (spec 009).
+	*/
+	listedPlaceIds(slot: SlotRecord): number[] {
+		const fields = this.placeFieldsOf(slot);
+		const ids = [...(fields.servePlaceIds ?? []), ...(fields.placeId ? [fields.placeId] : [])].filter((id) => id > 0 && !fields.blockedPlaceIds?.includes(id));
+		return [...new Set(ids)];
+	}
+
+	/** Looks up the names of every project's places for the panel, in the background, while opening places is on. */
+	warmPlaceNames(): void {
+		if (!this.openPlacesOn) return;
+		this.places.warm(this.registry.slots.flatMap((slot) => this.listedPlaceIds(slot)));
+	}
+
+	/** A place of the slot's, checked against its project file; the project's gameId comes along as its universe. */
+	private placeOf(id: string, placeId: number): { placeId: number; gameId: number | null } {
+		const slot = this.registry.get(id);
+		const listed = this.listedPlaceIds(slot);
+		if (!listed.includes(placeId)) {
+			throw new Conflict(`Place ${placeId} is not one of ${slot.projectName}'s places. Its project file names ${listed.length ? listed.join(", ") : "none"} (servePlaceIds, placeId).`);
+		}
+		return { placeId, gameId: this.placeFieldsOf(slot).gameId };
+	}
+
+	/** Opens one of the slot's places in Studio, unless it is open already (spec 009). */
+	openPlace(id: string, placeId: number): Promise<PlaceOpened> {
+		const place = this.placeOf(id, placeId);
+		return this.places.open(place.placeId, place.gameId);
+	}
+
+	/** Opens every one of the slot's places that is not open; one failing does not stop the others. */
+	async openAllPlaces(id: string): Promise<(PlaceOpened | { placeId: number; error: string })[]> {
+		const slot = this.registry.get(id);
+		if (!this.openPlacesOn) throw new Conflict(OFF_MESSAGE);
+		const gameId = this.placeFieldsOf(slot).gameId;
+		const results: (PlaceOpened | { placeId: number; error: string })[] = [];
+		for (const placeId of this.listedPlaceIds(slot)) {
+			results.push(await this.places.open(placeId, gameId).catch((error: unknown) => ({ placeId, error: error instanceof Error ? error.message : String(error) })));
+		}
+		return results;
+	}
+
+	closePlace(id: string, placeId: number): Promise<void> {
+		return this.places.close(this.placeOf(id, placeId).placeId);
+	}
+
+	reopenPlace(id: string, placeId: number): Promise<void> {
+		const place = this.placeOf(id, placeId);
+		return this.places.reopen(place.placeId, place.gameId);
 	}
 
 	/*
@@ -558,14 +632,14 @@ export class Hub {
 		});
 	}
 
-	private placeFieldsOf(slot: SlotRecord): Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> {
+	private placeFieldsOf(slot: SlotRecord): PlaceFields {
 		const file = join(slot.repoPath, slot.projectFile);
 		const cached = this.placeFields.get(file);
 		let mtime: number;
 		try {
 			mtime = statSync(file).mtimeMs;
 		} catch {
-			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null, gameId: null };
 		}
 		if (cached && cached.mtime === mtime) return cached.fields;
 		const ids = (value: unknown): number[] | null => (Array.isArray(value) ? value.filter((id): id is number => Number.isInteger(id)) : null);
@@ -575,12 +649,13 @@ export class Hub {
 				servePlaceIds: ids(project.servePlaceIds),
 				blockedPlaceIds: ids(project.blockedPlaceIds),
 				placeId: Number.isInteger(project.placeId) ? (project.placeId as number) : null,
+				gameId: Number.isInteger(project.gameId) && (project.gameId as number) > 0 ? (project.gameId as number) : null,
 			};
 			this.placeFields.set(file, { mtime, fields });
 			return fields;
 		} catch {
 			// Mid-edit (half-typed JSON): keep what was read last, like servePort (see portRequests).
-			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null, gameId: null };
 		}
 	}
 
@@ -596,6 +671,7 @@ export class Hub {
 
 	/** Every slot's view as it stands, without re-reading ports (they are re-read every few seconds anyway); for GET /events. */
 	snapshot(): SlotView[] {
+		this.warmPlaceNames();
 		return this.registry.slots.map((slot) => this.view(slot));
 	}
 

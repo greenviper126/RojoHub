@@ -1,6 +1,6 @@
 # 009 — Open places in Studio
 
-Status: **draft, measured** (branch `feat/open-places`). Asked for by Viper: "is there a way to auto open place
+Status: **implemented in 0.20.0** (branch `feat/open-places`; see *Checked in Studio*). Asked for by Viper: "is there a way to auto open place
 files in roblox studio through commands like power shell?" ("im talking about non-local files"),
 then "if we do make it manual if id be a good idea to make this somthing available through the mcp
 for agents?", and "settings turns of the option to open a place from vscode through the extension
@@ -141,26 +141,47 @@ version-6b0e880a1a144428 with the 0.19.7 plugin installed.
   name the plugin reported when there is one, else this lookup's (saved with the universe ID), else
   the place ID.
 
+## Checked in Studio (2026-09-29)
+
+The 0.20.0 build's service, run as a throwaway second instance (port 34868, its own state folder and
+plugins folder, so the user's running service was untouched), with a throwaway project whose
+`servePlaceIds` is Test1. Driven through the service's API, the same calls the panel makes.
+
+- **Off:** open answered 409, "Opening Studio places is turned off in Rojo-Hub's settings".
+- **Open:** looked up the universe (10768528004) and the name ("Rojo-Hub Test1"); Studio started
+  with the link and the window was up within about 6 s.
+- **Never twice:** a second open 0.4 s after the first, before Studio had a window, answered
+  *already open* (found by command line), and so did an open once the place had loaded. One Studio
+  process throughout.
+- **Reopen:** asked Studio to close; the old process (nothing unsaved) exited and a new one with the
+  same link started within 4 s; the window was back 4 s later.
+- **Close:** Studio closed within 4 s, with no prompt (nothing unsaved).
+- Not seen in this setup: the card's *Open in Studio*, since Test1's plugin reports to the user's own
+  service on 34870, not the throwaway one; the card showed *Opening…* instead. The plugin side of the
+  already-open check has unit tests. Not tried: a close with unsaved changes, Team Create, whether a
+  console window flashes (the launch is `explorer.exe` with `windowsHide`; nothing was seen on the
+  command line's side), and the panel by hand.
+
 ## Acceptance criteria
 
-- [ ] `rojoHub.openPlaces` is off by default. While off, the panel shows no open, close or reopen
+- [x] `rojoHub.openPlaces` is off by default. While off, the panel shows no open, close or reopen
       actions, and `open_place` and the API answer that the feature is off and name the setting.
-- [ ] The panel lists each project's places with whether they are open, and **Open** opens one in
-      Studio; **Open all places** opens every one not open.
-- [ ] A place that is open, found by its plugin or by a Studio command line, is never opened again;
+- [x] The panel lists each project's places with whether they are open, and **Open** opens one in
+      Studio; **Open all places** opens every one not open. *(built; not yet clicked by hand)*
+- [x] A place that is open, found by its plugin or by a Studio command line, is never opened again;
       the answer is *already open*. Two opens of one place at once open it once.
-- [ ] The universe ID comes from `gameId`, a saved answer, or the lookup, in that order; a failed
+- [x] The universe ID comes from `gameId`, a saved answer, or the lookup, in that order; a failed
       lookup says which place and why.
-- [ ] `open_place` opens a project's place, refuses a place the project does not name, and refuses a
+- [x] `open_place` opens a project's place, refuses a place the project does not name, and refuses a
       missing `placeId` on a project with several places, listing them.
-- [ ] `status` says which of a project's places are open.
-- [ ] **Close** closes gracefully, never killing, and only a process whose command line names the
+- [x] `status` says which of a project's places are open.
+- [x] **Close** closes gracefully, never killing, and only a process whose command line names the
       place; **Reopen** waits for it to exit (up to 5 minutes) before opening.
-- [ ] No console window appears when a place is opened.
-- [ ] Unit tests cover the universe lookup and cache, both already-open checks and the setting; the
+- [ ] No console window appears when a place is opened. *(by the code: `explorer.exe`, `windowsHide`; not watched on screen)*
+- [x] Unit tests cover the universe lookup and cache, both already-open checks and the setting; the
       launch and the process list are stubbed in tests (tests never open Studio). Checked live in
       Studio, recorded here.
-- [ ] `docs/how-it-works.md`, the site and the MCP server's instructions describe it.
+- [x] `docs/how-it-works.md`, the site and the MCP server's instructions describe it.
 
 ## Non-goals
 
