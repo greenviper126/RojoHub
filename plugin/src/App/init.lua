@@ -621,7 +621,8 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
-function App:startSession()
+-- Rojo-Hub: `hubAddress` ({ host, port }) connects there instead of to the address boxes.
+function App:startSession(hubAddress)
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
@@ -641,6 +642,11 @@ function App:startSession()
 	end
 
 	local host, port = self:getHostAndPort()
+	-- Rojo-Hub: the boxes' values are what the place saves, never Rojo-Hub's port (spec 007).
+	local savedHost, savedPort = host, port
+	if hubAddress then
+		host, port = hubAddress.host, hubAddress.port
+	end
 
 	local baseUrl = if string.find(host, "^https?://")
 		then string.format("%s:%s", host, port)
@@ -707,7 +713,7 @@ function App:startSession()
 			})
 		elseif status == ServeSession.Status.Connected then
 			self.knownProjects[details] = true
-			self:setPriorSyncInfo(host, port, details)
+			self:setPriorSyncInfo(savedHost, savedPort, details) -- Rojo-Hub
 			self:setRunningConnectionInfo(baseUrl)
 
 			local address = ("%s:%s"):format(host, port)
@@ -947,6 +953,11 @@ function App:render()
 						-- Rojo-Hub
 						hubEnabled = self.hub ~= nil,
 						hubMatch = self.state.hubMatch,
+						onHubConnect = function()
+							if self.hub then
+								self.hub:connectNow()
+							end
+						end,
 
 						onNavigateSettings = function()
 							self.backPage = AppStatus.NotConnected

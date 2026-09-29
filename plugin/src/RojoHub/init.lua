@@ -343,10 +343,28 @@ function Hub:evaluate()
 	end
 	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = tries + 1 }
 
+	self:connect(target)
+end
+
+-- Connects to the service's port, never through Rojo's address boxes: those are the user's (spec 007).
+function Hub:connect(target)
 	Log.info("Rojo-Hub: connecting to {} on port {}", target.projectName, target.port)
-	app.setHost("localhost")
-	app.setPort(tostring(target.port))
-	app:startSession()
+	self.app:startSession({ host = "localhost", port = tostring(target.port) })
+end
+
+--[[
+	The Connect to <project> button: connecting by hand, so a session the user
+	ended or declined is connected again.
+]]
+function Hub:connectNow()
+	local match = self.match
+	if match == nil or match.status ~= "connect" or match.target == nil or self.app.serveSession ~= nil then
+		return
+	end
+	local target = match.target
+	self.declined = nil
+	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = SESSION_TRIES }
+	self:connect(target)
 end
 
 --[[

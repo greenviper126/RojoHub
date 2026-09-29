@@ -2,6 +2,13 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.19.7
+
+- Studio: a green **Connect to `<project>`** button under Rojo's Connect shows while the place's
+  project is serving, and connects to its port whatever is in the address boxes. Rojo-Hub no longer
+  types its port into those boxes, so clearing them no longer breaks connecting. Reopen open places
+  to get the new plugin.
+
 ## 0.19.6
 
 - New setting `rojoHub.studioAutoConnect`: set it to `listed` and a Studio place connects by itself

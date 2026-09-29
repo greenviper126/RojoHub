@@ -32,12 +32,17 @@ Each hook is marked `-- Rojo-Hub` in the file.
     that session, so it is not reconnected by itself;
   - `pluginName` is `"Rojo-Hub"` rather than `"Rojo " .. version`: Studio refuses a second dock
     widget with the same id, so the two plugins could not both load;
-  - the NotConnected page gets `hubEnabled` and `hubMatch`;
+  - the NotConnected page gets `hubEnabled`, `hubMatch` and `onHubConnect` (the *Connect to
+    <project>* button);
+  - `App:startSession` takes an optional `{ host, port }` to connect to instead of the address boxes,
+    and saves the boxes' values (not that address) as the place's last address, so Rojo-Hub never
+    writes the boxes;
   - the confirm callback accepts, before Rojo's own rules, a patch for a project this place has
     synced with before (`hub:accepted`, from the service), unless *Confirmation Behavior* is *Always*:
     the first sync of a place with a project is asked once, not per Studio session.
-- `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.StatusLine` (read-only; projects are
-  assigned to places in VS Code) under the buttons.
+- `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.ConnectButton` (only while the service
+  answers *connect*) and `RojoHub.StatusLine` (read-only; projects are assigned to places in VS Code)
+  under the buttons.
 - `src/App/StatusPages/Settings/init.lua`: a *Rojo-Hub Auto Connect* row (`hubAutoConnect`).
 - `src/Settings.lua`: `hubAutoConnect = true`; `checkForUpdates` defaults to `false`, since Rojo's update
   check points at Rojo's own plugin and this one updates with Rojo-Hub.
