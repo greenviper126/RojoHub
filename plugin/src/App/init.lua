@@ -799,6 +799,11 @@ function App:startSession()
 					return "Accept"
 				end
 			end
+			-- Rojo-Hub: an unlisted place asks once per project per Studio session, as "Initial" does, not on every reconnect
+			if self.knownProjects[serverInfo.projectName] then
+				Log.trace("Accepting patch without confirmation because the project was accepted before this session")
+				return "Accept"
+			end
 		elseif confirmationBehavior == "Never" then
 			Log.trace("Accepting patch without confirmation because behavior is set to Never")
 			return "Accept"

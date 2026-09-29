@@ -2,6 +2,12 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.19.4
+
+- A Studio place its project does not list in `servePlaceIds` asks to accept its first sync once per
+  project per Studio session, as documented. Before, it asked again on every reconnect that had
+  changes to apply (Rojo's *Unlisted PlaceId* ignores what was already accepted).
+
 ## 0.19.3
 
 - The panel's **Active ports** section is gone: which projects serve shows on their cards and the
