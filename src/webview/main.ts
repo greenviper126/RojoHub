@@ -790,7 +790,7 @@ function studioPluginNotice(): string {
 	if (!plugin) return "";
 	if (plugin.state === "error") return `<div class="notice error">${icon("error")}<span>${escape(plugin.detail)}</span></div>`;
 	if (plugin.state === "installed" && plugin.officialRojo) {
-		return `<div class="notice warning">${icon("warning")}<span>Rojo's own Studio plugin (RojoManagedPlugin.rbxm) is installed next to Rojo-Hub's, so Studio shows two Rojo windows. Rojo-Hub's does all Rojo's does and connects by itself; remove RojoManagedPlugin.rbxm from Studio's plugins folder to keep one.</span></div>`;
+		return `<div class="notice warning">${icon("warning")}<span>Rojo's own Studio plugin is also installed, so Studio has two Rojo plugins. Rojo-Hub's plugin replaces it: delete RojoManagedPlugin.rbxm from %LOCALAPPDATA%\\Roblox\\Plugins. This goes away by itself once it is gone.</span></div>`;
 	}
 	return "";
 }

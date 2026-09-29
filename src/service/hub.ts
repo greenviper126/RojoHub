@@ -257,6 +257,8 @@ export class Hub {
 	*/
 	private pollLogs(): void {
 		if (++this.ticks % 3 === 0) this.refreshPorts();
+		// The plugins folder changes behind the service's back (Rojo's plugin removed, ours deleted): look again.
+		if (this.ticks % 5 === 0) this.syncStudioPlugin();
 		for (const slot of this.registry.slots) {
 			const runtime = this.runtime(slot.id);
 			if (runtime.state !== "running") continue;

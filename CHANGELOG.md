@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.19.0
+## 0.19.1
 
 **Studio connects by itself.** Rojo-Hub now installs its own Studio plugin: Rojo 7.7's plugin,
 changed to sync each place with its project without a port typed or a button pressed.

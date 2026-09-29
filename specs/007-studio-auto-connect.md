@@ -1,6 +1,6 @@
 # 007 — Studio auto-connect
 
-Status: **implemented in 0.19.0** (branch `feat/studio-auto-connect`; see *Checked in Studio* for what was tried live). Asked for by Viper: "i want to be able to auto connect from both sides", "make a
+Status: **implemented in 0.19.1** (0.19.0 was only a local build) (branch `feat/studio-auto-connect`; see *Checked in Studio* for what was tried live). Asked for by Viper: "i want to be able to auto connect from both sides", "make a
 custom rojo plugin on the roblox side that just pulls the rojo code but we modify it ... we use that
 to auto connect and we listen to vscode on what were connecting too", "put that all in a folder
 called plugin", "if rojo disconnects we try to run the port again", and "if its possible just
@@ -129,7 +129,10 @@ Studio session, since connecting writes into the place.
   another protocol with *incompatible* ("close and reopen the place"); the panel shows each place's
   plugin version. Across ordinary updates the protocol stays, so older plugins in open places keep
   working until reopened.
-- The panel warns when the official Rojo plugin is installed as well; it does not remove it.
+- The panel warns when the official Rojo plugin is installed as well; it does not remove it. The
+  service looks at the plugins folder again every 5 s, so the warning clears once it is removed (it
+  first only looked at start, and kept warning after the user deleted the file), and a deleted
+  `RojoHub.rbxm` is put back.
 
 ### Installing the plugin
 
