@@ -63,6 +63,86 @@ export interface SlotView {
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
 	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
 	claim: { label: string; until: number } | null;
+	/** Studio places whose Rojo-Hub plugin is synced to this project now (spec 007). */
+	places: StudioPlace[];
+}
+
+/*
+	The Studio plugin and the service talk over a WebSocket at
+	ws://127.0.0.1:34870/studio, in JSON text messages (spec 007).
+	STUDIO_PROTOCOL changes only when these messages do, so a place still
+	running an older plugin (Studio loads a new one only when a place is opened)
+	keeps working across ordinary updates.
+*/
+export const STUDIO_PATH = "/studio";
+export const STUDIO_PROTOCOL = 1;
+
+/** The plugin's first message, and again whenever the place's ID changes (a publish). */
+export interface StudioHello {
+	type: "hello";
+	protocol: number;
+	pluginVersion: string;
+	placeId: number;
+	gameId: number;
+	placeName: string;
+	/** PlaceId 0 or a Roblox template's ID (Rojo's ignorePlaceIds): shared by unsaved places, so never matched. */
+	unsaved: boolean;
+	/** The project name this place last synced with, from the plugin's own saved places. */
+	remembered: string | null;
+}
+
+/** What the plugin is synced to, sent whenever that changes. */
+export interface StudioState {
+	type: "state";
+	connected: { port: number; projectName: string; sessionId: string } | null;
+}
+
+/** The user picked a project for this place among several that claim it; null forgets the pick. */
+export interface StudioChoose {
+	type: "choose";
+	slotId: string | null;
+}
+
+export type StudioToService = StudioHello | StudioState | StudioChoose;
+
+export interface StudioProject {
+	slotId: string;
+	projectName: string;
+	port: number;
+	sessionId: string | null;
+	branch: string | null;
+	targetLabel: string;
+	/** Why it belongs to this place, or null when it does not (listed only for picking by hand). */
+	reason: "servePlaceIds" | "placeId" | "remembered" | null;
+	/** Served by Rojo 7.7 or newer, which the plugin speaks (protocol 5). */
+	supported: boolean;
+}
+
+/*
+	The service's answer, sent after hello and again whenever it changes.
+	- connect: `target` is the one running project for this place; connect to it.
+	- choose: several running projects claim the place and none was picked.
+	- stopped: the place's project is not serving.
+	- unsupported: the place's project runs a Rojo the plugin cannot speak.
+	- unsaved / none: nothing to connect to by itself; `projects` lists every
+	  running project for picking by hand.
+	- incompatible: the plugin's protocol is not the service's.
+*/
+export interface StudioMatch {
+	type: "match";
+	serviceVersion: string;
+	status: "connect" | "choose" | "stopped" | "unsupported" | "unsaved" | "none" | "incompatible";
+	message: string;
+	target: StudioProject | null;
+	/** Every running project, those that claim the place first. */
+	projects: StudioProject[];
+}
+
+/** An open Studio place, as the panel shows it under the project it is synced to. */
+export interface StudioPlace {
+	placeId: number;
+	placeName: string;
+	pluginVersion: string;
 }
 
 /*

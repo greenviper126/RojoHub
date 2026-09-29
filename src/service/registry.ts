@@ -43,6 +43,8 @@ interface RegistryFile {
 	groups?: GroupRecord[];
 	/** How the panel shows things; never affects ports (see DisplayOrder). */
 	order?: DisplayOrder;
+	/** The project picked for a Studio place that several serving projects claim, by place ID (spec 007). */
+	placeChoices?: Record<string, string>;
 }
 
 export class Registry {
@@ -50,6 +52,7 @@ export class Registry {
 	slots: SlotRecord[] = [];
 	groups: GroupRecord[] = [];
 	order: DisplayOrder = { projects: [], groups: [] };
+	placeChoices: Record<string, string> = {};
 	/** What happened when registry.json could not be read, for service.log; null when it read fine. */
 	readonly recovered: string | null = null;
 
@@ -86,6 +89,8 @@ export class Registry {
 		this.slots = Array.isArray(parsed.slots) ? parsed.slots.filter(validSlot) : [];
 		this.groups = Array.isArray(parsed.groups) ? parsed.groups.filter(validGroup) : [];
 		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
+		const choices = parsed.placeChoices;
+		this.placeChoices = choices && typeof choices === "object" && !Array.isArray(choices) ? Object.fromEntries(Object.entries(choices).filter(([, id]) => typeof id === "string")) : {};
 	}
 
 	/*
@@ -94,7 +99,7 @@ export class Registry {
 		cut at any point leaves one whole registry to start from.
 	*/
 	save(): void {
-		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order };
+		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order, placeChoices: this.placeChoices };
 		const temporary = this.file + ".tmp";
 		const fd = openSync(temporary, "w");
 		try {

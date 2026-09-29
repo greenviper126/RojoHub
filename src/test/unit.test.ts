@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import type { IncomingMessage } from "node:http";
 
-import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT } from "../common/api";
+import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
 import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -25,6 +25,8 @@ import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from 
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
+import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate } from "../service/studio";
+import { acceptWebSocket } from "../service/websocket";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -542,4 +544,153 @@ test("pathKey treats a short 8.3 path and its long form as one folder", { skip: 
 	assert.equal(pathKey(join(short, "Game")), pathKey(join(dir, "Game")));
 	assert.equal(pathKey(join(short, "not-made-yet")), pathKey(join(dir, "not-made-yet")), "also for a folder that does not exist yet");
 	assert.equal(pathKey(dir.toUpperCase() + "\\"), pathKey(dir), "case and a trailing slash");
+});
+
+const candidate = (over: Partial<PlaceCandidate> & { slotId: string }): PlaceCandidate => ({
+	projectName: over.slotId,
+	port: 35000,
+	state: "running",
+	sessionId: `session-${over.slotId}`,
+	branch: "main",
+	targetLabel: "main",
+	rojoVersion: "7.7.0",
+	servePlaceIds: null,
+	blockedPlaceIds: null,
+	placeId: null,
+	...over,
+});
+const place = (placeId: number, remembered: string | null = null, unsaved = false) => ({ placeId, remembered, unsaved });
+
+test("Studio places: servePlaceIds, then placeId, then the remembered project (spec 007)", () => {
+	const lobby = candidate({ slotId: "lobby", servePlaceIds: [111, 222] });
+	const byPlaceId = candidate({ slotId: "tools", placeId: 222 });
+	const old = candidate({ slotId: "old" });
+	assert.equal(matchPlace(place(222), [lobby, byPlaceId, old], null).target?.slotId, "lobby", "servePlaceIds wins over placeId");
+	assert.equal(matchPlace(place(222), [byPlaceId, old], null).target?.slotId, "tools");
+	const remembered = matchPlace(place(999, "old"), [lobby, byPlaceId, old], null);
+	assert.equal(remembered.target?.slotId, "old");
+	assert.equal(remembered.target?.reason, "remembered");
+	assert.equal(matchPlace(place(999), [lobby, byPlaceId, old], null).status, "none");
+	assert.equal(matchPlace(place(111), [lobby], null).target?.slotId, "lobby", "one project serves several places");
+});
+
+test("Studio places: only running projects connect, and a stopped claimant is not skipped for a lower tier", () => {
+	const stopped = candidate({ slotId: "game", servePlaceIds: [111], state: "stopped", sessionId: null });
+	const other = candidate({ slotId: "other" });
+	const answer = matchPlace(place(111, "other"), [stopped, other], null);
+	assert.equal(answer.status, "stopped");
+	assert.equal(answer.target, null);
+	assert.match(answer.message, /game is this place's project/);
+	const starting = candidate({ slotId: "game", servePlaceIds: [111], state: "starting", sessionId: null });
+	assert.equal(matchPlace(place(111), [starting], null).status, "stopped");
+});
+
+test("Studio places: several running claimants need a pick, which is remembered per place", () => {
+	const a = candidate({ slotId: "a", servePlaceIds: [111] });
+	const b = candidate({ slotId: "b", servePlaceIds: [111] });
+	const stoppedB = { ...b, state: "stopped" as const, sessionId: null };
+	assert.equal(matchPlace(place(111), [a, b], null).status, "choose");
+	assert.equal(matchPlace(place(111), [a, b], "b").target?.slotId, "b");
+	assert.equal(matchPlace(place(111), [a, b], "gone").status, "choose", "a pick of a project that no longer claims it is ignored");
+	assert.equal(matchPlace(place(111), [a, stoppedB], null).target?.slotId, "a", "only running claimants compete");
+});
+
+test("Studio places: blocked, unsaved and old-Rojo places never connect", () => {
+	const blocked = candidate({ slotId: "x", servePlaceIds: [111], blockedPlaceIds: [111] });
+	assert.equal(matchPlace(place(111), [blocked], null).status, "none");
+	const unsaved = matchPlace(place(0, "x", true), [candidate({ slotId: "x" })], null);
+	assert.equal(unsaved.status, "unsaved");
+	assert.equal(unsaved.projects.length, 1, "running projects are still listed for picking by hand");
+	const old = matchPlace(place(111), [candidate({ slotId: "sf", servePlaceIds: [111], rojoVersion: "7.3.0" })], null);
+	assert.equal(old.status, "unsupported");
+	assert.match(old.message, /Rojo 7\.3\.0/);
+	assert.equal(old.projects[0].supported, false);
+	assert.equal(speaksProtocol5("7.7.0"), true);
+	assert.equal(speaksProtocol5("8.0.1"), true);
+	assert.equal(speaksProtocol5("7.6.1"), false);
+});
+
+test("Studio places: claimants are listed first for the picker", () => {
+	const answer = matchPlace(place(111), [candidate({ slotId: "z" }), candidate({ slotId: "y", servePlaceIds: [111] })], null);
+	assert.deepEqual(
+		answer.projects.map((project) => [project.slotId, project.reason]),
+		[
+			["y", "servePlaceIds"],
+			["z", null],
+		],
+	);
+});
+
+test("the Studio WebSocket: hello gets the place's answer, changes are pushed, web pages are refused", async () => {
+	const { createServer } = await import("node:http");
+	let candidates: PlaceCandidate[] = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111 })];
+	const choices = new Map<number, string | null>();
+	const links = new StudioLinks(() => candidates, { get: (id) => choices.get(id) ?? null, set: (id, slot) => void choices.set(id, slot) });
+	const server = createServer();
+	let port = 0;
+	server.on("upgrade", (request, socket, head) => {
+		if (!allowedRequest(request, port)) return void socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+		const link = acceptWebSocket(request, socket, head);
+		if (link) links.attach(link);
+	});
+	await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+	port = (server.address() as { port: number }).port;
+	try {
+		const socket = new WebSocket(`ws://127.0.0.1:${port}${STUDIO_PATH}`);
+		const inbox: StudioMatch[] = [];
+		socket.onmessage = (event) => {
+			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "ping" };
+			if (message.type === "match") inbox.push(message);
+		};
+		const next = async (): Promise<StudioMatch> => {
+			const deadline = Date.now() + 3000;
+			while (inbox.length === 0 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
+			const message = inbox.shift();
+			assert.ok(message, "an answer arrived");
+			return message;
+		};
+		await new Promise((done, fail) => ((socket.onopen = done), (socket.onerror = fail)));
+		const hello: StudioHello = { type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "test", placeId: 111, gameId: 1, placeName: "Lobby", unsaved: false, remembered: null };
+		socket.send(JSON.stringify(hello));
+		const first = await next();
+		assert.equal(first.status, "connect");
+		assert.equal(first.target?.port, 35111);
+
+		// the project's rojo restarts: the new session reaches the plugin without it asking
+		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
+		assert.equal((await next()).target?.sessionId, "second");
+
+		// reporting the sync puts the place on the project's card
+		socket.send(JSON.stringify({ type: "state", connected: { port: 35111, projectName: "game", sessionId: "second" } }));
+		await new Promise((done) => setTimeout(done, 100));
+		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
+		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
+
+		// a pick among several is stored for the place
+		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];
+		assert.equal((await next()).status, "choose");
+		socket.send(JSON.stringify({ type: "choose", slotId: "fork" }));
+		assert.equal((await next()).target?.slotId, "fork");
+		assert.equal(choices.get(111), "fork");
+
+		// a plugin speaking another protocol is told to reopen the place instead of being matched
+		socket.send(JSON.stringify({ ...hello, protocol: STUDIO_PROTOCOL + 1 }));
+		assert.equal((await next()).status, "incompatible");
+
+		socket.close();
+		await new Promise((done) => setTimeout(done, 200));
+		assert.equal(links.count, 0, "a closed socket is forgotten");
+
+		// Node's WebSocket sends no Origin, so a web page's handshake is sent by hand
+		const refused = await fetch(`http://127.0.0.1:${port}${STUDIO_PATH}`, {
+			headers: { connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", origin: "https://evil.example" },
+		}).then(
+			(response) => response.status,
+			() => "refused",
+		);
+		assert.notEqual(refused, 101, "a web page's WebSocket is refused");
+	} finally {
+		links.closeAll();
+		server.close();
+	}
 });

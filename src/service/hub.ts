@@ -10,6 +10,7 @@ import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettin
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
+import { StudioLinks, type PlaceCandidate } from "./studio";
 import { TargetCache } from "./targets";
 import { olderThan77, resolveRojo } from "./tools";
 
@@ -58,6 +59,8 @@ interface Runtime {
 	rojo: StartedRojo | null;
 	/** Status checks in a row that went unanswered (see CRASH_MISSES). */
 	misses: number;
+	/** The version of the rojo serving, when known; the Studio plugin speaks only 7.7 and newer (spec 007). */
+	rojoVersion: string | null;
 	/** A status check is in flight, so the next tick does not start another. */
 	probing: boolean;
 }
@@ -108,8 +111,25 @@ export class Hub {
 	/** The branch picker's lists, kept warm in the background (spec 002). */
 	readonly targetCache: TargetCache;
 
+	/** Each project file's place fields, reread only when the file changes (spec 007). */
+	private readonly placeFields = new Map<string, { mtime: number; fields: Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> }>();
+
+	/** The Studio plugins connected to the service (spec 007). */
+	readonly studio: StudioLinks;
+
 	constructor(readonly home: string) {
 		this.registry = new Registry(home);
+		this.studio = new StudioLinks(
+			() => this.placeCandidates(),
+			{
+				get: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
+				set: (placeId, slotId) => {
+					if (slotId) this.registry.placeChoices[String(placeId)] = slotId;
+					else delete this.registry.placeChoices[String(placeId)];
+					this.registry.save();
+				},
+			},
+		);
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
 		this.targetCache = new TargetCache((path) => this.isHubView(path));
@@ -162,6 +182,7 @@ export class Hub {
 				rojo: null,
 				misses: 0,
 				probing: false,
+				rojoVersion: null,
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -206,6 +227,7 @@ export class Hub {
 					if (info && info.projectName === slot.projectName && (await rojoAlive(this.slotFile(slot.id)))) {
 						runtime.state = "running";
 						runtime.sessionId = info.sessionId;
+						runtime.rojoVersion = info.serverVersion || null;
 						runtime.log.poll();
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
@@ -446,7 +468,56 @@ export class Hub {
 			targetsAt: this.targetCache.stamp(slot.repoPath),
 			sourcemap: runtime.sourcemap?.status ?? { state: "off", detail: runtime.sourcemapOff },
 			claim: claim ? { label: claim.label, until: claim.until } : null,
+			places: runtime.state === "running" ? this.studio.placesOn(slot.port, runtime.sessionId) : [],
 		};
+	}
+
+	/*
+		What the Studio plugin's place matching needs about every project. The
+		place fields come from the primary checkout's project file, the one the
+		slot file copies them from (see SESSION_FIELDS in project.ts).
+	*/
+	placeCandidates(): PlaceCandidate[] {
+		return this.registry.slots.map((slot) => {
+			const runtime = this.runtime(slot.id);
+			return {
+				slotId: slot.id,
+				projectName: slot.projectName,
+				port: slot.port,
+				state: runtime.state,
+				sessionId: runtime.sessionId,
+				branch: runtime.branch,
+				targetLabel: runtime.targetLabel,
+				rojoVersion: runtime.rojoVersion,
+				...this.placeFieldsOf(slot),
+			};
+		});
+	}
+
+	private placeFieldsOf(slot: SlotRecord): Pick<PlaceCandidate, "servePlaceIds" | "blockedPlaceIds" | "placeId"> {
+		const file = join(slot.repoPath, slot.projectFile);
+		const cached = this.placeFields.get(file);
+		let mtime: number;
+		try {
+			mtime = statSync(file).mtimeMs;
+		} catch {
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+		}
+		if (cached && cached.mtime === mtime) return cached.fields;
+		const ids = (value: unknown): number[] | null => (Array.isArray(value) ? value.filter((id): id is number => Number.isInteger(id)) : null);
+		try {
+			const project = readProject(file);
+			const fields = {
+				servePlaceIds: ids(project.servePlaceIds),
+				blockedPlaceIds: ids(project.blockedPlaceIds),
+				placeId: Number.isInteger(project.placeId) ? (project.placeId as number) : null,
+			};
+			this.placeFields.set(file, { mtime, fields });
+			return fields;
+		} catch {
+			// Mid-edit (half-typed JSON): keep what was read last, like servePort (see portRequests).
+			return cached?.fields ?? { servePlaceIds: null, blockedPlaceIds: null, placeId: null };
+		}
 	}
 
 	/** Nothing serving and nothing meant to be (see IDLE_EXIT_MS in main.ts). */
@@ -580,6 +651,7 @@ export class Hub {
 			rmSync(this.slotDir(id), { recursive: true, force: true });
 			this.registry.slots = this.registry.slots.filter((entry) => entry.id !== id);
 			for (const group of this.registry.groups) group.slotIds = group.slotIds.filter((member) => member !== id);
+			for (const [place, chosen] of Object.entries(this.registry.placeChoices)) if (chosen === id) delete this.registry.placeChoices[place];
 			this.registry.save();
 			this.runtimes.delete(id);
 			this.claims.delete(id);
@@ -760,6 +832,7 @@ export class Hub {
 					`Serving with Rojo ${rojo.version} (pinned in ${rojo.manifest}), which speaks Rojo protocol 4. The Rojo 7.7 Studio plugin only connects to Rojo 7.7 (protocol 5) and will refuse this server; pin rojo-rbx/rojo@7.7.0 to use it. The Studio-connected light also needs Rojo 7.7.`,
 				];
 			}
+			runtime.rojoVersion = rojo.version;
 			runtime.rojo = await startRojo(rojo.binary, this.slotFile(slot.id), slot.port, slot.repoPath, this.logFile(slot.id));
 			runtime.sessionId = await this.waitForRojo(slot);
 			runtime.misses = 0;

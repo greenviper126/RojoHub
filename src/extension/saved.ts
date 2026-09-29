@@ -49,6 +49,7 @@ export function savedState(hubHome: string, lastSlots: SlotView[]): { slots: Slo
 			targetsAt: 0,
 			sourcemap: { state: "off", detail: "" },
 			claim: null,
+			places: [],
 		};
 	});
 	const records = saved.groups ?? [];

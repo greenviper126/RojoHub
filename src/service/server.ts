@@ -1,12 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { SERVICE_VERSION, type AgentId, type AgentWishes, type Health, type Snapshot, type Target } from "../common/api";
+import { SERVICE_VERSION, STUDIO_PATH, type AgentId, type AgentWishes, type Health, type Snapshot, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
 import { AGENTS, AgentRegistrar } from "./agentConfig";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
 import { Mcp } from "./mcp";
 import { Conflict, NotFound } from "./registry";
+import { acceptWebSocket } from "./websocket";
 
 /*
 	The service's HTTP API, bound to 127.0.0.1 only. JSON in, JSON out.
@@ -39,6 +40,9 @@ import { Conflict, NotFound } from "./registry";
 	GET    /agents                                   Claude Code's and Codex's MCP registration (spec 004)
 	PUT    /agents                { claudeCode?, codex? }   true adds Rojo-Hub to that agent's config, false takes it out
 	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
+	GET    /studio                                   WebSocket for the Studio plugin (spec 007, src/service/studio.ts)
+	GET    /place-choices                            the project picked per Studio place, { placeId: slotId }
+	DELETE /place-choices/:placeId                   forget one
 
 	Only programs on this machine may use it, never a web page:
 	- Host must name the loopback address and this port. A DNS-rebinding page
@@ -180,6 +184,14 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return send(response, 200, hub.registry.order);
 				}
 			}
+			if (parts[0] === "place-choices") {
+				if (method === "GET" && parts.length === 1) return send(response, 200, hub.registry.placeChoices);
+				if (method === "DELETE" && parts.length === 2) {
+					delete hub.registry.placeChoices[parts[1]];
+					hub.registry.save();
+					return send(response, 200, hub.registry.placeChoices);
+				}
+			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
@@ -285,6 +297,20 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			const status = error instanceof NotFound ? 404 : error instanceof Conflict ? 409 : 500;
 			send(response, status, { error: error instanceof Error ? error.message : String(error) });
 		}
+	});
+	/*
+		The Studio plugin's WebSocket (spec 007). Same rule as every other request:
+		a web page may open a WebSocket to 127.0.0.1 too, but it must send its
+		Origin, and that is refused. Studio sends none (measured, spec 007).
+	*/
+	server.on("upgrade", (request, socket, head) => {
+		const path = new URL(request.url ?? "/", "http://localhost").pathname;
+		if (path !== STUDIO_PATH || !allowedRequest(request, port)) {
+			socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+			return;
+		}
+		const link = acceptWebSocket(request, socket, head);
+		if (link) hub.studio.attach(link);
 	});
 	return new Promise<typeof server>((done, fail) => {
 		server.once("error", fail);
