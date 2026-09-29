@@ -72,5 +72,6 @@ changes listed in [`plugin/UPSTREAM.md`](plugin/UPSTREAM.md).
 ## License
 
 [MIT](LICENSE), except [`plugin/`](plugin/), which is Rojo's Studio plugin and stays under Rojo's
-[MPL-2.0](plugin/LICENSE) (Rojo-Hub's own files in it are MIT). Not affiliated with Roblox or the Rojo
-project.
+[MPL-2.0](plugin/LICENSE) (Rojo-Hub's own files in it are MIT). The extension and the plugin bundle
+other open-source work, credited with its licences in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Not affiliated with Roblox or the Rojo project.

@@ -10,6 +10,9 @@ This folder is Rojo's Studio plugin, changed so that Rojo-Hub can connect it by 
 - `Packages/` holds the plugin's dependencies, which upstream keeps as git submodules, copied at the
   commits upstream pins, each with its own licence. Only the folder each package's
   `default.project.json` builds is kept. TestEZ is left out: upstream uses it only in dev builds.
+- `rbx_dom_lua/LICENSE.txt` is rbx-dom's licence (MIT), added here: upstream copies rbx_dom_lua from
+  rbx-dom without it.
+- Every package and its licence is credited in the repository's `THIRD-PARTY-NOTICES.md`.
 - `default.project.json` is upstream's `plugin.project.json` with paths made relative to this folder,
   `*.spec.lua` left out of the build, and the Creator Store upload details dropped.
 
@@ -54,5 +57,5 @@ Each hook is marked `-- Rojo-Hub` in the file.
 2. Diff its `plugin/` against the tag above, and apply that diff here (`src`, `log`, `http`, `fmt`,
    `rbx_dom_lua`, `Version.txt`, and each package at its new submodule commit).
 3. Re-apply the changes listed above where the diff touched them.
-4. Update the tag and commit here, and check `protocolVersion` in `src/Config.lua`: a new protocol
+4. Update the tag and commit here, and the versions in `tools/notices.mjs` (then run it), and check `protocolVersion` in `src/Config.lua`: a new protocol
    means the service must refuse projects pinning older rojo (spec 007).

@@ -12,7 +12,7 @@ npm run typecheck
 npm test              # build, load the bundles (smoke), unit + end-to-end against a real rojo 7.7 and a temp git repo
 npm run build         # esbuild -> dist/extension.js, dist/service.js; rojo 7.7.0 (Rokit) -> dist/RojoHub.rbxm
 npm run package       # rojo-hub-<version>.vsix
-code --install-extension rojo-hub-0.20.0.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
+code --install-extension rojo-hub-0.20.1.vsix --force   # repeat with --profile "Roblox" and --profile "Roblox-ScaryPlay"
 node tools/live-switch-headless.mjs verbatim|plain   # the original measurement
 ```
 
@@ -73,6 +73,13 @@ between them change.
   place that must last (the last synced project, assignments) is kept by the service.
 - Tests never touch the real Studio plugins folder: the service takes it from
   `ROJO_HUB_STUDIO_PLUGINS` when set, and the smoke and end-to-end tests set it.
+
+## Licences
+
+`THIRD-PARTY-NOTICES.md` credits everything of others' that ships (the Rojo plugin and its packages,
+bundled npm packages, the codicon font). Adding or updating any of them means updating
+`tools/notices.mjs` and running it; `npm test` fails otherwise. Keep upstream licence and copyright
+notices intact.
 
 ## Documentation
 
