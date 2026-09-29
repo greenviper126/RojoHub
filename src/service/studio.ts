@@ -167,7 +167,18 @@ export class StudioLinks {
 			get(placeId: number): string | null;
 			set(placeId: number, slotId: string | null): void;
 		},
-		private readonly log: (message: string) => void = () => undefined,
+		/*
+			The project each place last synced with. Kept by the service because the
+			plugin's own record is one settings value shared by every Studio process,
+			and each process writes back the whole table it loaded, so places open at
+			once overwrite each other's entries (seen live, spec 007).
+		*/
+		private readonly synced: {
+			get(placeId: number): string | null;
+			set(placeId: number, projectName: string): void;
+		} = { get: () => null, set: () => undefined },
+		/** service.log, set by main.ts once it has one. */
+		public log: (message: string) => void = () => undefined,
 	) {
 		setInterval(() => this.tick(), TICK_MS).unref();
 		setInterval(() => {
@@ -205,11 +216,13 @@ export class StudioLinks {
 					remembered: typeof raw.remembered === "string" ? raw.remembered : null,
 				};
 				message = studio.hello;
-				this.log(`studio: ${message.placeName} (${message.placeId}) said hello, plugin ${message.pluginVersion}`);
+				this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}${studio.hello.unsaved ? ", unsaved" : ""}) said hello, plugin ${studio.hello.pluginVersion}`);
 			} else if (message.type === "state") {
 				studio.connected = message.connected ?? null;
-				// What the place syncs with now is what it last synced with, which the plugin saves too.
-				if (studio.connected && studio.hello) studio.hello = { ...studio.hello, remembered: studio.connected.projectName };
+				const hello = studio.hello;
+				if (studio.connected && hello && !hello.unsaved && this.synced.get(hello.placeId) !== studio.connected.projectName) {
+					this.synced.set(hello.placeId, studio.connected.projectName);
+				}
 			} else if (message.type === "choose" && studio.hello && !studio.hello.unsaved) {
 				this.choices.set(studio.hello.placeId, message.slotId);
 			}
@@ -249,10 +262,15 @@ export class StudioLinks {
 			};
 		} else {
 			const choice = hello.unsaved ? null : this.choices.get(hello.placeId);
-			match = { type: "match", serviceVersion: SERVICE_VERSION, ...matchPlace(hello, candidates, choice) };
+			const remembered = (hello.unsaved ? null : this.synced.get(hello.placeId)) ?? hello.remembered;
+			match = { type: "match", serviceVersion: SERVICE_VERSION, ...matchPlace({ ...hello, remembered }, candidates, choice) };
 		}
 		const text = JSON.stringify(match);
 		if (text === studio.lastSent) return;
+		const was = studio.lastSent ? (JSON.parse(studio.lastSent) as StudioMatch) : null;
+		if (was?.status !== match.status || was?.target?.sessionId !== match.target?.sessionId) {
+			this.log(`studio: ${hello.placeName} (${hello.placeId}): ${match.status}${match.target ? ` ${match.target.projectName}:${match.target.port}` : ""}`);
+		}
 		studio.lastSent = text;
 		studio.link.send(text);
 	}

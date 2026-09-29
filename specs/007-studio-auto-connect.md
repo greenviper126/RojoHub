@@ -235,7 +235,17 @@ service's `/slots`.
   sync without asking, others still ask. Rojo saves each setting's default the first time the plugin
   runs, so a Studio that already ran an earlier build of this plugin keeps *Initial* until changed.
 
-Not yet checked live: Disconnect being respected, the Sync with… picker, two projects
+- **Disconnect** in Test1, then *Sync with…* → RojoHubStudioTest2: stayed disconnected until the pick,
+  then synced (after Rojo's confirmation, since that Studio had *Initial* saved from an earlier build).
+- **A new unsaved Baseplate** (`PlaceId` 0): answered "unsaved"; not connected.
+- **Bug found and fixed:** after reopening, Test2 had forgotten it last synced with project 1 and was
+  asked to choose. The plugin's per-place record (`priorEndpoints`, as in Rojo's plugin) is one
+  settings value shared by every Studio process; each process loads the whole table at start and
+  writes it all back, so Test1's save overwrote Test2's entry. The service now records each place's
+  last synced project (`placeSynced` in `registry.json`) from the plugin's reports and uses it
+  first.
+
+Not yet checked live: the Sync with… picker, two projects
 claiming one place in Studio (covered by unit tests), an unsaved place, and the panel's new tooltip
 and notice (need the extension installed).
 

@@ -135,6 +135,13 @@ export class Hub {
 					this.registry.save();
 				},
 			},
+			{
+				get: (placeId) => this.registry.placeSynced[String(placeId)] ?? null,
+				set: (placeId, projectName) => {
+					this.registry.placeSynced[String(placeId)] = projectName;
+					this.registry.save();
+				},
+			},
 		);
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));

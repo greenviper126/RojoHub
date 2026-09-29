@@ -527,7 +527,9 @@ itself. With it, a place connects with no port typed and no click.
 
 1. a project whose `servePlaceIds` lists the place;
 2. a project whose `placeId` is the place's;
-3. the project this place last synced with (the plugin remembers it per place, like Rojo's plugin).
+3. the project this place last synced with. The service records it (`placeSynced` in `registry.json`)
+   whenever a place with the plugin syncs; the plugin's own per-place record, like Rojo's, is only the
+   fallback, since every open Studio shares that one settings value and overwrites the others' entries.
 
 A project that lists the place in `blockedPlaceIds` never matches. Only a **serving** project is
 connected to. If the first step that finds a project finds only stopped ones, the plugin says which
@@ -947,7 +949,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 
 | Path | Contents |
 |---|---|
-| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, and the project picked per Studio place where several claim it (`placeChoices`) |
+| `registry.json` | Projects (repo, port, what they serve, whether they should be serving), groups (members, nested groups, whether running), the panel's display order, the project picked per Studio place where several claim it (`placeChoices`), and the project each place last synced with (`placeSynced`) |
 | `registry.json.bak` | `registry.json` as it was before the last save, to start from if it is damaged |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, kept aside when the service started from the `.bak` instead |
 | `settings.json` | The settings last sent by VS Code: port range, excluded ports, `sourcemaps` and `studioPlugin` |

@@ -642,7 +642,12 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 	const { createServer } = await import("node:http");
 	let candidates: PlaceCandidate[] = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111 })];
 	const choices = new Map<number, string | null>();
-	const links = new StudioLinks(() => candidates, { get: (id) => choices.get(id) ?? null, set: (id, slot) => void choices.set(id, slot) });
+	const synced = new Map<number, string>();
+	const links = new StudioLinks(
+		() => candidates,
+		{ get: (id) => choices.get(id) ?? null, set: (id, slot) => void choices.set(id, slot) },
+		{ get: (id) => synced.get(id) ?? null, set: (id, name) => void synced.set(id, name) },
+	);
 	const server = createServer();
 	let port = 0;
 	server.on("upgrade", (request, socket, head) => {
@@ -682,6 +687,7 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, w
 		await new Promise((done) => setTimeout(done, 100));
 		assert.deepEqual(links.placesOn(35111, "second"), [{ placeId: 111, placeName: "Lobby", pluginVersion: "test" }]);
 		assert.deepEqual(links.placesOn(35111, "first"), [], "a place synced to an older session is not on the card");
+		assert.equal(synced.get(111), "game", "the service records what the place synced with");
 
 		// a second claimant appears: the place keeps to the project it syncs with; a pick moves it, and is stored
 		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];

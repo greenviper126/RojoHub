@@ -45,6 +45,8 @@ interface RegistryFile {
 	order?: DisplayOrder;
 	/** The project picked for a Studio place that several serving projects claim, by place ID (spec 007). */
 	placeChoices?: Record<string, string>;
+	/** The project name each Studio place last synced with, by place ID (spec 007). */
+	placeSynced?: Record<string, string>;
 }
 
 export class Registry {
@@ -53,6 +55,7 @@ export class Registry {
 	groups: GroupRecord[] = [];
 	order: DisplayOrder = { projects: [], groups: [] };
 	placeChoices: Record<string, string> = {};
+	placeSynced: Record<string, string> = {};
 	/** What happened when registry.json could not be read, for service.log; null when it read fine. */
 	readonly recovered: string | null = null;
 
@@ -89,8 +92,8 @@ export class Registry {
 		this.slots = Array.isArray(parsed.slots) ? parsed.slots.filter(validSlot) : [];
 		this.groups = Array.isArray(parsed.groups) ? parsed.groups.filter(validGroup) : [];
 		this.order = { projects: parsed.order?.projects ?? [], groups: parsed.order?.groups ?? [] };
-		const choices = parsed.placeChoices;
-		this.placeChoices = choices && typeof choices === "object" && !Array.isArray(choices) ? Object.fromEntries(Object.entries(choices).filter(([, id]) => typeof id === "string")) : {};
+		this.placeChoices = stringMap(parsed.placeChoices);
+		this.placeSynced = stringMap(parsed.placeSynced);
 	}
 
 	/*
@@ -99,7 +102,14 @@ export class Registry {
 		cut at any point leaves one whole registry to start from.
 	*/
 	save(): void {
-		const body: RegistryFile = { version: 1, slots: this.slots, groups: this.groups, order: this.order, placeChoices: this.placeChoices };
+		const body: RegistryFile = {
+			version: 1,
+			slots: this.slots,
+			groups: this.groups,
+			order: this.order,
+			placeChoices: this.placeChoices,
+			placeSynced: this.placeSynced,
+		};
 		const temporary = this.file + ".tmp";
 		const fd = openSync(temporary, "w");
 		try {
@@ -132,6 +142,12 @@ export class Registry {
 }
 
 const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/** A { key: string } object from the file, without entries a hand edit broke. */
+function stringMap(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return Object.fromEntries(Object.entries(value).filter(([, entry]) => typeof entry === "string"));
+}
 
 function validSlot(slot: SlotRecord): boolean {
 	const target = slot?.target as { kind?: unknown; path?: unknown; ref?: unknown } | undefined;
