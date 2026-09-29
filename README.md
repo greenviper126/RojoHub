@@ -18,6 +18,9 @@ fixed port, and switches any of them to another branch or worktree **without Stu
 - **Studio connects by itself.** Rojo-Hub installs its own Studio plugin (Rojo's, changed to connect
   by itself). A place syncs with the project whose `servePlaceIds` lists it, or the one you assign it
   in the panel, and reconnects on its own after Rojo restarts. No port to type.
+- **Open places from VS Code** (opt-in, `rojoHub.openPlaces`). Open, close or reopen a project's
+  places in Studio from its card, or let agents open them. A place that is already open is never
+  opened twice.
 - **Live branch switching.** Pick a worktree or any branch. The same `rojo serve` keeps running and
   Studio receives the difference as one update.
 - **Groups.** Start, stop or swap a whole set of projects at once, like a profile.
