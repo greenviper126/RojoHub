@@ -4,8 +4,11 @@
 	plugin's part (GET /api/rojo, /api/read, the /api/socket websocket) and
 	records what Rojo sends while the project file's $paths are rewritten.
 
-	Usage:  node tools/live-switch-headless.mjs verbatim   serve by \\?\ path (switches apply)
-	        node tools/live-switch-headless.mjs plain      serve by C:\ path (switches are dropped on Windows)
+	Usage:  node tools/live-switch-headless.mjs verbatim [version]   serve by \\?\ path (switches apply)
+	        node tools/live-switch-headless.mjs plain [version]      serve by C:\ path (switches are dropped on Windows by 7.7.0)
+
+	version is the rojo to pin through Rokit (default 7.7.0). The last step
+	deletes a folder rojo served earlier (rojo-rbx/rojo#1305).
 */
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -62,7 +65,9 @@ writeProject("wtA");
 const MODE = process.argv[2] ?? "verbatim";
 const servePath = MODE === "verbatim" ? "\\\\?\\" + PROJECT : PROJECT;
 console.log("serving", servePath);
-writeFileSync(join(ROOT, "rokit.toml"), '[tools]\nrojo = "rojo-rbx/rojo@7.7.0"\n');
+const VERSION = process.argv[3] ?? "7.7.0";
+console.log("rojo", VERSION);
+writeFileSync(join(ROOT, "rokit.toml"), `[tools]\nrojo = "rojo-rbx/rojo@${VERSION}"\n`);
 const rojo = spawn("rojo.exe", ["serve", servePath, "--port", String(PORT)], { cwd: HUB, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 rojo.stdout.on("data", (d) => (log += d));
@@ -96,8 +101,8 @@ async function step(label, action) {
 	const before = events.length;
 	action();
 	await sleep(1500);
-	const now = await info();
-	console.log(`   packets=${events.length - before} sameSession=${now.sessionId === first.sessionId} socketOpen=${!closed}`);
+	const now = await info().catch(() => null);
+	console.log(`   packets=${events.length - before} sameSession=${now?.sessionId === first.sessionId} socketOpen=${!closed}${now ? "" : " ROJO GONE"}`);
 }
 
 await step("switch A -> B (rewrite project file)", () => writeProject("wtB"));
@@ -109,6 +114,8 @@ await step("edit file in A after switching back", () => writeFileSync(join(ROOT,
 await step("edit file in B while serving A (expect nothing)", () => writeFileSync(join(ROOT, "wtB", "src", "Server", "Foo.server.luau"), `print("wtB v3")\n`));
 await step("switch A -> B again", () => writeProject("wtB"));
 await step("edit file in B after second switch", () => writeFileSync(join(ROOT, "wtB", "src", "Server", "Foo.server.luau"), `print("wtB v4")\n`));
+await step("delete a subfolder of A, served earlier (rojo-rbx/rojo#1305)", () => rmSync(join(ROOT, "wtA", "src", "Shared"), { recursive: true, force: true }));
+console.log(`   rojo alive=${rojo.exitCode === null}`);
 
 ws.close();
 spawn("taskkill", ["/pid", String(rojo.pid), "/T", "/F"], { stdio: "ignore" });
