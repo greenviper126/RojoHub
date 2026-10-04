@@ -8,7 +8,7 @@ import { after, before, test } from "node:test";
 
 import { decode } from "@msgpack/msgpack";
 
-import type { GroupResult, GroupView, SlotView, Snapshot, TargetOption } from "../common/api";
+import { STUDIO_PATH, STUDIO_PROTOCOL, type GroupResult, type GroupView, type SlotView, type Snapshot, type StudioMatch, type TargetOption } from "../common/api";
 import { pathKey } from "../common/paths";
 import { parsePortSettings, preferredPort } from "../service/ports";
 
@@ -198,7 +198,18 @@ test("one port, live switches, one session", async () => {
 	socket.close();
 	await until("connection count 0", async () => (await call<SlotView[]>("GET", "/slots"))[0].connections === 0);
 
-	// deleting a served subfolder crashes rojo 7.7 (rojo-rbx/rojo#1305); the Hub brings the port back
+	// deleting a served subfolder crashes rojo 7.7 (rojo-rbx/rojo#1305); the Hub brings the port back,
+	// and a Studio place synced to it is told the project is restarting, so it holds its session (spec 010)
+	const answers: StudioMatch[] = [];
+	const plugin = new WebSocket(`ws://127.0.0.1:${API_PORT}${STUDIO_PATH}`);
+	plugin.onmessage = (event) => {
+		const message = JSON.parse(String(event.data)) as StudioMatch | { type: "welcome" | "ping" };
+		if (message.type === "welcome") {
+			plugin.send(JSON.stringify({ type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "e2e", placeId: "424242", gameId: "1", placeName: "E2E", unsaved: false, remembered: projectName }));
+		}
+		if (message.type === "match") answers.push(message);
+	};
+	await until("the place's answer", async () => answers.some((answer) => answer.status === "connect" && answer.target?.sessionId === info.sessionId));
 	mkdirSync(join(repo, "src", "Server", "Doomed", "Deeper"), { recursive: true });
 	writeFileSync(join(repo, "src", "Server", "Doomed", "Deeper", "X.luau"), "return 1\n");
 	await sleep(800);
@@ -208,6 +219,9 @@ test("one port, live switches, one session", async () => {
 		return view.state === "running" && view.sessionId !== info.sessionId && view;
 	}, 30000);
 	assert.match(restarted.warnings.join("\n"), /crashed .* restarted/);
+	assert.ok(answers.some((answer) => answer.status === "stopped" && answer.restarting === true), "the place heard the project was restarting");
+	await until("the place's new answer", async () => answers.at(-1)?.status === "connect" && answers.at(-1)?.target?.sessionId === restarted.sessionId);
+	plugin.close();
 	assert.equal(readdirSync(join(home, "views", slot.id)).length, 0, "restart collected the unused view");
 
 	// a servePort in the project file wins; the running slot moves to it

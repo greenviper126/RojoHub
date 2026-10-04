@@ -10,6 +10,7 @@ import {
 	type StudioPlaceView,
 	type StudioProject,
 	type StudioToService,
+	type StudioUnapplied,
 } from "../common/api";
 import type { WebSocketLink } from "./websocket";
 
@@ -35,6 +36,8 @@ export interface PlaceCandidate {
 	servePlaceIds: number[] | null;
 	blockedPlaceIds: number[] | null;
 	placeId: number | null;
+	/** Coming back by itself (a crash restart, a port move): the plugin waits for it quietly (spec 010). */
+	restarting?: boolean;
 }
 
 export type Place = Pick<StudioHello, "placeId" | "unsaved" | "remembered">;
@@ -81,10 +84,13 @@ export function matchPlace(place: Place, candidates: PlaceCandidate[], assigned:
 		if (!running(project)) {
 			return {
 				status: "stopped",
-				message: `Waiting for ${project.projectName}, this place's project (${REASON_TEXT[reason]}), to be started in Rojo-Hub.`,
+				message: project.restarting
+					? `${project.projectName}, this place's project (${REASON_TEXT[reason]}), is restarting.`
+					: `Waiting for ${project.projectName}, this place's project (${REASON_TEXT[reason]}), to be started in Rojo-Hub.`,
 				target: null,
 				projectId: project.slotId,
-			reason,
+				reason,
+				...(project.restarting ? { restarting: true } : {}),
 			};
 		}
 		if (!speaksProtocol5(project.rojoVersion)) {
@@ -175,6 +181,8 @@ interface Studio {
 	/** The last answer, for the panel. */
 	answer: PlaceAnswer | null;
 	lastSent: string;
+	/** The plugin's last report of changes it could not apply (spec 010), with when it came. */
+	unapplied: (Omit<StudioUnapplied, "type"> & { at: number }) | null;
 }
 type StudioStateConnected = { port: number; projectName: string; sessionId: string };
 
@@ -237,7 +245,7 @@ export class StudioLinks {
 	}
 
 	attach(link: WebSocketLink): void {
-		const studio: Studio = { id: randomUUID(), link, hello: null, connected: null, confirming: false, answer: null, lastSent: "" };
+		const studio: Studio = { id: randomUUID(), link, hello: null, connected: null, confirming: false, answer: null, lastSent: "", unapplied: null };
 		this.studios.add(studio);
 		link.send(JSON.stringify({ type: "welcome", protocol: STUDIO_PROTOCOL, serviceVersion: SERVICE_VERSION }));
 		link.onClose = () => {
@@ -265,6 +273,12 @@ export class StudioLinks {
 					remembered: typeof raw.remembered === "string" ? raw.remembered : null,
 				};
 				this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}${studio.hello.unsaved ? ", unsaved" : ""}) said hello, plugin ${studio.hello.pluginVersion}`);
+			} else if (message.type === "unapplied") {
+				const raw = message as unknown as Record<string, unknown>;
+				const items = Array.isArray(raw.items) ? raw.items.filter((item): item is string => typeof item === "string").slice(0, 20) : [];
+				studio.unapplied = { sessionId: String(raw.sessionId ?? ""), total: Number(raw.total) || items.length, items, at: Date.now() };
+				if (studio.hello) this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}) could not apply ${studio.unapplied.total} changes: ${items.slice(0, 3).join("; ")}`);
+				return;
 			} else if (message.type === "state") {
 				studio.connected = message.connected ?? null;
 				studio.confirming = message.confirming === true;
@@ -330,6 +344,18 @@ export class StudioLinks {
 			places.push({ placeId: studio.hello.placeId, placeName: studio.hello.placeName, pluginVersion: studio.hello.pluginVersion });
 		}
 		return places;
+	}
+
+	/** What places synced to the project on `port` reported they could not apply since `since` (ms), for an agent's switch. */
+	unappliedOn(port: number, since: number): { placeName: string; placeId: number; total: number; items: string[] }[] {
+		const reports: { placeName: string; placeId: number; total: number; items: string[] }[] = [];
+		for (const studio of this.studios) {
+			const report = studio.unapplied;
+			if (!studio.hello || !report || report.at < since) continue;
+			if (studio.connected && (studio.connected.port !== port || studio.connected.sessionId !== report.sessionId)) continue;
+			reports.push({ placeName: studio.hello.placeName, placeId: studio.hello.placeId, total: report.total, items: report.items });
+		}
+		return reports;
 	}
 
 	private assignedFor(studio: Studio): string | null {

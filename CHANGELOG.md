@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.21.0
+
+- **Switching no longer drops Studio's connection.** A switch to a branch whose project file adds a
+  node Studio cannot create but already has (such as `StarterCharacterScripts`) now syncs it and
+  everything under it. Before, the plugin dropped the whole node, and agents restarted the project
+  to get it, which disconnected Studio.
+- **Restarts you do not see.** When a project's Rojo restarts (it crashed because a worktree it served
+  was deleted, its port moved, or someone stopped and started it), places synced to it stay on
+  Connected, with no notifications or sounds, and pick up the new session by themselves. The
+  disconnect is shown only if the project does not come back.
+- Agents: `serve_here` and `switch` say what a Studio place could not apply, and agents are told not
+  to stop and start a project to refresh Studio.
+- The Studio plugin is Rojo 7.7.1's. Rojo's plugin is now kept unedited in the repository, with
+  Rojo-Hub's changes as small patches applied at build time, so moving to a new Rojo is one command.
+  Projects pinned to Rojo 7.7.0 keep working.
+
 ## 0.20.2
 
 - Shorter documentation: the README and the documentation site were rewritten to be brief, and the

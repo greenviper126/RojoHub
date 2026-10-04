@@ -34,7 +34,7 @@ const MAX_WAIT_S = 600;
 
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
 
-Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and log shows more. If the project is not serving, start it. If your repo is not registered, add_project it. To begin new work in a worktree of its own, use new_branch.
+Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. To begin new work in a worktree of its own, use new_branch.
 
 Which Studio to look at: serve_here, status and wait_for_studio name the Studio places synced to the project, with their place IDs. Several Studio windows may be open for different projects; use the one whose place ID is listed (Roblox Studio tools list each open Studio with its place ID). If no place is synced, wait_for_studio, or tell the user; do not inspect another project's Studio.
 
@@ -95,13 +95,13 @@ export const TOOLS: Tool[] = [
 	{
 		name: "start",
 		title: "Start a project",
-		description: "Starts serving a project that is stopped (or in error). Studio places listed in its servePlaceIds sync by themselves. Never disturbs anyone.",
+		description: "Starts serving a project that is stopped (or in error). Studio places listed in its servePlaceIds sync by themselves. Never disturbs anyone. Never needed after serve_here or switch: they apply over the running session.",
 		inputSchema: project(),
 	},
 	{
 		name: "stop",
 		title: "Stop a project",
-		description: "Stops serving a project; its Studio places disconnect. Refused while another agent claimed it or a Studio place is synced to it and you hold no claim, unless force.",
+		description: "Stops serving a project; its Studio places disconnect. Do not stop and start a project to make Studio pick up a switch: that ends Rojo's session, and serve_here and switch already say what Studio could not apply. Refused while another agent claimed it or a Studio place is synced to it and you hold no claim, unless force.",
 		inputSchema: project({ force: forceProperty }),
 		annotations: { destructiveHint: true },
 	},
@@ -526,6 +526,18 @@ export class Mcp {
 		return lines.length ? `\n${lines.join("\n")}` : "";
 	}
 
+	/*
+		What synced places said they could not apply since the call began (spec
+		010): the honest answer to "why is it not in Studio", so the agent does
+		not restart rojo, which would end Studio's session.
+	*/
+	private unapplied(slot: SlotView, since: number): string {
+		const reports = this.hub.studio.unappliedOn(slot.port, since);
+		if (reports.length === 0) return "";
+		const lines = reports.map((report) => `${report.placeName} (place ${report.placeId}) could not apply ${report.total} change${report.total === 1 ? "" : "s"}: ${report.items.join("; ")}${report.total > report.items.length ? "; …" : ""}.`);
+		return `\n${lines.join("\n")}\nDo not stop and start the project for this: that ends Studio's session. Tell the user what is missing.`;
+	}
+
 	/** `Lobby (place 111), Match (place 222)` */
 	private placeList(places: Pick<StudioPlace, "placeName" | "placeId">[]): string {
 		return places.map((place) => `${place.placeName} (${place.placeId ? `place ${place.placeId}` : "not saved to Roblox"})`).join(", ");
@@ -571,9 +583,10 @@ export class Mcp {
 	private async serveHere(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		if (!root) throw new Refusal("path is required: your working directory.");
+		const since = Date.now();
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
+		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
 	}
 
 	private async switchTo(args: Args): Promise<string> {
@@ -597,10 +610,11 @@ export class Mcp {
 			target = option.target;
 			label = option.branch ?? option.label;
 		}
+		const since = Date.now();
 		const switched = await this.take(slot, target, label, args);
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
+		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
 	}
 
 	private async release(args: Args): Promise<string> {

@@ -10,6 +10,12 @@
 	It never takes over a session the user started, never reconnects a session
 	the user disconnected from or declined to sync, and does nothing outside edit
 	mode.
+
+	When the project's rojo restarts (a crash, a port move, an agent's stop and
+	start), the session it was synced to ends. That loss is held for a moment:
+	the panel stays on Connected, Rojo's notifications (and their sound) are
+	not shown, and the new session is connected to quietly (spec 010). Only if
+	no new session comes is the disconnect shown as Rojo would have.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -22,6 +28,7 @@ local Packages = Rojo.Packages
 
 local Log = require(Packages.Log)
 
+local Assets = require(Plugin.Assets)
 local Settings = require(Plugin.Settings)
 local ServeSession = require(Plugin.ServeSession)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
@@ -40,6 +47,12 @@ local SESSION_RETRY_SECONDS = 10
 local SESSION_TRIES = 3
 -- If the service has not answered by then, Rojo's own Auto Reconnect runs instead.
 local FALLBACK_SECONDS = 3
+-- A lost session is held this long for a new one (an agent's stop and start), and up to
+-- RESUME_MAX_SECONDS while the service says the project is restarting by itself.
+local RESUME_GRACE_SECONDS = 5
+local RESUME_MAX_SECONDS = 60
+-- Changes the plugin could not apply are reported with at most this many examples.
+local UNAPPLIED_ITEMS = 8
 
 local Hub = {}
 Hub.__index = Hub
@@ -61,6 +74,14 @@ function Hub.new(app)
 		-- What was last reported to the service as synced, to send only changes.
 		reported = nil,
 		reportedSession = nil,
+		-- Where the reported session was: { port, slotId }.
+		reportedWhere = nil,
+		-- A lost session being held: { since, sessionId, port, slotId, details }.
+		resuming = nil,
+		-- No auto-connect before this (os.clock()), after the user disconnected during a resume.
+		holdOffUntil = 0,
+		-- The session whose patches are watched for changes that could not be applied.
+		hookedSession = nil,
 		-- The place's name on Roblox; Studio names every DataModel "Place1".
 		placeName = nil,
 		stopped = false,
@@ -70,6 +91,11 @@ end
 
 function Hub:isActive()
 	return self.active
+end
+
+-- A lost session is being held: App keeps its page and shows none of Rojo's connection notifications.
+function Hub:isResuming()
+	return self.resuming ~= nil
 end
 
 --[[
@@ -211,6 +237,7 @@ function Hub:receive(text)
 			-- Assigned in VS Code just now: that is asking for a sync, even to a session the user left.
 			self.declined = nil
 			self.attempt = nil
+			self.holdOffUntil = 0
 		end
 		self.match = message
 		self:show(message)
@@ -288,10 +315,24 @@ function Hub:report()
 	if connected then
 		-- The user connected (or an auto-connect worked): nothing is declined any more.
 		self.declined = nil
+		if self.resuming then
+			Log.info("Rojo-Hub: resumed {} on a new session", connected.projectName)
+			self.resuming = nil
+		end
+		local target = self.match and self.match.target
+		self.reportedWhere = {
+			port = connected.port,
+			slotId = if target and target.port == connected.port then target.slotId else nil,
+		}
+		self:watchUnapplied(connected.sessionId)
 	elseif self.reportedSession then
 		-- The session just ended. The service may still name it for a moment (its rojo
 		-- is stopping), so it counts as tried: only a new session is connected at once.
 		self.attempt = { sessionId = self.reportedSession, at = os.clock(), tries = 1 }
+	end
+	if confirming and self.resuming then
+		-- The new session asks for confirmation: that page is shown, so the hold is over.
+		self.resuming = nil
 	end
 	self.reported = key
 	self.reportedSession = connected and connected.sessionId
@@ -308,11 +349,18 @@ function Hub:evaluate()
 	end
 	self:report()
 
+	if self.resuming and not self:keepResuming() then
+		self:giveUp()
+	end
+
 	local match = self.match
 	if match == nil or match.status ~= "connect" or match.target == nil then
 		return
 	end
 	if not Settings:get("hubAutoConnect") or not RunService:IsEdit() then
+		return
+	end
+	if os.clock() < self.holdOffUntil then
 		return
 	end
 	local app = self.app
@@ -363,6 +411,7 @@ function Hub:connectNow()
 	end
 	local target = match.target
 	self.declined = nil
+	self.holdOffUntil = 0
 	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = SESSION_TRIES }
 	self:connect(target)
 end
@@ -374,6 +423,176 @@ end
 ]]
 function Hub:decline(sessionId)
 	self.declined = sessionId or (self.match and self.match.target and self.match.target.sessionId)
+	self.resuming = nil
+end
+
+--[[
+	Called by App when its session ends, before it shows the disconnect.
+	Returns true to hold the loss (App then shows nothing): the session was
+	the project's, the user did not end it, and the service may name a new
+	one any moment. Errors while connecting to that new one are held too.
+]]
+function Hub:holdLoss(details)
+	if self.resuming then
+		self.resuming.details = details
+		return true
+	end
+	local lost = self.reportedSession
+	if not self.active or lost == nil or self.declined == lost then
+		return false
+	end
+	if not Settings:get("hubAutoConnect") or not RunService:IsEdit() then
+		return false
+	end
+	local where = self.reportedWhere or {}
+	self.resuming =
+		{ since = os.clock(), sessionId = lost, port = where.port, slotId = where.slotId, details = details }
+	Log.info("Rojo-Hub: the session ended ({}); waiting for the project to come back", details or "closed")
+	return true
+end
+
+-- Whether the held loss may still be resumed, from the service's latest answer.
+function Hub:keepResuming()
+	local resuming = self.resuming
+	local elapsed = os.clock() - resuming.since
+	if elapsed > RESUME_MAX_SECONDS then
+		return false
+	end
+	local match = self.match
+	if match == nil then
+		return elapsed < RESUME_GRACE_SECONDS
+	end
+	if match.status == "connect" and match.target then
+		-- Only the same project comes back quietly; another one is a real change.
+		local target = match.target
+		return target.port == resuming.port or (resuming.slotId ~= nil and target.slotId == resuming.slotId)
+	end
+	if match.status == "stopped" then
+		return match.restarting == true or elapsed < RESUME_GRACE_SECONDS
+	end
+	return false
+end
+
+-- No new session came: shows the disconnect as Rojo would have.
+function Hub:giveUp()
+	local resuming = self.resuming
+	self.resuming = nil
+	Log.info("Rojo-Hub: the project did not come back; showing the disconnect")
+	local app = self.app
+	local ok, err = pcall(function()
+		if app.serveSession ~= nil then
+			-- A connect is under way: show it.
+			app:setState({ appStatus = "Connecting" })
+		elseif resuming.details ~= nil then
+			app:setState({
+				appStatus = "Error",
+				errorMessage = tostring(resuming.details),
+				toolbarIcon = Assets.Images.PluginButtonWarning,
+			})
+			app:addNotification({ text = tostring(resuming.details), timeout = 10 })
+		else
+			app:setState({ appStatus = "NotConnected", toolbarIcon = Assets.Images.PluginButton })
+			app:addNotification({ text = "Disconnected from session.", timeout = 10 })
+		end
+	end)
+	if not ok then
+		Log.warn("Rojo-Hub could not show the disconnect: {}", err)
+	end
+end
+
+--[[
+	The user pressed Disconnect while a loss was held (the page still said
+	Connected): stop waiting, and do not connect by itself for a while, since
+	the session that comes back is a new one.
+]]
+function Hub:cancelResume()
+	if self.resuming == nil then
+		return
+	end
+	self.resuming = nil
+	self.holdOffUntil = os.clock() + RESUME_MAX_SECONDS
+	pcall(function()
+		self.app:setState({ appStatus = "NotConnected", toolbarIcon = Assets.Images.PluginButton })
+	end)
+end
+
+-- Studio's path of an instance in a patch, whether it exists yet or not.
+local function pathOf(instanceMap, added, id, depth)
+	local instance = instanceMap.fromIds[id]
+	if instance ~= nil then
+		local ok, name = pcall(instance.GetFullName, instance)
+		return if ok then name else "?"
+	end
+	local virtual = added[id]
+	if virtual ~= nil and depth < 50 then
+		return pathOf(instanceMap, added, virtual.Parent, depth + 1) .. "." .. tostring(virtual.Name)
+	end
+	return "?"
+end
+
+--[[
+	Describes what a patch left unapplied, briefly: the topmost instances that
+	could not be added, the properties that could not be set, the instances that
+	could not be removed. Returns total, items.
+]]
+function Hub.describeUnapplied(instanceMap, unapplied)
+	local items = {}
+	local total = 0
+	local function item(text)
+		total += 1
+		if #items < UNAPPLIED_ITEMS then
+			table.insert(items, text)
+		end
+	end
+	local added = unapplied.added or {}
+	for id, virtual in added do
+		if added[virtual.Parent] == nil then
+			item(`{pathOf(instanceMap, added, id, 0)} ({virtual.ClassName}, not added)`)
+		else
+			total += 1
+		end
+	end
+	for _, update in unapplied.updated or {} do
+		local names = {}
+		for name in update.changedProperties or {} do
+			table.insert(names, name)
+		end
+		table.sort(names)
+		if #names > 0 then
+			item(`{pathOf(instanceMap, added, update.id, 0)}: {table.concat(names, ", ")} not set`)
+		elseif update.changedName or update.changedClassName then
+			item(`{pathOf(instanceMap, added, update.id, 0)} (not renamed)`)
+		end
+	end
+	for _, removed in unapplied.removed or {} do
+		local name = if typeof(removed) == "Instance"
+			then removed:GetFullName()
+			else pathOf(instanceMap, added, removed, 0)
+		item(`{name} (not removed)`)
+	end
+	return total, items
+end
+
+-- Reports to the service what each patch of this session could not apply (spec 010).
+function Hub:watchUnapplied(sessionId)
+	if self.hookedSession == sessionId then
+		return
+	end
+	local session = self.app.serveSession
+	if session == nil then
+		return
+	end
+	self.hookedSession = sessionId
+	session:hookPostcommit(function(_patch, instanceMap, unapplied)
+		if unapplied == nil then
+			return
+		end
+		local ok, total, items = pcall(Hub.describeUnapplied, instanceMap, unapplied)
+		if ok and total > 0 then
+			Log.info("Rojo-Hub: {} changes could not be applied: {}", total, table.concat(items, "; "))
+			self:send({ type = "unapplied", sessionId = sessionId, total = total, items = items })
+		end
+	end)
 end
 
 return Hub

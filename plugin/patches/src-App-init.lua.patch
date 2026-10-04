@@ -86,8 +86,26 @@
  
  	local baseUrl = if string.find(host, "^https?://")
  		then string.format("%s:%s", host, port)
-@@ -686,7 +713,7 @@ function App:startSession()
- 			})
+@@ -677,16 +704,18 @@ function App:startSession()
+ 				self.dismissSyncReminder = nil
+ 			end
+ 
+-			self:setState({
+-				appStatus = AppStatus.Connecting,
+-				toolbarIcon = Assets.Images.PluginButton,
+-			})
+-			self:addNotification({
+-				text = "Connecting to session...",
+-			})
++			if not (self.hub and self.hub:isResuming()) then -- Rojo-Hub: a restart is resumed quietly (spec 010)
++				self:setState({
++					appStatus = AppStatus.Connecting,
++					toolbarIcon = Assets.Images.PluginButton,
++				})
++				self:addNotification({
++					text = "Connecting to session...",
++				})
++			end
  		elseif status == ServeSession.Status.Connected then
  			self.knownProjects[details] = true
 -			self:setPriorSyncInfo(host, port, details)
@@ -95,7 +113,33 @@
  			self:setRunningConnectionInfo(baseUrl)
  
  			local address = ("%s:%s"):format(host, port)
-@@ -744,6 +771,16 @@ function App:startSession()
+@@ -696,9 +725,11 @@ function App:startSession()
+ 				address = address,
+ 				toolbarIcon = Assets.Images.PluginButtonConnected,
+ 			})
+-			self:addNotification({
+-				text = string.format("Connected to session '%s' at %s.", details, address),
+-			})
++			if not (self.hub and self.hub:isResuming()) then -- Rojo-Hub
++				self:addNotification({
++					text = string.format("Connected to session '%s' at %s.", details, address),
++				})
++			end
+ 		elseif status == ServeSession.Status.Disconnected then
+ 			self.serveSession = nil
+ 			self:releaseSyncLock()
+@@ -711,6 +742,10 @@ function App:startSession()
+ 				},
+ 			})
+ 
++			if self.hub and self.hub:holdLoss(details) then -- Rojo-Hub: waits for the restarted project (spec 010)
++				return
++			end
++
+ 			-- Details being present indicates that this
+ 			-- disconnection was from an error.
+ 			if details ~= nil then
+@@ -744,6 +779,16 @@ function App:startSession()
  			return "Accept"
  		end
  
@@ -112,7 +156,15 @@
  		-- Play solo auto-connect does not require confirmation
  		if self:isAutoConnectPlaytestServerAvailable() then
  			Log.trace("Accepting patch without confirmation because play solo auto-connect is enabled")
-@@ -836,6 +873,10 @@ function App:endSession()
+@@ -831,11 +876,18 @@ end
+ 
+ function App:endSession()
+ 	if self.serveSession == nil then
++		if self.hub then -- Rojo-Hub: Disconnect while a restart was being waited for
++			self.hub:cancelResume()
++		end
+ 		return
+ 	end
  
  	Log.trace("Disconnecting session")
  
@@ -123,7 +175,7 @@
  	self.serveSession:stop()
  	self.serveSession = nil
  	self:setState({
-@@ -853,7 +894,8 @@ function App:endSession()
+@@ -853,7 +905,8 @@ function App:endSession()
  end
  
  function App:render()
@@ -133,7 +185,7 @@
  
  	local function createPageElement(appStatus, additionalProps)
  		additionalProps = additionalProps or {}
-@@ -908,6 +950,15 @@ function App:render()
+@@ -908,6 +961,15 @@ function App:render()
  							self:startSession()
  						end,
  
@@ -149,7 +201,7 @@
  						onNavigateSettings = function()
  							self.backPage = AppStatus.NotConnected
  							self:setState({
-@@ -922,6 +973,9 @@ function App:render()
+@@ -922,6 +984,9 @@ function App:render()
  						createPopup = not self.state.guiEnabled,
  
  						onAbort = function()
