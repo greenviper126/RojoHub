@@ -268,6 +268,7 @@ function update(tag) {
 		rmSync(UPSTREAM, { recursive: true, force: true });
 		cpSync(fresh, UPSTREAM, { recursive: true });
 		for (const [name, text] of carried) writePatch(name, text);
+		for (const name of readdirSync(PATCHES)) if (name.endsWith(".merged")) rmSync(join(PATCHES, name));
 		writeManifest(manifest);
 		console.log(`plugin/upstream is Rojo ${tag} (${manifest.commit.slice(0, 7)}); ${carried.length} patches carried over.`);
 		console.log("Next: check protocolVersion in plugin/upstream/src/Config.lua, update tools/notices.mjs and run it, build, and try it in Studio.");

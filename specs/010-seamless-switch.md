@@ -1,6 +1,6 @@
 # 010 — Switches that never disconnect Studio, and a plugin that rides on Rojo's
 
-Status: **draft** (branch `feat/seamless-switch`). Asked for by Viper: "seems like when an agent
+Status: **built in 0.21.0, not yet checked in Studio** (branch `feat/seamless-switch`; see *Checked*). Asked for by Viper: "seems like when an agent
 switches to another branch on rojo-hub it disconnects and connectes again. ideally that just does
 not happen and we switch the code no issue", "there is a new version of rojo so you have to update
 the plugin", and "make our code for that plugin more like a parisite so we can easily attach onto
@@ -37,23 +37,39 @@ Rojo's, edited in place with `-- Rojo-Hub` hooks in four files; moving to 7.7.1 
 
 When a patch adds an instance that cannot be created, and its parent already has a child with the
 same `Name` and `ClassName` that no Rojo ID owns, that child takes the ID (as hydrate does in a
-first sync), its properties are applied, and its children are reified under it. This fixes
-reason 1 over the same session.
+first sync), its properties are applied, and its children are reified under it. Under an adopted
+instance, an existing unowned child of the same name and class is adopted before anything is
+created, so a script already there is not duplicated. Only where creating fails: a creatable add is
+created as before (Viper: "do what makes the most sense"). `plugin/RojoHub/Adopt.lua`, one hook in
+`reify.lua`. Not handled: removing an adopted service-like node later leaves it (and so its
+children) in place, as Rojo does for hydrated services.
 
 ### 2. A restart Studio does not notice
 
 Some restarts cannot be avoided (reason 2, a crash, a port move, stop + start). When the session a
-place is synced to ends and the service names a new session of the *same project on the same
-port* within a few seconds, the plugin connects to it without showing the disconnect: no
-"disconnected" notification or sound, the panel stays on Connected, and the new session's first
-sync applies only the differences (hydrate + diff, as now), without the confirmation page for a
-project the place accepted before (007). The user sees at most a short "resyncing" line.
+place is synced to ends and the user did not end it, the plugin holds the loss: the page stays on
+Connected, Rojo's notifications (and so their sound) are not shown, and the new session of the same
+project (same port, or same slot after a port move) is connected to as soon as the service names
+it. Its first sync applies only the differences (hydrate + diff, as now), without the confirmation
+page for a place that accepted the project before (007).
+
+- The service adds `restarting: true` to a *stopped* answer while it restarts the project itself
+  (crash restart, port move; `Runtime.restarting`). The hold lasts while that is so, up to 60 s;
+  otherwise 5 s, which covers an agent's stop + start (about 4 s, measured 2026-10-04).
+- No new session in time, or the service names another project: the disconnect is shown as Rojo
+  would have (error page and notification, or *Disconnected from session.*).
+- **Disconnect** during a hold ends it, and nothing connects by itself for 60 s.
+- An optional field (older plugins ignore it), so no `STUDIO_PROTOCOL` bump, as with `confirming`
+  in 0.19.5.
+- Rojo's changes viewer follows the current session (the page is not remounted).
 
 ### 3. Fewer restarts
 
-- Agents: `stop` and `start` say in their descriptions that they disconnect Studio and that a
-  switch never needs them; `serve_here`/`switch` report unapplied changes if the plugin tells the
-  service about them (see open question 4).
+- Agents: `stop` and `start` say in their descriptions, and the server instructions say, that
+  stopping disconnects Studio and a switch never needs it. The plugin reports what each patch left
+  unapplied (`{ type: "unapplied", sessionId, total, items }`, from `ServeSession:hookPostcommit`,
+  no Rojo patch needed); `serve_here` and `switch` add the reports that came in since the call
+  began.
 - Worktree removal: nothing the Hub can do stops rojo crashing when a watched folder loses a
   subfolder. Design 2 is what keeps Studio connected through it.
 
@@ -65,10 +81,20 @@ project the place accepted before (007). The user sees at most a short "resyncin
 - Rojo-Hub's changes to Rojo's files are a short series of patches in `plugin/patches/`, each a
   few lines that call into `plugin/RojoHub/` (all of Rojo-Hub's own code). The build assembles
   upstream + patches + `RojoHub/` into a staging folder and builds `dist/RojoHub.rbxm` from it.
-- `node tools/plugin-upstream.mjs v7.7.2` fetches the tag, replaces `plugin/upstream/`, rewrites
+- `node tools/plugin.mjs update v7.7.2` fetches the tag, replaces `plugin/upstream/`, rewrites
   `upstream.json`, applies the patches with a three-way merge, and lists any that conflict. That is
   the whole move to a new Rojo when no hook point changed.
 - `UPSTREAM.md` keeps the licence notes and lists each patch and why.
+- Viper: "for 3 lets not do it at runtime": the patches are applied at build time, never by
+  replacing Rojo's functions while the plugin runs.
+- `tools/plugin.mjs`: `stage` (the build), `check` (the unit test), `save` (patches from an
+  edited stage), `update <tag>`. Patches are applied by the tool itself (exact context, moved hunks
+  allowed, no fuzz), so building needs no git; `save` and `update` use git for diffs and
+  `git merge-file`.
+- The move itself: `init v7.7.0` made patches from the edited files (the staged result matched the
+  old `plugin/` file for file), then `update v7.7.1` carried all four over with no conflict.
+- 7.7.1's settings page calls `Version.isApiBlocked()`, which asks api.github.com (Studio prompts
+  for the domain). A patch skips that while *Check For Updates* is off, Rojo-Hub's default.
 
 ### 5. Rojo 7.7.1
 
@@ -91,6 +117,22 @@ repo's pinned rojo; the slot file stays verbatim, which both versions apply (M1)
   `src/Version.lua` (`isApiBlocked`), `src/App/StatusPages/Settings/init.lua` (locks *Check For
   Updates* when api.github.com is blocked). Submodules unchanged.
 
+- **M5 — Adopt.lua under Lune** (`@lune/roblox` DOM, `Instance.new` refusing
+  `StarterCharacterScripts` as Studio does): a creatable add is created; `StarterCharacterScripts` is
+  adopted; under it an existing `LocalScript` of the same name is adopted and a new one created; an
+  owned instance is never adopted twice; with nothing to adopt it fails as before.
+- **M6 — the agent's stop + start, 2026-10-04 08:26:43–47 UTC**: `stop` returned in 1 s, `start`
+  4 s later answered with the new session.
+
+## Checked
+
+- `npm test` (64 tests): the service's `restarting` answer (unit, and end-to-end through a real
+  crash of rojo 7.7.0 with a WebSocket playing the plugin), `unapplied` reports, `plugin.mjs
+  check`. selene and StyLua are clean on the staged plugin.
+- **Not yet tried in a real Studio** (none was open): the adopt fix on a live switch, the quiet
+  resume through a crash and through stop + start, Disconnect during a hold, the unapplied report,
+  and the 7.7.1 plugin as a whole.
+
 ## Acceptance criteria
 
 - Switching a serving project to a branch whose project file adds `StarterCharacterScripts`
@@ -101,7 +143,7 @@ repo's pinned rojo; the slot file stays verbatim, which both versions apply (M1)
 - Stopping and starting a project from the panel or an agent does the same for places synced to it.
 - A session the user disconnected or declined is still never reconnected by itself (007).
 - `plugin/upstream/` matches `upstream.json`; the build from upstream + patches gives a working
-  plugin; `tools/plugin-upstream.mjs` moves 7.7.0 → 7.7.1 with no manual step.
+  plugin; `tools/plugin.mjs update` moves 7.7.0 → 7.7.1 with no manual step.
 - The plugin and the build use Rojo 7.7.1. Checked in a real Studio.
 
 ## Non-goals
@@ -109,6 +151,10 @@ repo's pinned rojo; the slot file stays verbatim, which both versions apply (M1)
 - Fixing rojo-rbx/rojo#1305 in Rojo or shipping a patched rojo.
 - Keeping one rojo session across a restart (a restart is always a new session; design 2 hides it).
 
-## Open questions
+## Decisions (2026-10-04)
 
-See the design questions in the conversation of 2026-10-04.
+Asked as five questions; Viper: "for 3 lets not do it at runtime. for all the other questions just
+do what makes the most sense for this project." So: adopt only where creating fails; hold 5 s, or
+up to 60 s while the service says it is restarting; patches at build time; the plugin reports what
+it could not apply and agents are told not to restart; plugin and build on 7.7.1, 7.7.0 projects
+still supported (the tests serve with 7.7.0).

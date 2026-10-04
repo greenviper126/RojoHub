@@ -2,7 +2,7 @@
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
 underneath, and the known limits. It is the source for user documentation. Version 0.21.0,
-2026-09-29. Why each design choice was made, with measurements:
+2026-10-04. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -411,8 +411,8 @@ last `servePort` read, so the port does not bounce.
 
 **When a port changes** (a `servePort` added, changed or removed; the port excluded or range changed;
 the project that pushed it off removed), a serving project restarts on the new port: a new session,
-and Rojo-Hub's plugin reconnects by itself. The card shows *Port moved from A to B. Places with
-Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.* (stopped:
+and Rojo-Hub's plugin moves to it by itself. The card shows *Port moved from A to B. Places with
+Rojo-Hub's Studio plugin carry on by themselves, without showing a disconnect; with Rojo's own plugin, reconnect Studio.* (stopped:
 just *Port moved from A to B.*), and VS Code warns *Rojo-Hub: ‹project› moved from port A to B. …*
 with **Copy Port** and **Show Project**, in the window with the project open, else the focused one.
 Rojo's own plugin remembers the last port per place, so set the new one once there.
@@ -428,7 +428,7 @@ project moves.
 
 ## 7. Connecting Studio
 
-Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.0's, changed to connect by itself, with
+Rojo-Hub installs its own Studio plugin (spec 007): Rojo 7.7.1's, changed to connect by itself, with
 no port typed and no click.
 
 **Which project a place syncs with** is decided in VS Code. When a place opens, the plugin sends its
@@ -450,6 +450,22 @@ One project may serve several places; each syncs on its own.
 it connects when the place opens, when its project starts later, and again with no click when Rojo
 restarts with a new session (crash, port move, project file change). A branch switch keeps the
 session, so nothing happens.
+
+**Restarts you do not see** (spec 010). When the session a place is synced to ends and the user did
+not end it, the plugin holds the loss: Rojo's window stays on *Connected*, no notification or sound
+is shown, and the new session is connected to as soon as the service names one, applying only what
+changed (no confirmation, for a place that synced with the project before). The service says when
+it is restarting a project itself (a crash, a port move), and the hold lasts until it is back, up to
+a minute; otherwise (someone pressed stop, then start) it lasts five seconds. Only if no new session
+of the same project comes is the disconnect shown, as Rojo would have shown it. **Disconnect** during
+a hold ends it, and nothing connects by itself for a minute.
+
+**Changes Studio could not apply.** When a switch adds a node Studio cannot create but already has
+(`StarterCharacterScripts`, `StarterPlayerScripts`, a service), the plugin uses the existing one, as
+a first sync does, and syncs everything under it; under such a node, an existing child of the same
+name and class is used rather than duplicated. Anything else a patch leaves unapplied (Rojo shows it
+under *View changes*) is reported to the service, and agents' `serve_here` and `switch` say what
+it was.
 
 **Studio places** lists every open place with the plugin, what it syncs with or waits for, and a list
 to assign it a project. *Automatic* (default) follows the order above; picking a project syncs at
@@ -486,7 +502,7 @@ Removing a project forgets its pairs. While a confirmation is open, Studio place
 restarts; it is never handed to another project claiming it. Nothing connects during a playtest.
 Without the service running, the plugin behaves like Rojo's own, Auto Reconnect included.
 
-**Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`) into
+**Install.** The service copies `RojoHub.rbxm` (built from `plugin/` into `dist/`, see [For developers](#16-for-developers)) into
 `%LOCALAPPDATA%\Roblox\Plugins` on start and update, only when it differs. Studio loads a new or
 changed plugin only when a place opens, so an update reaches each open place when it is reopened.
 Other `RojoHub*.rbxm`/`.rbxmx` files there (e.g. a copy from a GitHub release) are removed. Rojo's own
@@ -752,7 +768,7 @@ agents are told to pass it only when you ask. Starting, adding and group edits d
 registration and settings stay yours (spec 008).
 
 **Rojo's errors come back.** After `serve_here`, `switch`, `new_branch` and `start`, the tool waits
-about a second (a switch applies in that time) and adds any Rojo error and the card's warnings.
+about a second (a switch applies in that time) and adds any Rojo error and the card's warnings. `serve_here` and `switch` also add what each synced Studio place reported it could not apply since the call began (spec 010), and say not to stop and start the project for it; the tool descriptions and instructions tell agents that stopping a project disconnects Studio and a switch never needs it.
 
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
 `new_branch` wait out another worktree's claim and take the project the moment it is released or
@@ -797,7 +813,7 @@ project and its Rojo.
   stays connected; the next service *adopts* each Rojo still answering with its project's name.
 - **Restores on start**: projects serving when it last stopped are adopted or started again.
 - **Crash recovery**: a Rojo that dies is restarted on the same port with *Rojo crashed at ‹time› and
-  was restarted on the same port; places with Rojo-Hub's Studio plugin reconnect by themselves …* and
+  was restarted on the same port; places with Rojo-Hub's Studio plugin carry on by themselves, without showing a disconnect …* and
   Rojo's reason (or, right after a checkout in the served worktree, *Checking out ‹branch› in ‹folder›
   removed a folder Rojo was watching, and Rojo 7.7 crashed …*). A new session. A Rojo it started is
   known to have exited at once; an adopted one is looked for only after three missed status checks in
@@ -950,9 +966,10 @@ window's project.
 **Deleting a folder under a served project crashes Rojo 7.7** (Rojo's bug, rojo-rbx/rojo#1305, fix
 pending in PR #1319; plain `rojo serve` too). Anything removing a folder with files under a served
 tree triggers it: Explorer, a `git checkout` or rebase, deleting a worktree the project served earlier
-in the session. Rojo-Hub restarts Rojo on the same port and says so (naming the checkout if one
-caused it); Rojo-Hub's plugin reconnects. Switch with the picker instead of checking out in the
-served folder.
+in the session. Still so in Rojo 7.7.1. Rojo-Hub restarts Rojo on the same port and says so (naming
+the checkout if one caused it); places with Rojo-Hub's plugin carry on without showing the
+disconnect ([Connecting Studio](#7-connecting-studio)). Switch with the picker instead of checking
+out in the served folder.
 
 | Symptom | Fix |
 |---|---|
@@ -963,7 +980,7 @@ served folder.
 | *… is already named …* | Two repos share a project `name`; rename one. |
 | *servePort 34870 is Rojo-Hub's own service port* / *servePort … is also set by …* | Pick another `servePort` ([Ports](#6-ports)). |
 | An agent shows *Can't read config* | The config could not be parsed just now (usually mid-write); Rojo-Hub rechecks. If it stays, check the file. |
-| Studio disconnected | The session changed: stop and start, a port move, or a crash restart (the project says which). Never a branch switch. |
+| Studio disconnected | The session changed and did not come back within the hold: the project was stopped, or its restart failed (the project says why). Never a branch switch. With Rojo's own plugin, every restart disconnects. |
 | A switch does not appear in Studio | *Show Rojo Log*: an invalid project file in the served tree is logged and Rojo keeps serving the previous tree; the project shows the error. |
 | Borrowed-package warnings | The worktree has not run Wally; run it there. |
 
@@ -974,10 +991,19 @@ Elsewhere the panel says *Rojo-Hub supports Windows only for now* and does not s
 
 Source layout, commands and the rules not to simplify away are in [`CLAUDE.md`](../CLAUDE.md).
 `src/service` is the background service, `src/extension` the VS Code front end, `src/common/api.ts`
-the protocol between them (and with the plugin); `plugin/` is the Studio plugin, Rojo 7.7.0's with
-changes listed in `plugin/UPSTREAM.md`, built into `dist/RojoHub.rbxm` by `npm run build` with
-Rokit's Rojo 7.7.0; `npm test` runs unit and end-to-end tests against a real Rojo; `tools/` holds the
-original measurement scripts.
+the protocol between them (and with the plugin); `npm test` runs unit and end-to-end tests against a
+real Rojo; `tools/` holds the original measurement scripts.
+
+**The Studio plugin** (spec 010) is Rojo's plugin kept unedited in `plugin/upstream/` (Rojo 7.7.1,
+with its packages; `plugin/upstream.json` records the tag, commits and a hash of every file),
+Rojo-Hub's small changes to Rojo's files as patches in `plugin/patches/`, and Rojo-Hub's own code in
+`plugin/RojoHub/`. `npm run build` stages the three into `dist/plugin-src/` (`node tools/plugin.mjs
+stage`) and builds `dist/RojoHub.rbxm` with Rokit's Rojo 7.7.1. To change a hook, stage, edit
+`dist/plugin-src/`, then `node tools/plugin.mjs save`, which rewrites the patches (and copies
+`src/RojoHub/` back). `node tools/plugin.mjs update v7.x.y` moves to a new Rojo: it fetches the tag,
+carries each patch over with a three-way merge, and stops with the conflicting files if any.
+`plugin/UPSTREAM.md` lists the patches and why; a unit test fails if `plugin/upstream/` was edited
+or a patch no longer applies.
 
 `THIRD-PARTY-NOTICES.md` credits everything of others' that ships in the `.vsix` and the release's
 `.rbxm` (the Rojo plugin and its packages, the npm packages esbuild bundles, the codicon font), with

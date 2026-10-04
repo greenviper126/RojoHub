@@ -32,7 +32,7 @@ const PROJECT_FILES_MS = 2000;
 */
 const CRASH_MISSES = 3;
 /** A new session disconnects Studio; Rojo-Hub's plugin reconnects by itself (spec 007), Rojo's own does not. */
-const RECONNECT = "Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.";
+const RECONNECT = "Places with Rojo-Hub's Studio plugin carry on by themselves, without showing a disconnect; with Rojo's own plugin, reconnect Studio.";
 /** How long a new port assignment must hold before a slot is moved to it (see refreshPorts). */
 const MOVE_SETTLE_MS = 2500;
 

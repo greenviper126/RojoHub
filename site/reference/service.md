@@ -6,7 +6,7 @@ when needed.
 
 - **Updates and restarts**: Rojo keeps running; the next service adopts it, so Studio stays connected.
 - **Restores**: projects that were serving come back.
-- **Crash recovery**: a Rojo that dies is restarted on the same port. Rojo-Hub's plugin reconnects.
+- **Crash recovery**: a Rojo that dies is restarted on the same port. Rojo-Hub's plugin moves to the new session without showing a disconnect.
 - **Idle exit**: after 15 minutes with nothing serving and no window open.
 - **Nothing is lost**: projects and groups live in `registry.json`, with a backup.
 - **One Windows user at a time**: another signed-in user's service is never used or stopped.

@@ -110,8 +110,9 @@ Studio loads the plugin, and check `rojoHub.studioPlugin` is on.
 
 ### Studio disconnected {#studio-disconnected}
 
-The Rojo session changed: a stop and start, a port move, or a crash. Branch switches never cause it.
-Rojo-Hub's plugin reconnects by itself.
+The project was stopped, or Rojo restarted and did not come back within a minute (the project card
+says why). Branch switches never cause it, and a restart that comes back is not shown as a
+disconnect. With Rojo's own plugin instead of Rojo-Hub's, every restart disconnects.
 
 ### Studio says the server is "using a different protocol version" {#protocol-version}
 
@@ -135,7 +136,7 @@ keeps serving the previous tree until it is fixed.
 
 ### "Rojo crashed at ‹time› and was restarted on the same port" {#rojo-crashed}
 
-Rojo-Hub restarted it; the plugin reconnects. The message ends with Rojo's reason.
+Rojo-Hub restarted it; places with Rojo-Hub's plugin carry on without showing a disconnect. The message ends with Rojo's reason.
 
 ### Deleting a folder crashes Rojo 7.7 {#deleting-a-folder}
 

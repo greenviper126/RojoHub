@@ -21,14 +21,19 @@ are worked out by `src/service/ports.ts` (servePort, else a hash of the repo's f
 `rojoHub.portRange`, default 34873-35872, skipping `rojoHub.excludedPorts`); 34872, Rojo's default
 port, is always excluded. Bump
 `SERVICE_VERSION` in `src/common/api.ts` with the package version, so an updated extension replaces
-the running service, and `plugin/src/RojoHub/Version.lua` with it (a unit test checks).
+the running service, and `plugin/RojoHub/Version.lua` with it (a unit test checks).
 
-`plugin/` is Rojo 7.7.0's Studio plugin (MPL-2.0) with Rojo-Hub's changes (spec 007). Keep changes
-to Rojo's own files to small hooks marked `-- Rojo-Hub`, list every one in `plugin/UPSTREAM.md`, and
-put the rest in `plugin/src/RojoHub/`, so moving to a newer Rojo stays a merge. Which project a
-Studio place syncs with is decided in VS Code (the panel's Studio places); the plugin only connects
-and shows the answer. Bump `STUDIO_PROTOCOL` (and `PROTOCOL` in the plugin) whenever the messages
-between them change.
+The Studio plugin (spec 007, 010) is Rojo 7.7.1's plugin (MPL-2.0), kept unedited in
+`plugin/upstream/`, plus Rojo-Hub's patches to it (`plugin/patches/`) and its own code
+(`plugin/RojoHub/`), staged together by `tools/plugin.mjs` at build time. Never edit
+`plugin/upstream/` (a unit test fails): change a hook by `node tools/plugin.mjs stage`, editing
+`dist/plugin-src/`, then `node tools/plugin.mjs save`. Keep hooks small, marked `-- Rojo-Hub`, and
+listed in `plugin/UPSTREAM.md`; put the rest in `plugin/RojoHub/`. A new Rojo is
+`node tools/plugin.mjs update v7.x.y` (see `plugin/UPSTREAM.md`). Which project a Studio place
+syncs with is decided in VS Code (the panel's Studio places); the plugin only connects and shows the
+answer. Bump `STUDIO_PROTOCOL` (and `PROTOCOL` in the plugin) whenever the messages between them
+change in a way the other side's older version cannot ignore; an optional field or a new message
+type that older versions skip needs no bump (bumping makes every open place reopen).
 
 ## Releasing
 
