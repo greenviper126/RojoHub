@@ -1,11 +1,13 @@
 // Bundles the extension, the background service, the uninstall hook and the sidebar panel into dist/ with esbuild,
-// copies VS Code's codicon font next to the panel, and builds the Studio plugin (plugin/, spec 007) into
-// dist/RojoHub.rbxm with Rojo 7.7.0 from Rokit's tool storage, or `rojo` on PATH.
+// copies VS Code's codicon font next to the panel, and builds the Studio plugin into dist/RojoHub.rbxm: Rojo's
+// plugin (plugin/upstream/) with Rojo-Hub's patches and code, staged by tools/plugin.mjs into dist/plugin-src/
+// (spec 007, 010), built with Rojo 7.7.0 from Rokit's tool storage, or `rojo` on PATH.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { context } from "esbuild";
+import { stage } from "./tools/plugin.mjs";
 
 const PLUGIN_ROJO = "7.7.0";
 
@@ -29,7 +31,8 @@ function buildPlugin() {
 	const rojo = existsSync(stored) ? stored : "rojo";
 	const version = execFileSync(rojo, ["--version"], { encoding: "utf8" }).trim();
 	if (!version.endsWith(PLUGIN_ROJO)) throw new Error(`The Studio plugin is built with Rojo ${PLUGIN_ROJO}; found "${version}". Install it with Rokit (rokit add rojo-rbx/rojo@${PLUGIN_ROJO}).`);
-	execFileSync(rojo, ["build", "plugin/default.project.json", "--output", "dist/RojoHub.rbxm"], { stdio: "inherit", windowsHide: true });
+	const source = stage();
+	execFileSync(rojo, ["build", join(source, "default.project.json"), "--output", "dist/RojoHub.rbxm"], { stdio: "inherit", windowsHide: true });
 }
 
 buildPlugin();

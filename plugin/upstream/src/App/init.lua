@@ -25,7 +25,6 @@ local preloadAssets = require(Plugin.preloadAssets)
 local soundPlayer = require(Plugin.soundPlayer)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local timeUtil = require(Plugin.timeUtil)
-local Hub = require(Plugin.RojoHub) -- Rojo-Hub
 local Theme = require(script.Theme)
 
 local Page = require(script.Page)
@@ -150,14 +149,10 @@ function App:init()
 			end
 		end)
 
-		-- Rojo-Hub: the service connects this place; Rojo's own Auto Reconnect only runs without it.
-		self.hub = Hub.new(self)
-		self.hub:start(function()
-			self:tryAutoReconnect():andThen(function(didReconnect)
-				if not didReconnect then
-					self:checkSyncReminder()
-				end
-			end)
+		self:tryAutoReconnect():andThen(function(didReconnect)
+			if not didReconnect then
+				self:checkSyncReminder()
+			end
 		end)
 	end
 
@@ -179,10 +174,6 @@ function App:init()
 end
 
 function App:willUnmount()
-	if self.hub then -- Rojo-Hub
-		self.hub:stop()
-		self.hub = nil
-	end
 	self:endSession()
 
 	self.waypointConnection:Disconnect()
@@ -198,13 +189,6 @@ function App:willUnmount()
 
 	self.autoConnectPlaytestServerListener()
 	self:clearRunningConnectionInfo()
-end
-
--- Rojo-Hub: the service's answer for this place, or nil while it is not reachable.
-function App:setHubMatch(match)
-	self:setState({
-		hubMatch = match or Roact.None,
-	})
 end
 
 function App:addNotification(notif: {
@@ -449,11 +433,6 @@ function App:tryAutoReconnect()
 end
 
 function App:checkSyncReminder()
-	if self.hub and self.hub:isActive() then
-		-- Rojo-Hub: the service knows where this place's project is; the saved address may be stale.
-		return
-	end
-
 	local syncReminderMode = Settings:get("syncReminderMode")
 	if syncReminderMode == "None" then
 		return
@@ -621,8 +600,7 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
--- Rojo-Hub: `hubAddress` ({ host, port }) connects there instead of to the address boxes.
-function App:startSession(hubAddress)
+function App:startSession()
 	local claimedLock, priorOwner = self:claimSyncLock()
 	if not claimedLock then
 		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
@@ -642,11 +620,6 @@ function App:startSession(hubAddress)
 	end
 
 	local host, port = self:getHostAndPort()
-	-- Rojo-Hub: the boxes' values are what the place saves, never Rojo-Hub's port (spec 007).
-	local savedHost, savedPort = host, port
-	if hubAddress then
-		host, port = hubAddress.host, hubAddress.port
-	end
 
 	local baseUrl = if string.find(host, "^https?://")
 		then string.format("%s:%s", host, port)
@@ -713,7 +686,7 @@ function App:startSession(hubAddress)
 			})
 		elseif status == ServeSession.Status.Connected then
 			self.knownProjects[details] = true
-			self:setPriorSyncInfo(savedHost, savedPort, details) -- Rojo-Hub
+			self:setPriorSyncInfo(host, port, details)
 			self:setRunningConnectionInfo(baseUrl)
 
 			local address = ("%s:%s"):format(host, port)
@@ -768,16 +741,6 @@ function App:startSession(hubAddress)
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
 		if PatchSet.isEmpty(patch) then
 			Log.trace("Accepting patch without confirmation because it is empty")
-			return "Accept"
-		end
-
-		-- Rojo-Hub: a place that synced with this project before is not asked again (spec 007)
-		if
-			self.hub
-			and self.hub:accepted(serverInfo.projectName)
-			and Settings:get("confirmationBehavior") ~= "Always"
-		then
-			Log.trace("Accepting patch without confirmation because this place synced with the project before")
 			return "Accept"
 		end
 
@@ -873,10 +836,6 @@ function App:endSession()
 
 	Log.trace("Disconnecting session")
 
-	if self.hub then -- Rojo-Hub: not reconnected by itself after the user disconnects
-		self.hub:decline(self.serveSession.__apiContext.__sessionId)
-	end
-
 	self.serveSession:stop()
 	self.serveSession = nil
 	self:setState({
@@ -894,8 +853,7 @@ function App:endSession()
 end
 
 function App:render()
-	-- Rojo-Hub: its own name, so it can run next to the official plugin (Studio refuses two widgets with one id).
-	local pluginName = "Rojo-Hub"
+	local pluginName = "Rojo " .. Version.display(Config.version)
 
 	local function createPageElement(appStatus, additionalProps)
 		additionalProps = additionalProps or {}
@@ -950,15 +908,6 @@ function App:render()
 							self:startSession()
 						end,
 
-						-- Rojo-Hub
-						hubEnabled = self.hub ~= nil,
-						hubMatch = self.state.hubMatch,
-						onHubConnect = function()
-							if self.hub then
-								self.hub:connectNow()
-							end
-						end,
-
 						onNavigateSettings = function()
 							self.backPage = AppStatus.NotConnected
 							self:setState({
@@ -973,9 +922,6 @@ function App:render()
 						createPopup = not self.state.guiEnabled,
 
 						onAbort = function()
-							if self.hub and self.serveSession then -- Rojo-Hub: declined, so not reconnected by itself
-								self.hub:decline(self.serveSession.__apiContext.__sessionId)
-							end
 							self.confirmationBindable:Fire("Abort")
 						end,
 						onAccept = function()

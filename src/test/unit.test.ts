@@ -789,10 +789,14 @@ test("the Studio plugin install: once, updated in place, our other copies remove
 });
 
 test("the Studio plugin says the same version as the service", () => {
-	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "Version.lua"), "utf8");
+	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "RojoHub", "Version.lua"), "utf8");
 	assert.equal(/return "([^"]+)"/.exec(lua)?.[1], SERVICE_VERSION);
-	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "init.lua"), "utf8");
+	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "RojoHub", "init.lua"), "utf8");
 	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
+});
+
+test("plugin/upstream is Rojo's plugin unedited, and every patch in plugin/patches applies to it", () => {
+	execFileSync(process.execPath, ["tools/plugin.mjs", "check"], { cwd: resolve(__dirname, "..", ".."), stdio: "pipe" });
 });
 
 test("THIRD-PARTY-NOTICES.md is current and lists every bundled npm package", () => {

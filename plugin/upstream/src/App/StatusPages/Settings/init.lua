@@ -94,15 +94,6 @@ function SettingsPage:render()
 			contentSize = self.contentSize,
 			transparency = self.props.transparency,
 		}, {
-			-- Rojo-Hub
-			HubAutoConnect = e(Setting, {
-				id = "hubAutoConnect",
-				name = "Rojo-Hub Auto Connect",
-				description = "Sync this place with the project Rojo-Hub serves for it, and again whenever that project restarts",
-				transparency = self.props.transparency,
-				layoutOrder = layoutIncrement(),
-			}),
-
 			AutoReconnect = e(Setting, {
 				id = "autoReconnect",
 				name = "Auto Reconnect",

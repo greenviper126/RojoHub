@@ -8,14 +8,14 @@ Rojo-Hub is not affiliated with or endorsed by Roblox, the Rojo project, or any 
 
 | Component | Version | Licence | Source | Ships in |
 | --- | --- | --- | --- | --- |
-| Rojo Studio plugin | 7.7.0 | MPL-2.0 | https://github.com/rojo-rbx/rojo/tree/v7.7.0/plugin | dist/RojoHub.rbxm (plugin/, except plugin/src/RojoHub/) |
-| rbx_dom_lua (rbx-dom) | as in Rojo 7.7.0 | MIT | https://github.com/rojo-rbx/rbx-dom | dist/RojoHub.rbxm (plugin/rbx_dom_lua/) |
-| Roact | 956891b | Apache-2.0 | https://github.com/roblox/roact | dist/RojoHub.rbxm (plugin/Packages/Roact/) |
-| Flipper | 2d91a5e | MIT | https://github.com/reselim/flipper | dist/RojoHub.rbxm (plugin/Packages/Flipper/) |
-| roblox-lua-promise | 2c6f433 | MIT | https://github.com/evaera/roblox-lua-promise | dist/RojoHub.rbxm (plugin/Packages/Promise/) |
-| t | 1dbfccc | MIT | https://github.com/osyrisrblx/t | dist/RojoHub.rbxm (plugin/Packages/t/) |
-| Highlighter | c12c488 | MIT | https://github.com/boatbomber/highlighter | dist/RojoHub.rbxm (plugin/Packages/Highlighter/) |
-| msgpack-luau | 40f67fc | MIT | https://github.com/cipharius/msgpack-luau | dist/RojoHub.rbxm (plugin/Packages/msgpack-luau/) |
+| Rojo Studio plugin | 7.7.0 | MPL-2.0 | https://github.com/rojo-rbx/rojo/tree/v7.7.0/plugin | dist/RojoHub.rbxm (plugin/upstream/, with plugin/patches/) |
+| rbx_dom_lua (rbx-dom) | as in Rojo 7.7.0 | MIT | https://github.com/rojo-rbx/rbx-dom | dist/RojoHub.rbxm (plugin/upstream/rbx_dom_lua/) |
+| Roact | 956891b | Apache-2.0 | https://github.com/roblox/roact | dist/RojoHub.rbxm (plugin/upstream/Packages/Roact/) |
+| Flipper | 2d91a5e | MIT | https://github.com/reselim/flipper | dist/RojoHub.rbxm (plugin/upstream/Packages/Flipper/) |
+| roblox-lua-promise | 2c6f433 | MIT | https://github.com/evaera/roblox-lua-promise | dist/RojoHub.rbxm (plugin/upstream/Packages/Promise/) |
+| t | 1dbfccc | MIT | https://github.com/osyrisrblx/t | dist/RojoHub.rbxm (plugin/upstream/Packages/t/) |
+| Highlighter | c12c488 | MIT | https://github.com/boatbomber/highlighter | dist/RojoHub.rbxm (plugin/upstream/Packages/Highlighter/) |
+| msgpack-luau | 40f67fc | MIT | https://github.com/cipharius/msgpack-luau | dist/RojoHub.rbxm (plugin/upstream/Packages/msgpack-luau/) |
 | smol-toml | 1.9.0 | BSD-3-Clause | https://github.com/squirrelchat/smol-toml | dist/service.js, dist/uninstall.js |
 | jsonc-parser | 3.3.1 | MIT | https://github.com/microsoft/node-jsonc-parser | dist/extension.js |
 | @msgpack/msgpack | 3.1.3 | ISC | https://github.com/msgpack/msgpack-javascript | dist/service.js |
@@ -24,7 +24,7 @@ Rojo-Hub is not affiliated with or endorsed by Roblox, the Rojo project, or any 
 
 ## Rojo Studio plugin 7.7.0
 
-MPL-2.0, from https://github.com/rojo-rbx/rojo/tree/v7.7.0/plugin. Modified by Rojo-Hub. The changes are listed in [plugin/UPSTREAM.md](plugin/UPSTREAM.md), and the source of this build, changes included, is [plugin/](plugin/) in this repository. Files Rojo-Hub added (plugin/src/RojoHub/) are MIT.
+MPL-2.0, from https://github.com/rojo-rbx/rojo/tree/v7.7.0/plugin. Modified by Rojo-Hub. plugin/upstream/ is Rojo's source unedited; the changes are the patches in [plugin/patches/](plugin/patches/), listed in [plugin/UPSTREAM.md](plugin/UPSTREAM.md). Rojo-Hub's own files (plugin/RojoHub/) are MIT.
 
 ```text
 Mozilla Public License Version 2.0
