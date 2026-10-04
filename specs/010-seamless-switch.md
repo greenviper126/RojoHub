@@ -1,6 +1,6 @@
 # 010 — Switches that never disconnect Studio, and a plugin that rides on Rojo's
 
-Status: **built in 0.21.0, not yet checked in Studio** (branch `feat/seamless-switch`; see *Checked*). Asked for by Viper: "seems like when an agent
+Status: **implemented in 0.21.0** (branch `feat/seamless-switch`; see *Checked*). Asked for by Viper: "seems like when an agent
 switches to another branch on rojo-hub it disconnects and connectes again. ideally that just does
 not happen and we switch the code no issue", "there is a new version of rojo so you have to update
 the plugin", and "make our code for that plugin more like a parisite so we can easily attach onto
@@ -129,9 +129,7 @@ repo's pinned rojo; the slot file stays verbatim, which both versions apply (M1)
 - `npm test` (64 tests): the service's `restarting` answer (unit, and end-to-end through a real
   crash of rojo 7.7.0 with a WebSocket playing the plugin), `unapplied` reports, `plugin.mjs
   check`. selene and StyLua are clean on the staged plugin.
-- **Not yet tried in a real Studio** (none was open): the adopt fix on a live switch, the quiet
-  resume through a crash and through stop + start, Disconnect during a hold, the unapplied report,
-  and the 7.7.1 plugin as a whole.
+- **In Studio (Viper, 2026-10-04)**: 0.21.0 installed in every profile, places reopened; Viper: "seems to work". Which of the cases (adopt on a live switch, resume through a crash and through stop + start, Disconnect during a hold, the unapplied report) were exercised one by one was not recorded.
 
 ## Acceptance criteria
 
