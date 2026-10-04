@@ -130,6 +130,7 @@ function diff(path, oldText, newText) {
 }
 
 const patchName = (path) => `${path.replace(/[\\/]/g, "-")}.patch`;
+const writePatch = (name, text) => writeFileSync(join(PATCHES, name), text.endsWith("\n") ? text : `${text}\n`);
 
 /* ---------- commands ---------- */
 
@@ -176,7 +177,7 @@ function save(dir = DEFAULT_STAGE) {
 		const text = diff(file, readText(join(UPSTREAM, file)), readText(staged));
 		if (!text) continue;
 		mkdirSync(PATCHES, { recursive: true });
-		writeFileSync(join(PATCHES, patchName(file)), text.endsWith("\n") ? text : `${text}\n`);
+		writePatch(patchName(file), text);
 		written.add(patchName(file));
 	}
 	for (const name of patchFiles()) if (!written.has(name)) rmSync(join(PATCHES, name));
@@ -266,7 +267,7 @@ function update(tag) {
 		if (conflicts.length > 0) throw new Error(`plugin/upstream left at ${old?.tag}:\n  ${conflicts.join("\n  ")}`);
 		rmSync(UPSTREAM, { recursive: true, force: true });
 		cpSync(fresh, UPSTREAM, { recursive: true });
-		for (const [name, text] of carried) writeFileSync(join(PATCHES, name), `${text}\n`);
+		for (const [name, text] of carried) writePatch(name, text);
 		writeManifest(manifest);
 		console.log(`plugin/upstream is Rojo ${tag} (${manifest.commit.slice(0, 7)}); ${carried.length} patches carried over.`);
 		console.log("Next: check protocolVersion in plugin/upstream/src/Config.lua, update tools/notices.mjs and run it, build, and try it in Studio.");

@@ -1,7 +1,7 @@
 // Bundles the extension, the background service, the uninstall hook and the sidebar panel into dist/ with esbuild,
 // copies VS Code's codicon font next to the panel, and builds the Studio plugin into dist/RojoHub.rbxm: Rojo's
 // plugin (plugin/upstream/) with Rojo-Hub's patches and code, staged by tools/plugin.mjs into dist/plugin-src/
-// (spec 007, 010), built with Rojo 7.7.0 from Rokit's tool storage, or `rojo` on PATH.
+// (spec 007, 010), built with Rojo 7.7.1 from Rokit's tool storage, or `rojo` on PATH.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { context } from "esbuild";
 import { stage } from "./tools/plugin.mjs";
 
-const PLUGIN_ROJO = "7.7.0";
+const PLUGIN_ROJO = "7.7.1";
 
 const watch = process.argv.includes("--watch");
 // mainFields prefers ES module builds: some packages (jsonc-parser) ship a UMD "main" whose

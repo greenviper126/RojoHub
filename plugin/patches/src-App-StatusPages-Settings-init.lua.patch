@@ -1,6 +1,6 @@
 --- a/src/App/StatusPages/Settings/init.lua
 +++ b/src/App/StatusPages/Settings/init.lua
-@@ -94,6 +94,15 @@ function SettingsPage:render()
+@@ -95,6 +95,15 @@ function SettingsPage:render()
  			contentSize = self.contentSize,
  			transparency = self.props.transparency,
  		}, {
