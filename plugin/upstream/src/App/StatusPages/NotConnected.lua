@@ -11,8 +11,6 @@ local BorderedContainer = require(Plugin.App.Components.BorderedContainer)
 local TextButton = require(Plugin.App.Components.TextButton)
 local Header = require(Plugin.App.Components.Header)
 local Tooltip = require(Plugin.App.Components.Tooltip)
-local HubStatusLine = require(Plugin.RojoHub.StatusLine) -- Rojo-Hub
-local HubConnectButton = require(Plugin.RojoHub.ConnectButton) -- Rojo-Hub
 
 local PORT_WIDTH = 74
 local DIVIDER_WIDTH = 1
@@ -145,26 +143,6 @@ function NotConnectedPage:render()
 				Padding = UDim.new(0, 10),
 			}),
 		}),
-
-		-- Rojo-Hub
-		HubConnect = if self.props.hubEnabled
-				and self.props.hubMatch
-				and self.props.hubMatch.status == "connect"
-				and self.props.hubMatch.target
-			then e(HubConnectButton, {
-				target = self.props.hubMatch.target,
-				onClick = self.props.onHubConnect,
-				transparency = self.props.transparency,
-				layoutOrder = 4,
-			})
-			else nil,
-		HubStatus = if self.props.hubEnabled
-			then e(HubStatusLine, {
-				match = self.props.hubMatch,
-				transparency = self.props.transparency,
-				layoutOrder = 5,
-			})
-			else nil,
 
 		Layout = e("UIListLayout", {
 			HorizontalAlignment = Enum.HorizontalAlignment.Center,

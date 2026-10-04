@@ -32,7 +32,7 @@ const PROJECT_FILES_MS = 2000;
 */
 const CRASH_MISSES = 3;
 /** A new session disconnects Studio; Rojo-Hub's plugin reconnects by itself (spec 007), Rojo's own does not. */
-const RECONNECT = "Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, reconnect Studio.";
+const RECONNECT = "Places with Rojo-Hub's Studio plugin carry on by themselves, without showing a disconnect; with Rojo's own plugin, reconnect Studio.";
 /** How long a new port assignment must hold before a slot is moved to it (see refreshPorts). */
 const MOVE_SETTLE_MS = 2500;
 
@@ -70,6 +70,8 @@ interface Runtime {
 	rojoVersion: string | null;
 	/** A status check is in flight, so the next tick does not start another. */
 	probing: boolean;
+	/** Rojo is being started again by the Hub itself (a crash, a port move), so Studio waits for it quietly (spec 010). */
+	restarting: boolean;
 }
 
 /*
@@ -214,6 +216,7 @@ export class Hub {
 				rojo: null,
 				misses: 0,
 				probing: false,
+				restarting: false,
 				rojoVersion: null,
 			};
 			this.runtimes.set(id, runtime);
@@ -339,8 +342,12 @@ export class Hub {
 		const reason = runtime.log.tail(40).split(/\r?\n/).find((line) => line.includes("Details:"))?.replace(/^\[ERROR rojo\]\s*/, "");
 		runtime.state = "error";
 		runtime.error = `Rojo stopped unexpectedly${reason ? `: ${reason}` : ""}`;
+		runtime.restarting = slot.wantRunning;
 		void this.enqueue(slot, async () => {
-			if (runtime.state !== "error" || !slot.wantRunning) return;
+			if (runtime.state !== "error" || !slot.wantRunning) {
+				runtime.restarting = false;
+				return;
+			}
 			const checkout = runtime.checkout && Date.now() - runtime.checkout.at < CHECKOUT_CRASH_MS ? runtime.checkout : null;
 			runtime.notes = [
 				checkout && slot.target.kind === "worktree"
@@ -393,6 +400,7 @@ export class Hub {
 				const from = slot.port;
 				const runtime = this.runtime(slot.id);
 				const wasServing = runtime.state === "running" || runtime.state === "error";
+				runtime.restarting = wasServing && slot.wantRunning;
 				if (wasServing) await this.stopLocked(slot);
 				slot.port = now.port;
 				this.registry.save();
@@ -627,6 +635,7 @@ export class Hub {
 				branch: runtime.branch,
 				targetLabel: runtime.targetLabel,
 				rojoVersion: runtime.rojoVersion,
+				restarting: runtime.restarting,
 				...this.placeFieldsOf(slot),
 			};
 		});
@@ -994,6 +1003,8 @@ export class Hub {
 			runtime.state = "error";
 			runtime.error = error instanceof Error ? error.message : String(error);
 			throw error;
+		} finally {
+			runtime.restarting = false;
 		}
 	}
 

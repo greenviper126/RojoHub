@@ -1,0 +1,12 @@
+--- a/src/App/StatusPages/Connected.lua
++++ b/src/App/StatusPages/Connected.lua
+@@ -30,6 +30,9 @@ function ChangesViewer:init()
+ end
+ 
+ function ChangesViewer:render()
++	-- Rojo-Hub: a restart resumed quietly keeps this page, so follow the new session (spec 010)
++	self.serveSession = self.props.serveSession or self.serveSession
++
+ 	if self.props.rendered == false or self.serveSession == nil or self.props.patchData == nil then
+ 		return nil
+ 	end

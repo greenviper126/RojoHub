@@ -38,4 +38,4 @@ or already exists; elsewhere use *Update sourcemap.json* in the ⋯ menu. Turn o
 
 Prefer the picker. A `git checkout` inside a served worktree changes what Studio gets, and if it
 deletes a folder, Rojo 7.7 crashes ([rojo#1305](https://github.com/rojo-rbx/rojo/issues/1305)).
-Rojo-Hub restarts it on the same port and the plugin reconnects.
+Rojo-Hub restarts it on the same port, and the plugin carries on without showing a disconnect.

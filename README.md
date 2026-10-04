@@ -42,17 +42,19 @@ The VS Code Marketplace listing is in review; until then, install from Releases.
 ## Develop
 
 ```sh
-npm install          # building also needs Rojo 7.7.0 from Rokit, for the Studio plugin
+npm install          # building also needs Rojo 7.7.1 from Rokit, for the Studio plugin
 npm test             # unit, bundle smoke and end-to-end tests against a real Rojo 7.7
 npm run package      # rojo-hub-<version>.vsix
 npm run docs:dev     # the documentation site (site/)
 ```
 
 Internals: [`docs/how-it-works.md`](docs/how-it-works.md) and [`specs/`](specs/). The Studio plugin
-in [`plugin/`](plugin/) is Rojo's, with changes listed in [`plugin/UPSTREAM.md`](plugin/UPSTREAM.md).
+is Rojo's, kept unedited in [`plugin/upstream/`](plugin/upstream/), with Rojo-Hub's patches listed in
+[`plugin/UPSTREAM.md`](plugin/UPSTREAM.md).
 
 ## License
 
-[MIT](LICENSE), except [`plugin/`](plugin/), which stays under Rojo's [MPL-2.0](plugin/LICENSE)
-(Rojo-Hub's own files in it are MIT). Bundled third-party work is credited in
+[MIT](LICENSE), except Rojo's Studio plugin ([`plugin/upstream/`](plugin/upstream/) and the patches
+to it in [`plugin/patches/`](plugin/patches/)), which stays under Rojo's
+[MPL-2.0](plugin/upstream/LICENSE.txt) (Rojo-Hub's own plugin code, `plugin/RojoHub/`, is MIT). Bundled third-party work is credited in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Not affiliated with Roblox or the Rojo project.

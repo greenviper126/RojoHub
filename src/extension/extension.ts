@@ -326,7 +326,7 @@ function noticePortMoves(slots: SlotView[]): void {
 		if (!from || slot.port <= 0 || from === slot.port) continue;
 		if (!workspaceRepos.includes(pathKey(slot.repoPath)) && !vscode.window.state.focused) continue;
 		void vscode.window
-			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Places with Rojo-Hub's Studio plugin reconnect by themselves; with Rojo's own plugin, set its port to ${slot.port}.`, "Copy Port", "Show Project")
+			.showWarningMessage(`Rojo-Hub: ${slot.projectName} moved from port ${from} to ${slot.port}. Places with Rojo-Hub's Studio plugin carry on by themselves, without showing a disconnect; with Rojo's own plugin, set its port to ${slot.port}.`, "Copy Port", "Show Project")
 			.then(async (choice) => {
 				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
 				if (choice === "Show Project") void panel.focus(slot.id);
@@ -951,7 +951,7 @@ async function buildPlace(slot: SlotView): Promise<void> {
 async function confirmRemove(slot: SlotView): Promise<boolean> {
 	const moves = await client.portMovesOnRemove(slot.id).catch(() => []);
 	const detail = moves
-		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects (places with Rojo-Hub's plugin reconnect by themselves)` : ""}.`)
+		.map((move) => `${move.projectName} moves from port ${move.from} to ${move.to}${move.serving ? `; it is serving, so Studio disconnects (places with Rojo-Hub's plugin carry on by themselves, without showing a disconnect)` : ""}.`)
 		.join("\n");
 	const sure = await vscode.window.showWarningMessage(
 		`Remove ${slot.projectName} from Rojo-Hub? Its Rojo stops and port ${slot.port} is freed; the project's files are not touched.`,

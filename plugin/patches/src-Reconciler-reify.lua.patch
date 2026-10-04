@@ -1,0 +1,42 @@
+--- a/src/Reconciler/reify.lua
++++ b/src/Reconciler/reify.lua
+@@ -6,6 +6,7 @@ local invariant = require(script.Parent.Parent.invariant)
+ local PatchSet = require(script.Parent.Parent.PatchSet)
+ local setProperty = require(script.Parent.setProperty)
+ local decodeValue = require(script.Parent.decodeValue)
++local HubAdopt = require(script.Parent.Parent.RojoHub.Adopt) -- Rojo-Hub
+ 
+ --[[
+ 	Add the given ID and all of its descendants in virtualInstances to the given
+@@ -44,7 +45,8 @@ function reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualIn
+ 	-- Instance.new can fail if we're passing in something that can't be
+ 	-- created, like a service, something enabled with a feature flag, or
+ 	-- something that requires higher security than we have.
+-	local createSuccess, instance = pcall(Instance.new, virtualInstance.ClassName)
++	-- Rojo-Hub (spec 010): adopts what Studio already has where it cannot be created
++	local createSuccess, instance, adopted = HubAdopt.create(instanceMap, parentInstance, virtualInstance)
+ 
+ 	if not createSuccess then
+ 		addAllToPatch(unappliedPatch, virtualInstances, id)
+@@ -53,7 +55,9 @@ function reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualIn
+ 
+ 	-- TODO: Can this fail? Previous versions of Rojo guarded against this, but
+ 	-- the reason why was uncertain.
+-	instance.Name = virtualInstance.Name
++	if not adopted then -- Rojo-Hub
++		instance.Name = virtualInstance.Name
++	end
+ 
+ 	-- Track all of the properties that we've failed to assign to this instance.
+ 	local unappliedProperties = {}
+@@ -96,7 +100,9 @@ function reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualIn
+ 		reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualInstances, childId, instance)
+ 	end
+ 
+-	instance.Parent = parentInstance
++	if not adopted then -- Rojo-Hub
++		instance.Parent = parentInstance
++	end
+ 	instanceMap:insert(id, instance)
+ end
+ 

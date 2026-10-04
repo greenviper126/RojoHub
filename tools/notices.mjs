@@ -13,18 +13,22 @@ const NPM = [
 	{ name: "@msgpack/msgpack", url: "https://github.com/msgpack/msgpack-javascript", licenseFile: "LICENSE", in: "dist/service.js" },
 ];
 
-// Built into dist/RojoHub.rbxm from plugin/ (Rojo 7.7.0's plugin folder and its submodules).
-const ROJO = "https://github.com/rojo-rbx/rojo/tree/v7.7.0/plugin";
+// Built into dist/RojoHub.rbxm from plugin/upstream/ (Rojo's plugin folder and its submodules, unedited) with
+// Rojo-Hub's patches; versions come from plugin/upstream.json, which tools/plugin.mjs writes.
+const UPSTREAM = JSON.parse(readFileSync("plugin/upstream.json", "utf8"));
+const ROJO_VERSION = UPSTREAM.tag.replace(/^v/, "");
+const ROJO = `https://github.com/rojo-rbx/rojo/tree/${UPSTREAM.tag}/plugin`;
+const at = (name) => UPSTREAM.packages[name].slice(0, 7);
 const PLUGIN = [
-	{ name: "Rojo Studio plugin", version: "7.7.0", license: "MPL-2.0", url: ROJO, licenseFile: "plugin/LICENSE", in: "dist/RojoHub.rbxm (plugin/, except plugin/src/RojoHub/)",
-		note: "Modified by Rojo-Hub. The changes are listed in [plugin/UPSTREAM.md](plugin/UPSTREAM.md), and the source of this build, changes included, is [plugin/](plugin/) in this repository. Files Rojo-Hub added (plugin/src/RojoHub/) are MIT." },
-	{ name: "rbx_dom_lua (rbx-dom)", version: "as in Rojo 7.7.0", license: "MIT", url: "https://github.com/rojo-rbx/rbx-dom", licenseFile: "plugin/rbx_dom_lua/LICENSE.txt", in: "dist/RojoHub.rbxm (plugin/rbx_dom_lua/)" },
-	{ name: "Roact", version: "956891b", license: "Apache-2.0", url: "https://github.com/roblox/roact", licenseFile: "plugin/Packages/Roact/LICENSE.txt", in: "dist/RojoHub.rbxm (plugin/Packages/Roact/)", note: "Unmodified." },
-	{ name: "Flipper", version: "2d91a5e", license: "MIT", url: "https://github.com/reselim/flipper", licenseFile: "plugin/Packages/Flipper/LICENSE", in: "dist/RojoHub.rbxm (plugin/Packages/Flipper/)" },
-	{ name: "roblox-lua-promise", version: "2c6f433", license: "MIT", url: "https://github.com/evaera/roblox-lua-promise", licenseFile: "plugin/Packages/Promise/LICENSE", in: "dist/RojoHub.rbxm (plugin/Packages/Promise/)" },
-	{ name: "t", version: "1dbfccc", license: "MIT", url: "https://github.com/osyrisrblx/t", licenseFile: "plugin/Packages/t/LICENSE", in: "dist/RojoHub.rbxm (plugin/Packages/t/)" },
-	{ name: "Highlighter", version: "c12c488", license: "MIT", url: "https://github.com/boatbomber/highlighter", licenseFile: "plugin/Packages/Highlighter/LICENSE", in: "dist/RojoHub.rbxm (plugin/Packages/Highlighter/)" },
-	{ name: "msgpack-luau", version: "40f67fc", license: "MIT", url: "https://github.com/cipharius/msgpack-luau", licenseFile: "plugin/Packages/msgpack-luau/LICENSE", in: "dist/RojoHub.rbxm (plugin/Packages/msgpack-luau/)" },
+	{ name: "Rojo Studio plugin", version: ROJO_VERSION, license: "MPL-2.0", url: ROJO, licenseFile: "plugin/upstream/LICENSE.txt", in: "dist/RojoHub.rbxm (plugin/upstream/, with plugin/patches/)",
+		note: "Modified by Rojo-Hub. plugin/upstream/ is Rojo's source unedited; the changes are the patches in [plugin/patches/](plugin/patches/), listed in [plugin/UPSTREAM.md](plugin/UPSTREAM.md). Rojo-Hub's own files (plugin/RojoHub/) are MIT." },
+	{ name: "rbx_dom_lua (rbx-dom)", version: `as in Rojo ${ROJO_VERSION}`, license: "MIT", url: "https://github.com/rojo-rbx/rbx-dom", licenseFile: "plugin/rbx_dom_lua.LICENSE.txt", in: "dist/RojoHub.rbxm (plugin/upstream/rbx_dom_lua/)" },
+	{ name: "Roact", version: at("Roact"), license: "Apache-2.0", url: "https://github.com/roblox/roact", licenseFile: "plugin/upstream/Packages/Roact/LICENSE.txt", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/Roact/)", note: "Unmodified." },
+	{ name: "Flipper", version: at("Flipper"), license: "MIT", url: "https://github.com/reselim/flipper", licenseFile: "plugin/upstream/Packages/Flipper/LICENSE", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/Flipper/)" },
+	{ name: "roblox-lua-promise", version: at("Promise"), license: "MIT", url: "https://github.com/evaera/roblox-lua-promise", licenseFile: "plugin/upstream/Packages/Promise/LICENSE", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/Promise/)" },
+	{ name: "t", version: at("t"), license: "MIT", url: "https://github.com/osyrisrblx/t", licenseFile: "plugin/upstream/Packages/t/LICENSE", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/t/)" },
+	{ name: "Highlighter", version: at("Highlighter"), license: "MIT", url: "https://github.com/boatbomber/highlighter", licenseFile: "plugin/upstream/Packages/Highlighter/LICENSE", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/Highlighter/)" },
+	{ name: "msgpack-luau", version: at("msgpack-luau"), license: "MIT", url: "https://github.com/cipharius/msgpack-luau", licenseFile: "plugin/upstream/Packages/msgpack-luau/LICENSE", in: "dist/RojoHub.rbxm (plugin/upstream/Packages/msgpack-luau/)" },
 ];
 
 // Copied as files by build.mjs.

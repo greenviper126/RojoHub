@@ -56,8 +56,10 @@ can open places but never close them.
 
 ## Good to know
 
-- Branch switches never disconnect. A new Rojo session (restart, crash, port move) does, and the
-  plugin reconnects by itself.
+- Branch switches never disconnect. When Rojo restarts (a crash, a port move, a stop and start),
+  the plugin picks up the new session without showing a disconnect: Studio stays on Connected, with
+  no notification, and gets only what changed. It shows the disconnect only if the project does not
+  come back.
 - Rojo's own plugin can stay, but Studio then shows two Rojo windows; the panel suggests removing it.
 - Without Rojo-Hub running, the plugin behaves like Rojo's.
 - `rojoHub.studioAutoConnect: "listed"` connects only places a project file lists or you assign.

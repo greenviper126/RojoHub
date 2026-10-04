@@ -8,6 +8,7 @@ local Log = require(Packages.Log)
 local Assets = require(Plugin.Assets)
 local Settings = require(Plugin.Settings)
 local Theme = require(Plugin.App.Theme)
+local Version = require(Plugin.Version)
 
 local IconButton = require(Plugin.App.Components.IconButton)
 local ScrollingFrame = require(Plugin.App.Components.ScrollingFrame)
@@ -94,15 +95,6 @@ function SettingsPage:render()
 			contentSize = self.contentSize,
 			transparency = self.props.transparency,
 		}, {
-			-- Rojo-Hub
-			HubAutoConnect = e(Setting, {
-				id = "hubAutoConnect",
-				name = "Rojo-Hub Auto Connect",
-				description = "Sync this place with the project Rojo-Hub serves for it, and again whenever that project restarts",
-				transparency = self.props.transparency,
-				layoutOrder = layoutIncrement(),
-			}),
-
 			AutoReconnect = e(Setting, {
 				id = "autoReconnect",
 				name = "Auto Reconnect",
@@ -202,6 +194,8 @@ function SettingsPage:render()
 				id = "checkForUpdates",
 				name = "Check For Updates",
 				description = "Notify about newer compatible Rojo releases",
+				locked = Version.isApiBlocked(),
+				lockedTooltip = "(HTTP requests to api.github.com are blocked, Rojo cannot fetch what the latest version is.)",
 				transparency = self.props.transparency,
 				layoutOrder = layoutIncrement(),
 			}),

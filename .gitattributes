@@ -1,3 +1,4 @@
 * text=auto eol=lf
 *.vsix binary
 *.svg text eol=lf
+plugin/upstream/** linguist-vendored

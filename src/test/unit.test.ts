@@ -594,6 +594,16 @@ test("Studio places: servePlaceIds, then placeId, then the remembered project (s
 	assert.equal(matchPlace(place(999, "old"), [lobby, old], "old", false).target?.reason, "assigned");
 });
 
+test("Studio places: a project the Hub is restarting says so, so the plugin holds the lost session (spec 010)", () => {
+	const restarting = matchPlace(place(111), [candidate({ slotId: "game", servePlaceIds: [111], state: "error", sessionId: null, restarting: true })], null);
+	assert.equal(restarting.status, "stopped");
+	assert.equal(restarting.restarting, true);
+	assert.match(restarting.message, /is restarting/);
+	const stopped = matchPlace(place(111), [candidate({ slotId: "game", servePlaceIds: [111], state: "stopped", sessionId: null })], null);
+	assert.equal(stopped.status, "stopped");
+	assert.equal("restarting" in stopped, false, "a stopped project's answer is as before");
+});
+
 test("Studio places: an assignment from VS Code wins, for any place, saved or not", () => {
 	const lobby = candidate({ slotId: "lobby", servePlaceIds: [111] });
 	const other = candidate({ slotId: "other" });
@@ -705,6 +715,16 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
 		assert.equal((await lobby.next()).target?.sessionId, "second");
 
+		// rojo crashed and the Hub is starting it again: the plugin is told so, and waits quietly (spec 010)
+		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, state: "starting", sessionId: null, restarting: true })];
+		const restarting = await lobby.next();
+		assert.equal(restarting.status, "stopped");
+		assert.equal(restarting.restarting, true);
+		candidates = [candidate({ slotId: "game", servePlaceIds: [111], port: 35111, sessionId: "second" })];
+		const back = await lobby.next();
+		assert.equal(back.target?.sessionId, "second");
+		assert.equal(back.restarting, undefined, "only a stopped answer says restarting");
+
 		// reporting the sync puts the place on the project's card and in the service's memory
 		lobby.socket.send(JSON.stringify({ type: "state", connected: { port: 35111, projectName: "game", sessionId: "second" } }));
 		await new Promise((done) => setTimeout(done, 100));
@@ -713,6 +733,14 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		assert.equal(synced.get(111), "game");
 		assert.equal((await lobby.next()).target?.accepted, true, "once synced, the pair is not confirmed again");
 		assert.ok(accepted.has("111:game"));
+
+		// what the plugin could not apply reaches an agent's switch, if it came after the switch began
+		const before = Date.now();
+		lobby.socket.send(JSON.stringify({ type: "unapplied", sessionId: "second", total: 3, items: ["StarterPlayer.StarterCharacterScripts (StarterCharacterScripts, not added)"] }));
+		await new Promise((done) => setTimeout(done, 100));
+		assert.deepEqual(links.unappliedOn(35111, before), [{ placeName: "Lobby", placeId: 111, total: 3, items: ["StarterPlayer.StarterCharacterScripts (StarterCharacterScripts, not added)"] }]);
+		assert.deepEqual(links.unappliedOn(35111, Date.now() + 1000), [], "an older report is not news");
+		assert.deepEqual(links.unappliedOn(35999, before), [], "nor one from a place synced to another project");
 
 		// a second claimant appears: the place keeps to the project it syncs with
 		candidates = [...candidates, candidate({ slotId: "fork", servePlaceIds: [111], port: 35112 })];
@@ -789,10 +817,14 @@ test("the Studio plugin install: once, updated in place, our other copies remove
 });
 
 test("the Studio plugin says the same version as the service", () => {
-	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "Version.lua"), "utf8");
+	const lua = readFileSync(resolve(__dirname, "..", "..", "plugin", "RojoHub", "Version.lua"), "utf8");
 	assert.equal(/return "([^"]+)"/.exec(lua)?.[1], SERVICE_VERSION);
-	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "src", "RojoHub", "init.lua"), "utf8");
+	const hub = readFileSync(resolve(__dirname, "..", "..", "plugin", "RojoHub", "init.lua"), "utf8");
 	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
+});
+
+test("plugin/upstream is Rojo's plugin unedited, and every patch in plugin/patches applies to it", () => {
+	execFileSync(process.execPath, ["tools/plugin.mjs", "check"], { cwd: resolve(__dirname, "..", ".."), stdio: "pipe" });
 });
 
 test("THIRD-PARTY-NOTICES.md is current and lists every bundled npm package", () => {

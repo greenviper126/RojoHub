@@ -43,7 +43,7 @@ A project's port, in order:
 one another project already sets, is refused.
 
 **When a port changes** (a `servePort` edit, a settings change, a project removed), a serving project
-restarts on the new port. Places with Rojo-Hub's plugin reconnect by themselves.
+restarts on the new port. Places with Rojo-Hub's plugin carry on by themselves, without showing a disconnect.
 
 **Excluding ports**: add them to `rojoHub.excludedPorts`, or use the panel's *Port settings*. If
 another program holds a project's port, Start says so; exclude that port and the project moves.

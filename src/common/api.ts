@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.20.2";
+export const SERVICE_VERSION = "0.21.0";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -125,7 +125,21 @@ export interface StudioState {
 	confirming?: boolean;
 }
 
-export type StudioToService = StudioHello | StudioState;
+/*
+	Changes the plugin got over its session but could not apply (spec 010):
+	sent after each patch that left some, so an agent that switched learns what
+	Studio is missing instead of restarting rojo. Missing from older plugins.
+*/
+export interface StudioUnapplied {
+	type: "unapplied";
+	sessionId: string;
+	/** How many instances or property changes were left out. */
+	total: number;
+	/** The first few, as Studio paths ("StarterPlayer.StarterCharacterScripts (added)"). */
+	items: string[];
+}
+
+export type StudioToService = StudioHello | StudioState | StudioUnapplied;
 
 export interface StudioProject {
 	slotId: string;
@@ -146,7 +160,9 @@ export interface StudioProject {
 	connects to `target` and shows `message`.
 	- connect: `target` is this place's project, serving; connect to it.
 	- choose: several serving projects claim the place; assign one in VS Code.
-	- stopped: the place's project is not serving.
+	- stopped: the place's project is not serving. `restarting` says it is
+	  coming back by itself (a crash, a port move), so a plugin that just lost
+	  its session waits for the new one without showing the disconnect (spec 010).
 	- unsupported: the place's project runs a Rojo the plugin cannot speak.
 	- unsaved / none: no project for this place; assign one in VS Code.
 	- incompatible: the plugin's protocol is not the service's.
@@ -157,6 +173,7 @@ export interface StudioMatch {
 	status: "connect" | "choose" | "stopped" | "unsupported" | "unsaved" | "none" | "incompatible";
 	message: string;
 	target: StudioProject | null;
+	restarting?: boolean;
 }
 
 /*
