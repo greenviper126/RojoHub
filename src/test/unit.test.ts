@@ -842,6 +842,10 @@ test("agents' claims survive a service restart, and run out as before", () => {
 	assert.equal(second.claimOf("old"), null, "a claim that ran out is not brought back");
 	second.setClaim("game", null);
 	assert.equal(new Hub(home).claimOf("game"), null, "a released claim stays released");
+	assert.equal(first.claimOf("old"), null);
+	assert.equal(first.lapsedClaim("old")?.label, "old", "a claim that ran out is remembered, so release can say so");
+	first.setClaim("old", { key: "worktree:c:/work/old", label: "old", until: Date.now() + 60_000 });
+	assert.equal(first.lapsedClaim("old"), null, "claiming again forgets it");
 });
 
 /* ---------- opening places (spec 009) ---------- */

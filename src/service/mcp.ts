@@ -26,7 +26,7 @@ import { Conflict, NotFound } from "./registry";
 	project a Studio place syncs with, agent registration, settings.
 */
 
-export const CLAIM_MS = 10 * 60 * 1000;
+export const CLAIM_MS = 15 * 60 * 1000;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
@@ -40,7 +40,7 @@ Which Studio to look at: serve_here, status and wait_for_studio name the Studio 
 
 Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
 
-Sharing: serve_here and switch claim the project for your worktree for 10 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
+Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
@@ -75,7 +75,7 @@ export const TOOLS: Tool[] = [
 		name: "serve_here",
 		title: "Serve my worktree",
 		description:
-			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 10 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
+			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 15 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
 		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, force: forceProperty }, required: ["path"] },
 	},
 	{
@@ -538,6 +538,12 @@ export class Mcp {
 		return `\n${lines.join("\n")}\nDo not stop and start the project for this: that ends Studio's session. Tell the user what is missing.`;
 	}
 
+	/** Said when the Hub restarted a crashed rojo since the call began: a new session, so the agent waits for Studio. */
+	private crashed(slot: SlotView, since: number): string {
+		if (this.hub.crashedAt(slot.id) < since) return "";
+		return "\nRojo crashed meanwhile and Rojo-Hub restarted it. That is a new Rojo session: Studio reconnects through the plugin. Call wait_for_studio before checking Studio.";
+	}
+
 	/** `Lobby (place 111), Match (place 222)` */
 	private placeList(places: Pick<StudioPlace, "placeName" | "placeId">[]): string {
 		return places.map((place) => `${place.placeName} (${place.placeId ? `place ${place.placeId}` : "not saved to Roblox"})`).join(", ");
@@ -586,7 +592,7 @@ export class Mcp {
 		const since = Date.now();
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
+		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
 	}
 
 	private async switchTo(args: Args): Promise<string> {
@@ -614,13 +620,20 @@ export class Mcp {
 		const switched = await this.take(slot, target, label, args);
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
+		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
 	}
 
 	private async release(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		const claim = this.hub.claimOf(slot.id);
-		if (!claim) return `${slot.projectName} was not claimed.`;
+		if (!claim) {
+			const lapsed = this.hub.lapsedClaim(slot.id);
+			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
+				this.hub.setClaim(slot.id, null);
+				return `Your claim on ${slot.projectName} had already run out; it still serves ${slot.targetLabel}.`;
+			}
+			return `${slot.projectName} was not claimed.`;
+		}
 		// Without a path there is no telling whose claim it is; another agent's is only dropped with force.
 		if (!root && args.force !== true) throw new Refusal(`${slot.projectName} is claimed by ${claim.label}. Pass path (your worktree) to release your own claim.`);
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {

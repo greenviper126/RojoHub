@@ -744,7 +744,7 @@ at once, so an agent should not need to ask you to click.
 | `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait`. |
 | `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. |
 | `branches` | Switch targets, newest first (`fetch` fetches first). |
-| `release` | Drops the agent's claim; the project keeps serving. |
+| `release` | Drops the agent's claim; the project keeps serving. Says so when the claim had already run out. |
 | `start` | Starts a stopped project. |
 | `stop` | Stops a project. Guarded. |
 | `stop_all` | Stops every project. Always needs `force`. |
@@ -768,7 +768,7 @@ agents are told to pass it only when you ask. Starting, adding and group edits d
 registration and settings stay yours (spec 008).
 
 **Rojo's errors come back.** After `serve_here`, `switch`, `new_branch` and `start`, the tool waits
-about a second (a switch applies in that time) and adds any Rojo error and the card's warnings. `serve_here` and `switch` also add what each synced Studio place reported it could not apply since the call began (spec 010), and say not to stop and start the project for it; the tool descriptions and instructions tell agents that stopping a project disconnects Studio and a switch never needs it.
+about a second (a switch applies in that time) and adds any Rojo error and the card's warnings. `serve_here` and `switch` also add what each synced Studio place reported it could not apply since the call began (spec 010), and say not to stop and start the project for it; the tool descriptions and instructions tell agents that stopping a project disconnects Studio and a switch never needs it. If rojo crashed and the Hub restarted it during that time, they say so too: a new Rojo session, Studio reconnects through the plugin, call `wait_for_studio`.
 
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
 `new_branch` wait out another worktree's claim and take the project the moment it is released or
@@ -781,14 +781,14 @@ syncs (change files, not Studio), a switch reaches Studio within about a second,
 choose which project a place syncs with.
 
 **Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them, so
-`serve_here` and `switch` claim the project for their target (worktree or branch) for 10 minutes.
+`serve_here` and `switch` claim the project for their target (worktree or branch) for 15 minutes.
 While another target holds it, they refuse, naming holder and expiry (`force` overrides, only when you
 say).
 
-- **Renewing**: a worktree claim is renewed for 10 minutes by `status`, `build` and `sourcemap` calls
+- **Renewing**: a worktree claim is renewed for 15 minutes by `status`, `build` and `sourcemap` calls
   with a `path` inside it, and by `serve_here`/`switch` for it. `release` does not renew. A branch
   claim from `switch` is renewed only by switching to that branch again.
-- **`release`** drops it; with a `path` in another worktree than the holder it refuses; without a
+- **`release`** drops it (a claim that already ran out is not an error: it says so and what the project still serves); with a `path` in another worktree than the holder it refuses; without a
   `path` it needs `force` (no telling whose claim it is).
 - The card shows *Agent in new-ui until 14:05* (worktree folder name or branch); folded, a robot icon.
 - **Your own switches always go through** (picker, *Switch Branch…*, anything calling

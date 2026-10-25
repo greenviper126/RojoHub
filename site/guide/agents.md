@@ -77,7 +77,7 @@ than one project.
 
 ## Claims: several agents, one Studio
 
-`serve_here`, `switch` and `new_branch` claim the project for 10 minutes, renewed by the agent's
+`serve_here`, `switch` and `new_branch` claim the project for 15 minutes, renewed by the agent's
 further calls from that worktree. While another worktree holds the claim, they refuse and say who
 holds it; with `wait` (up to 600 seconds) they queue and take over when it ends. `release` hands it
 back.

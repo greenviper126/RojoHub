@@ -72,6 +72,8 @@ interface Runtime {
 	probing: boolean;
 	/** Rojo is being started again by the Hub itself (a crash, a port move), so Studio waits for it quietly (spec 010). */
 	restarting: boolean;
+	/** When the Hub last restarted a crashed rojo, so an agent's answer can say it happened meanwhile. */
+	crashedAt: number;
 }
 
 /*
@@ -108,6 +110,8 @@ export class Hub {
 		the middle of testing.
 	*/
 	private readonly claims = new Map<string, Claim>();
+	/** Claims that ran out, so release can say so instead of "not claimed". */
+	private readonly lapsed = new Map<string, Claim>();
 
 	/** A port a slot is to move to, and since when it has been the one assigned (see refreshPorts). */
 	private readonly pendingMoves = new Map<string, { port: number; since: number }>();
@@ -217,6 +221,7 @@ export class Hub {
 				misses: 0,
 				probing: false,
 				restarting: false,
+				crashedAt: 0,
 				rojoVersion: null,
 			};
 			this.runtimes.set(id, runtime);
@@ -343,6 +348,7 @@ export class Hub {
 		runtime.state = "error";
 		runtime.error = `Rojo stopped unexpectedly${reason ? `: ${reason}` : ""}`;
 		runtime.restarting = slot.wantRunning;
+		runtime.crashedAt = Date.now();
 		void this.enqueue(slot, async () => {
 			if (runtime.state !== "error" || !slot.wantRunning) {
 				runtime.restarting = false;
@@ -487,11 +493,26 @@ export class Hub {
 	/** The slot's claim, or null when there is none or it ran out. */
 	claimOf(id: string): Claim | null {
 		const claim = this.claims.get(id);
-		if (claim && claim.until <= Date.now()) this.claims.delete(id);
+		if (claim && claim.until <= Date.now()) {
+			this.claims.delete(id);
+			this.lapsed.set(id, claim);
+		}
 		return this.claims.get(id) ?? null;
 	}
 
+	/** The slot's claim that ran out, until it is claimed again or released. */
+	lapsedClaim(id: string): Claim | null {
+		this.claimOf(id);
+		return this.lapsed.get(id) ?? null;
+	}
+
+	/** When the Hub last restarted a crashed rojo on the slot (0: never). */
+	crashedAt(id: string): number {
+		return this.runtime(id).crashedAt;
+	}
+
 	setClaim(id: string, claim: Claim | null): void {
+		this.lapsed.delete(id);
 		if (claim) this.claims.set(id, claim);
 		else this.claims.delete(id);
 		try {
