@@ -584,7 +584,7 @@ and the panel a red banner with **Turn off**. It never turns itself off.
 `time`, `actor`, `action`, `project`, `args`, `yolo: true`, `outcome`, and `lifted`, which is true
 when yolo is what allowed it (a stop that would have been refused, an open that `openPlaces` alone
 would have refused). A place moved at once by `request_place` is logged as `move_place` (`args`: `placeId`, `from`). Turning yolo on or off is logged too (`yolo_on`, `yolo_off`). Reads (`status`,
-`branches`, `log`, `project_files`, `wait_for_studio`) are not logged.
+`version`, `branches`, `log`, `project_files`, `wait_for_studio`) are not logged.
 
 ### Opening places in Studio
 
@@ -904,6 +904,7 @@ at once, so an agent should not need to ask you to click.
 | Tool | Does |
 |---|---|
 | `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open, a line for each place that is synced with another project or listed by several, and requests other projects made for its places; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
+| `version` | Which versions are running: the service, the Studio plugin it installs, the MCP launcher (or "not installed"), each serving project's Rojo, and each open Studio place's plugin, with a note to reopen the place when its plugin is older than the service. Reads only: it claims and renews nothing. Data: `service`, `plugin`, `launcher`, `projects` (`id`, `name`, `rojoVersion`), `places` (`placeId`, `name`, `pluginVersion`, `outdated`). Optional `path` is ignored. |
 | `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
 | `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
 | `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait` and `then_return`. |

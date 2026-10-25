@@ -11,6 +11,7 @@ import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, SERVICE_VERSION, STUDIO_PATH
 import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
+import { launcherScript } from "../common/launcher";
 import { compareVersions } from "../common/version";
 import { hideAgentNudge, showAgentNudge } from "../extension/nudge";
 import { savedState } from "../extension/saved";
@@ -452,7 +453,7 @@ test("MCP: initialize, tools/list, notifications and unknown methods", async () 
 	assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null, "notifications get no answer");
 	const list = (await mcp.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
 	const names = list.result.tools.map((tool) => tool.name);
-	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap", "request_place"]) {
+	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap", "request_place", "version"]) {
 		assert.ok(names.includes(name), `the ${name} tool (spec 008, 014)`);
 	}
 	assert.ok(!names.some((name) => /assign|setting|agent/.test(name)), "nothing for what stays the user's: place assignments, settings, agent registration");
@@ -1106,7 +1107,7 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 
 test("structured answers: every outputSchema is well formed JSON Schema", () => {
 	const withSchema = TOOLS.filter((tool) => tool.outputSchema);
-	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["ensure", "request_place", "serve_here", "status", "switch"]);
+	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["ensure", "request_place", "serve_here", "status", "switch", "version"]);
 	for (const tool of withSchema) wellFormed(tool.outputSchema as Schema, tool.name);
 	assert.deepEqual(check({ a: 1 }, { type: "object", required: ["b"], properties: { a: { type: "string" } } }), ["$.b: missing", "$.a: integer is not string"], "the checker itself finds both kinds of mistake");
 	assert.deepEqual(check(null, { type: ["string", "null"] }), []);
@@ -2026,6 +2027,50 @@ test("place requests: they end on release, claim lapse or change, removal, an un
 	const synced = ask();
 	synced.world.holder = "a";
 	assert.equal(synced.requests.pending().length, 0, "the place now syncs with the asker");
+});
+
+test("version: names the service, plugin, launcher, each serving Rojo and each place's plugin; an older plugin gets the reopen note", async () => {
+	const repo = tempRepo();
+	const { hub, slot } = stubHub(repo, null);
+	const place = (placeId: number, placeName: string, pluginVersion: string, unsaved = false) => ({ key: String(placeId), placeId, placeName, unsaved, pluginVersion });
+	const stopped = { ...slot, id: "idle", projectName: "Idle", state: "stopped", rojoVersion: null };
+	const wired = {
+		...hub,
+		list: () => [{ ...slot, rojoVersion: "7.7.0" }, stopped],
+		studio: { places: () => [place(111, "Lobby", "0.21.0"), place(222, "Arena", SERVICE_VERSION), place(0, "Untitled", SERVICE_VERSION, true)] },
+	};
+	const mcp = new Mcp(wired as never);
+
+	// no launcher installed yet
+	const bare = await callTool(mcp, "version", {});
+	assert.ok(!bare.isError, bare.content[0].text);
+	assert.equal(bare.structuredContent.launcher, null);
+	assert.match(bare.content[0].text, /MCP launcher: not installed\./);
+	assert.deepEqual(check(bare.structuredContent, TOOLS.find((tool) => tool.name === "version")!.outputSchema as Schema), []);
+
+	mkdirSync(join(wired.home, "launcher"), { recursive: true });
+	writeFileSync(launcherScript(wired.home), `// rojo-hub-launcher ${SERVICE_VERSION}\n`);
+	const answer = await callTool(mcp, "version", { path: repo });
+	const text = answer.content[0].text;
+	assert.ok(text.startsWith(`Rojo-Hub ${SERVICE_VERSION} (service). Studio plugin it installs: ${SERVICE_VERSION}. MCP launcher: ${SERVICE_VERSION} at `), text);
+	assert.match(text, /Rojo per serving project: Game 7\.7\.0\./, "only running projects are listed");
+	assert.doesNotMatch(text, /Idle/);
+	assert.ok(text.includes(`Lobby (place 111) plugin 0.21.0: older than the service; reopen the place to load ${SERVICE_VERSION}.`), text);
+	assert.ok(text.split(/\r?\n/).some((line) => line.includes("Arena") && !line.includes("older")), "a current plugin gets no note");
+	assert.match(text, /Untitled \(unsaved\) plugin/);
+	assert.deepEqual(answer.structuredContent, {
+		service: SERVICE_VERSION,
+		plugin: SERVICE_VERSION,
+		launcher: SERVICE_VERSION,
+		projects: [{ id: "game", name: "Game", rojoVersion: "7.7.0" }],
+		places: [
+			{ placeId: 111, name: "Lobby", pluginVersion: "0.21.0", outdated: true },
+			{ placeId: 222, name: "Arena", pluginVersion: SERVICE_VERSION, outdated: false },
+			{ placeId: 0, name: "Untitled", pluginVersion: SERVICE_VERSION, outdated: false },
+		],
+	});
+	assert.deepEqual(check(answer.structuredContent, TOOLS.find((tool) => tool.name === "version")!.outputSchema as Schema), []);
+	assert.equal(wired.claimOf(), null, "it claims nothing");
 });
 
 /** Two projects, Game (the caller's, claimed by its worktree) and Other, listing Lobby (111); the real PlaceRequests behind an MCP stub. */

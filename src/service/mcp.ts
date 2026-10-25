@@ -3,7 +3,9 @@ import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 
 import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
+import { launcherScript, launcherVersion } from "../common/launcher";
 import { isProjectFileName } from "../common/projectFiles";
+import { compareVersions } from "../common/version";
 import { writeAudit } from "./audit";
 import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
@@ -56,7 +58,7 @@ Which Studio to look at: serve_here, status and wait_for_studio name the Studio 
 
 Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
 
-Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
+Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
 
 To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm, a checkout) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
@@ -131,6 +133,13 @@ const STATUS_SCHEMA = shape({
 	setup: arrayOf(shape({ path: S, state: { type: "string", enum: ["running", "ok", "failed"] }, step: I, of: I })),
 });
 const REQUEST_PLACE_SCHEMA = shape({ outcome: { type: "string", enum: [...REQUEST_OUTCOMES] }, placeId: I, name: orNull("string"), project: S, holder: orNull("string") });
+const VERSION_SCHEMA = shape({
+	service: S,
+	plugin: S,
+	launcher: orNull("string"),
+	projects: arrayOf(shape({ id: S, name: S, rojoVersion: orNull("string") })),
+	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, outdated: B })),
+});
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
 export const ENSURE_STEPS = ["start", "setup", "serve", "open_place", "wait_for_studio"] as const;
@@ -171,6 +180,15 @@ export const TOOLS: Tool[] = [
 			"Lists the projects: port, whether Rojo is serving, the Studio places synced to each (name, place ID, and why), what worktree or branch each serves, who claimed it, warnings; then the groups and every open Studio place. With path, also says whether your worktree is the one being served.",
 		inputSchema: { type: "object", properties: { path: pathProperty } },
 		outputSchema: STATUS_SCHEMA,
+		annotations: { readOnlyHint: true },
+	},
+	{
+		name: "version",
+		title: "Rojo-Hub versions",
+		description:
+			"Says which versions are running: the Rojo-Hub service, the Studio plugin it installs, the MCP launcher, each serving project's Rojo, and each open Studio place's plugin (and whether it is older, so the place needs reopening). Never disturbs anyone.",
+		inputSchema: { type: "object", properties: { path: pathProperty } },
+		outputSchema: VERSION_SCHEMA,
 		annotations: { readOnlyHint: true },
 	},
 	{
@@ -415,7 +433,7 @@ const REASONS: Record<string, string> = {
 };
 
 /** Tools that change nothing; the others are written to the audit log while yolo is on. */
-const READ_ONLY_TOOLS = new Set(["status", "branches", "log", "project_files", "wait_for_studio"]);
+const READ_ONLY_TOOLS = new Set(["status", "version", "branches", "log", "project_files", "wait_for_studio"]);
 
 /** The arguments of a call for the audit log: short values only. */
 function summarize(args: Args): Record<string, unknown> {
@@ -512,6 +530,8 @@ export class Mcp {
 		switch (name) {
 			case "status":
 				return this.status(args);
+			case "version":
+				return this.version();
 			case "serve_here":
 				return this.serveHere(args);
 			case "switch":
@@ -1500,6 +1520,35 @@ export class Mcp {
 		this.renew(slot, root);
 		const written = await this.hub.writeSourcemap(slot.id);
 		return `Wrote ${written.path}.`;
+	}
+
+	/*
+		Which builds are running, for field testing. The plugin the service
+		installs is always its own version (a unit test keeps Version.lua equal to
+		SERVICE_VERSION). A place keeps the plugin it loaded when it opened, so one
+		older than the service needs reopening. Reads only: no claim is made or
+		renewed, which is why `path` is never looked at.
+	*/
+	private async version(): Promise<Answer> {
+		const script = launcherScript(this.hub.home);
+		const launcher = launcherVersion(script);
+		const projects = this.hub
+			.list()
+			.filter((slot) => slot.state === "running")
+			.map((slot) => ({ id: slot.id, name: slot.projectName, rojoVersion: slot.rojoVersion ?? null }));
+		const places = this.hub.studio.places().map((place) => ({
+			placeId: place.unsaved ? 0 : place.placeId,
+			name: place.placeName,
+			pluginVersion: place.pluginVersion,
+			outdated: compareVersions(place.pluginVersion, SERVICE_VERSION) < 0,
+		}));
+		const lines = [`Rojo-Hub ${SERVICE_VERSION} (service). Studio plugin it installs: ${SERVICE_VERSION}. MCP launcher: ${launcher === null ? "not installed" : `${launcher} at ${script}`}.`];
+		lines.push(projects.length > 0 ? `Rojo per serving project: ${projects.map((entry) => `${entry.name} ${entry.rojoVersion ?? "unknown"}`).join(", ")}.` : "No project is serving.");
+		if (places.length > 0) {
+			lines.push("Open Studio places:");
+			for (const place of places) lines.push(`  ${place.name}${place.placeId > 0 ? ` (place ${place.placeId})` : " (unsaved)"} plugin ${place.pluginVersion}${place.outdated ? `: older than the service; reopen the place to load ${SERVICE_VERSION}.` : ""}`);
+		} else lines.push("No Studio place with the plugin is open.");
+		return { text: lines.join("\n"), data: { service: SERVICE_VERSION, plugin: SERVICE_VERSION, launcher, projects, places } };
 	}
 
 	private async status(args: Args): Promise<Answer> {

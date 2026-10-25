@@ -67,6 +67,8 @@ export interface SlotView {
 	places: StudioPlace[];
 	/** The places its project file names (servePlaceIds, placeId; not blockedPlaceIds), for opening them (spec 009). Missing from services older than 0.20.0. */
 	listedPlaces?: ListedPlace[];
+	/** The Rojo that serves it, once it has answered; null when it has not (the `version` tool reads it). Missing from services older than 0.22.3. */
+	rojoVersion?: string | null;
 }
 
 /* One of a project's places on its card, for opening it in Studio (spec 009). */

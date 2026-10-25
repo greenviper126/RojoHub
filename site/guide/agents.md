@@ -38,6 +38,7 @@ registration and settings.
 | Tool | Does |
 |---|---|
 | `status` | Every project, what it serves, who claims it, its Studio places and warnings; open places |
+| `version` | Which versions are running: service, Studio plugin, MCP launcher, each project's Rojo, each open place's plugin (and whether the place needs reopening) |
 | `ensure` | Get ready in one call: start the project, serve the worktree, open the place (needs `rojoHub.openPlaces`), wait for Studio |
 | `serve_here` | Serve the agent's own worktree to Studio, live, and claim the project |
 | `switch` | Serve a branch or worktree, and claim the project |
@@ -66,7 +67,7 @@ than one project.
 
 | Tool | Parameters |
 |---|---|
-| `status` | `path?` |
+| `status` / `version` | `path?` |
 | `ensure` | `path`, `project?`, `place?`, `timeout?`, `wait?`, `then_return?`, `force?` |
 | `serve_here` | `path`, `project?`, `wait?`, `then_return?`, `force?` |
 | `switch` | `target`, `project?`, `path?`, `wait?`, `then_return?`, `force?` |

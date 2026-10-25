@@ -820,6 +820,7 @@ export class Hub {
 			claim: claim ? { label: claim.label, until: claim.until } : null,
 			places: runtime.state === "running" ? this.studio.placesOn(slot.port, runtime.sessionId) : [],
 			listedPlaces: this.places.listed(this.listedPlaceIds(slot)),
+			rojoVersion: runtime.rojoVersion,
 		};
 	}
 
