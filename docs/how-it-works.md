@@ -594,7 +594,9 @@ a window on that folder, or luau-lsp is open (so a windowless Orca agent gets it
 - **Same file as luau-lsp**: the same command (`sourcemap <project file> --include-non-scripts`, from
   the worktree), so both can run.
 - **Recovers**: a deleted folder crashes Rojo 7.7's watcher (same bug as below); it restarts a second
-  later, giving up with a note after five crashes in a minute. Studio is unaffected.
+  later. After five crashes in a minute it pauses for 30 s (the panel and `status` say *crashed 5 times
+  in a minute, retrying in 30 s* with Rojo's last error) and then tries again, for as long as the
+  project serves. Studio is unaffected.
 - **Never adds a file to git**: writes only where `sourcemap.json` is gitignored or exists. Otherwise
   the ⋯ menu says so, and *Update sourcemap.json* writes it once.
 - **Not for views**: nothing edits those.
