@@ -181,6 +181,14 @@ agents guide) say so, and say what to do instead:
 
 ### 4. Yolo mode (item 22)
 
+**Built** (branch `worktree-agent-aa7070d94fe4178c5`, not yet released, not checked in a real VS Code or
+Studio). Deviations: `stop_all`'s input schema no longer lists `force` as required (yolo calls it
+without); the audit line also has `args` and `outcome`; reads (`status`, `branches`, `log`,
+`project_files`, `wait_for_studio`) are not audited; the status bar item's click opens a modal with
+**Turn yolo mode off** / **Keep it on**; only the focused window prompts and the other windows neither
+prompt nor push on the change, and a 10-minute `globalState` stamp holds `yolo: true` back from any
+window's push while the prompt is open.
+
 One master setting, `rojoHub.yolo`: boolean, `scope: "application"`, `ignoreSync: true`, default
 **off**. Its description begins "DANGEROUS:" and says what it lifts. No MCP verb or API call from an
 agent can turn it on or off; only the extension pushes it, from the user's global value. A repo's

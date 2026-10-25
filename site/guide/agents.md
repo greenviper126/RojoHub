@@ -94,8 +94,25 @@ holds it; with `wait` (up to 600 seconds) they queue and take over when it ends.
 back.
 
 - `stop`, `stop_group`, `remove_project` and `start_group only` are refused while someone else holds
-  the claim or a Studio place is synced. `stop_all` always needs `force`.
+  the claim or a Studio place is synced. `stop_all` always needs `force`
+  (unless you turned on [yolo mode](#yolo-mode)).
 - Agents pass `force` only when you tell them to.
 - Your own switches in the panel always go through and clear the claim.
 - The card shows the claim (*Agent in ‹worktree› until 14:05*).
 - Claims are per project and survive a service restart.
+
+## Yolo mode
+
+`rojoHub.yolo` is one dangerous switch for when you trust your agents. Off by default; only you can
+turn it on (agents have no tool for it), and VS Code asks you to confirm first. While it is on:
+
+- Agents may open Studio places even if `rojoHub.openPlaces` is off.
+- `stop`, `stop_group`, `remove_project` and `start_group only` are no longer refused because a Studio
+  place is synced to the project (Studio disconnects).
+- `stop_all` works without `force`, but keeps any project another agent claimed and says which.
+- **Claims still hold**, and `force` means what it did.
+- Every state-changing agent call is written to `audit.jsonl` in Rojo-Hub's folder
+  (`%LOCALAPPDATA%\RojoHub`), with whether yolo is what allowed it.
+
+Every window shows a red **ROJO-HUB YOLO** item in the status bar (click to turn it off) and the panel
+shows a red banner. Agents see "Yolo mode is ON" at the top of `status`. It never turns itself off.

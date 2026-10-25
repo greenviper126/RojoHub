@@ -524,6 +524,34 @@ project file.
 Rojo-Hub counts them for the filled/outlined icon and tooltip. Rojo-Hub's plugin also reports which
 place it is, so the *Connected* pill's tooltip names them.
 
+### Yolo mode
+
+`rojoHub.yolo` (spec 012, design 4) is one master switch for users who trust their agents. Off by
+default, application scope (a repo's `.vscode/settings.json` cannot set it), and no MCP tool or API
+call from an agent can change it. With it on:
+
+- Agents may open places as if `rojoHub.openPlaces` were on (the panel shows Open, Close and Reopen too).
+- `stop`, `remove_project`, `stop_group` and `start_group` with `only` are no longer refused because a
+  Studio place is synced; Studio disconnects.
+- `stop_all` works without `force`, but skips every project another agent has claimed and names them.
+- **Still in force:** claims (a stop of a claimed project is refused), `force` meaning what it did,
+  setup commands (not gated), and nothing deletes worktrees or branches.
+
+**Turning it on** from the settings UI shows a modal warning in the focused window; Cancel puts the
+setting back to `false`, and the service is told `true` only after **Turn on**. Editing settings.json
+by hand has no hook before the file is read, so the modal appears when the change is noticed.
+While it is on, every window shows a red status bar item (**ROJO-HUB YOLO**; click to turn it off)
+and the panel a red banner with **Turn off**. It never turns itself off.
+
+**Agents are told.** `status` begins with "Yolo mode is ON: ..." and `status` and `ensure` data carry
+`yolo: boolean`.
+
+**Audit.** While on, each state-changing MCP call appends to `audit.jsonl` in the hub folder:
+`time`, `actor`, `action`, `project`, `args`, `yolo: true`, `outcome`, and `lifted`, which is true
+when yolo is what allowed it (a stop that would have been refused, an open that `openPlaces` alone
+would have refused). Turning yolo on or off is logged too (`yolo_on`, `yolo_off`). Reads (`status`,
+`branches`, `log`, `project_files`, `wait_for_studio`) are not logged.
+
 ### Opening places in Studio
 
 Off by default: turn on `rojoHub.openPlaces` (spec 009). Then each card lists its places and agents
@@ -795,7 +823,7 @@ at once, so an agent should not need to ask you to click.
 | `release` | Drops the agent's claim; the project keeps serving. Says so when the claim had already run out. |
 | `start` | Starts a stopped project. |
 | `stop` | Stops a project. Guarded. |
-| `stop_all` | Stops every project. Always needs `force`. |
+| `stop_all` | Stops every project. Needs `force`; with [yolo mode](#yolo-mode) on it works without, but keeps projects another agent claimed and names them. |
 | `add_project` | Registers a folder's repo (optionally another `project_file`). |
 | `remove_project` | Unregisters a project; never deletes files. Guarded. |
 | `project_files` | The folder's `*.project.json` files and which is served. |
@@ -934,7 +962,7 @@ debugging.
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | Display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). `yolo` is pushed only once the user accepted the warning; no MCP tool can set it. A port change moves ports at once; turning `studioPlugin` on installs the plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
@@ -961,7 +989,8 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, port, target, whether to serve), groups (members, nested groups, running), display order, Studio place assignments (`placeChoices`), each place's last project (`placeSynced`), accepted first syncs (`placeAccepted`) |
 | `registry.json.bak` | The previous save, for recovery |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
-| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces` |
+| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `yolo` |
+| `audit.jsonl` | One JSON line per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
 | `agent-notice.json` | Until when the agent notice stays hidden |
@@ -1002,6 +1031,7 @@ All are **user settings for every project and window**; workspaces cannot overri
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` current in each served worktree ([Sourcemaps](#sourcemaps)). |
 | `rojoHub.studioAutoConnect` | `"remembered"` | Which places connect by themselves: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) or assigned in Studio places; `"remembered"` also a place's last project ([Connecting Studio](#7-connecting-studio)). |
 | `rojoHub.openPlaces` | `false` | Open, close and reopen places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. |
+| `rojoHub.yolo` | `false` | **DANGEROUS.** Lifts the guards for agents ([Yolo mode](#yolo-mode)). Application scope, not synced. |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies. Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents get the MCP server ([Agents](#10-agents)). Checkboxes. Not synced by Settings Sync (it describes this machine's agent configs). |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Message when Studio disconnects from a serving project, in the window with it open (else the focused one). |
