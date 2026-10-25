@@ -10,6 +10,7 @@ User settings, shared by every project, window and profile. Search `rojoHub` in 
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin installed. |
 | `rojoHub.studioAutoConnect` | `"remembered"` | `"listed"`: only places a project file lists or you assign connect by themselves. `"remembered"`: also a place's last project. |
 | `rojoHub.openPlaces` | `false` | Open, close and reopen places from project cards; lets agents use `open_place`. |
+| `rojoHub.setupCommands` | `{}` | **Dangerous.** Per repo path, programs that run in a new worktree before it is first served (`rokit install`, `wally install`). Edit in the panel (⋯ → *Setup commands…*). Only you can set it; not synced. See [Agents](/guide/agents#setup-commands). |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents get the MCP server. Not synced between machines. |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Show a message when Studio disconnects. |
 

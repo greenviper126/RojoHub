@@ -626,6 +626,94 @@ test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, bran
 	assert.equal(await view(), undefined);
 });
 
+test("setup commands (spec 012): new_branch installs before the first switch, a failure keeps the worktree, ensure sets up an unserved worktree and skips a served one", async () => {
+	const dir = await makeRepo("Setupy");
+	write(join(dir, "wally.toml"), '[package]\nname = "a/b"\nversion = "0.1.0"\nregistry = "https://github.com/UpliftGames/wally-index"\nrealm = "shared"\n[dependencies]\nRoact = "a/roact@1.0.0"\n');
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", "wally");
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	const scripts = join(root, "setupy-scripts");
+	// Records where the project pointed while it ran, and installs a Packages folder like wally would.
+	write(
+		join(scripts, "install.cjs"),
+		`const fs=require("fs");
+fetch(${JSON.stringify(api + "/slots")}).then((r)=>r.json()).then((slots)=>{
+	const slot=slots.find((entry)=>entry.id===${JSON.stringify(slot.id)});
+	fs.mkdirSync("Packages",{recursive:true});
+	fs.writeFileSync("Packages/marker.txt",JSON.stringify({served:slot.target.path,branch:process.env.ROJO_HUB_BRANCH}));
+});`,
+	);
+	write(join(scripts, "fail.cjs"), `console.error("wally: registry unreachable");process.exit(5);`);
+	const configure = (commands: unknown[]) => call("PUT", "/settings", { setupCommands: { [dir]: commands } });
+	const node = (script: string) => ({ command: process.execPath, args: [join(scripts, script)] });
+	try {
+		await call("POST", `/slots/${slot.id}/start`);
+		const before = await view();
+		await configure([node("install.cjs")]);
+
+		// new_branch: the install ran in the new worktree while the project still served the old target
+		const made = await tool("new_branch", { path: dir, name: "setup-ok" });
+		assert.ok(!made.isError, made.text);
+		assert.match(made.text, /setup 1 of 1: .*install\.cjs.* ok/);
+		const path = /in (.+?) \(a git worktree\)/.exec(made.text)![1];
+		const marker = JSON.parse(readFileSync(join(path, "Packages", "marker.txt"), "utf8"));
+		assert.equal(pathKey(marker.served), pathKey(dir), "setup ran before the project was switched to the new worktree");
+		assert.equal(marker.branch, "setup-ok");
+		const after = await view();
+		assert.equal(after.target.kind === "worktree" && pathKey(after.target.path), pathKey(path), "then it was switched");
+		assert.equal(after.sessionId, before.sessionId, "without restarting rojo");
+		await tool("release", { project: slot.projectName, force: true });
+
+		// a failing command: the worktree and branch stay, nothing is switched, nobody holds the project
+		await configure([node("install.cjs"), node("fail.cjs")]);
+		const failed = await tool("new_branch", { path: dir, name: "setup-bad" });
+		assert.ok(failed.isError);
+		assert.match(failed.text, /Setup failed at ".*fail\.cjs.*" \(step 2 of 2\): exited with code 5/);
+		assert.match(failed.text, /wally: registry unreachable/);
+		const kept = /The worktree (.+?) was kept/.exec(failed.text)![1];
+		assert.equal(readFileSync(join(kept, "Packages", "marker.txt"), "utf8").length > 0, true, "the first command's work is not undone");
+		assert.match(gitIn(dir, "branch", "--list", "setup-bad"), /setup-bad/);
+		const unchanged = await view();
+		assert.equal(unchanged.target.kind === "worktree" && pathKey(unchanged.target.path), pathKey(path), "not switched");
+		assert.equal(unchanged.claim, null);
+		const audit = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		assert.ok(audit.some((entry) => entry.action === "setup" && entry.exitCode === 5 && /registry unreachable/.test(entry.outputTail)), "the failure is in the audit log");
+
+		// ensure: an unserved worktree without Packages is set up, then served; a served one is only warned about
+		await configure([node("install.cjs")]);
+		const served = join(root, "Setupy-served");
+		const fresh = join(root, "Setupy-fresh");
+		gitIn(dir, "worktree", "add", "-q", "-b", "setup-served", served);
+		gitIn(dir, "worktree", "add", "-q", "-b", "setup-fresh", fresh);
+		await tool("serve_here", { path: served, force: true });
+		const skipped = await structured("ensure", { path: served, force: true });
+		const stepsOf = (data: Record<string, any>) => data.steps.map((step: Record<string, string>) => `${step.step}:${step.outcome}`);
+		assert.deepEqual(stepsOf(skipped).slice(0, 3), ["start:already", "setup:skipped", "serve:already"]);
+		assert.match(skipped.steps[1].detail, /being served/);
+		assert.ok(skipped.warnings.some((line: string) => line.startsWith("packages:")), "the missing Packages are a warning");
+		assert.equal(existsSyncFile(join(served, "Packages", "marker.txt")), false, "nothing was installed in a served worktree");
+		const ran = await structured("ensure", { path: fresh, force: true });
+		assert.deepEqual(stepsOf(ran).slice(0, 3), ["start:already", "setup:done", "serve:done"]);
+		assert.equal(JSON.parse(readFileSync(join(fresh, "Packages", "marker.txt"), "utf8")).served !== undefined, true);
+		assert.ok(!ran.warnings.some((line: string) => line.startsWith("packages:")), "checked again after setup");
+		const again = await structured("ensure", { path: fresh, force: true });
+		assert.ok(!stepsOf(again).includes("setup:done"), "a second ensure runs nothing");
+		assert.equal((await view()).sessionId, before.sessionId, "rojo was never restarted");
+	} finally {
+		await call("PUT", "/settings", {});
+		await call("DELETE", `/slots/${slot.id}`);
+	}
+});
+function existsSyncFile(file: string): boolean {
+	try {
+		readFileSync(file);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 test("project files: added by default or the only one, changed live with a restart, refused on a clash", async () => {
 	const tree = (label: string) => ({ $className: "DataModel", ServerScriptService: { $className: "ServerScriptService", Code: { $path: label } } });
 	const lib = await makeRepo("Libby");

@@ -1086,6 +1086,9 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 		openPlacesOn: false,
 		crashedAt: () => 0,
 		switch: async () => slot,
+		home: mkdtempSync(join(tmpdir(), "rojo-hub-home-")),
+		setupFor: () => null,
+		setupJobs: { running: () => null, all: () => [] },
 	};
 	return { hub, slot };
 }
@@ -1220,6 +1223,11 @@ function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[];
 		studio: { places: () => open, unappliedOn: () => [] },
 		openPlacesOn: over.openPlacesOn ?? true,
 		crashedAt: () => 0,
+		home: mkdtempSync(join(tmpdir(), "rojo-hub-home-")),
+		setupFor: (): unknown => null,
+		setupRefusal: async (): Promise<string | null> => null,
+		setupWorktree: async (..._args: unknown[]): Promise<unknown> => null,
+		setupJobs: { running: (): unknown => null, all: () => [] as unknown[] },
 		start: async () => {
 			calls.start++;
 			behave.start();
@@ -1273,6 +1281,125 @@ test("ensure: stopped project, unserved worktree, closed place: does everything,
 
 	const plain = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ensure", arguments: { path: repo } } })) as { result: Record<string, unknown> };
 	assert.deepEqual(Object.keys(plain.result), ["content"], "a client without the header gets text only");
+});
+
+/* ---------- ensure: install checks and the setup step (spec 012, design 2) ---------- */
+
+function wallyRepo(): string {
+	const repo = tempRepo();
+	writeFileSync(join(repo, "wally.toml"), `[package]\nname = "a/b"\n[dependencies]\nRoact = "a/roact@1"\n`);
+	return repo;
+}
+const okOutcome = (worktree: string) => ({ ok: true, steps: [{ index: 1, of: 1, text: "wally install", state: "ok", seconds: 0.1 }], failed: null, worktree, branch: null });
+
+test("ensure: checks and warnings never change ready; with no setup configured a missing Packages is only a warning", async () => {
+	const repo = wallyRepo();
+	const stub = ensureStub(repo);
+	const result = await ensureCall(stub, { path: repo });
+	assert.ok(!result.isError, result.content[0].text);
+	assert.equal(result.structuredContent.ready, true);
+	assert.deepEqual(check(result.structuredContent, TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema), []);
+	const byName = Object.fromEntries(result.structuredContent.checks.map((entry: any) => [entry.name, entry]));
+	assert.deepEqual(Object.keys(byName).sort(), ["node_modules", "packages", "rojo", "sourcemap"]);
+	assert.equal(byName.packages.ok, false);
+	assert.equal(byName.node_modules.ok, true);
+	assert.ok(result.structuredContent.warnings.some((line: string) => line.startsWith("packages: Packages missing")));
+	assert.match(result.content[0].text, /warning: packages: Packages missing/);
+	assert.deepEqual(stepsOf(result), ["start:done", "serve:done", "open_place:done", "wait_for_studio:done"], "no setup step without an entry");
+});
+
+test("ensure: runs the repo's setup for a worktree whose packages are missing, before the claim; not when the checks are ok", async () => {
+	const repo = wallyRepo();
+	const stub = ensureStub(repo);
+	const events: string[] = [];
+	const hub = stub.hub as any;
+	hub.setupFor = () => ({ commands: [{ command: "wally", args: ["install"], timeoutSeconds: 600 }] });
+	hub.setupWorktree = async (_id: string, worktree: string) => {
+		events.push(`setup(switch calls so far: ${stub.calls.switch})`);
+		mkdirSync(join(worktree, "Packages"));
+		return { job: { step: 1, of: 1, text: "wally install" }, outcome: okOutcome(worktree), joined: false };
+	};
+	const first = await ensureCall(stub, { path: repo });
+	assert.ok(!first.isError, first.content[0].text);
+	assert.deepEqual(stepsOf(first), ["start:done", "setup:done", "serve:done", "open_place:done", "wait_for_studio:done"]);
+	assert.deepEqual(events, ["setup(switch calls so far: 0)"], "setup ran before the serve step took the claim");
+	assert.match(first.structuredContent.steps[1].detail, /wally install/);
+	assert.deepEqual(first.structuredContent.warnings, first.structuredContent.warnings.filter((line: string) => !line.startsWith("packages")), "the checks were taken again after setup");
+	assert.equal(first.structuredContent.checks.find((entry: any) => entry.name === "packages").ok, true);
+	// a second call: the checks pass, so nothing runs
+	const second = await ensureCall(stub, { path: repo });
+	assert.deepEqual(stepsOf(second), ["start:already", "serve:already", "open_place:already", "wait_for_studio:already"]);
+	assert.equal(events.length, 1);
+});
+
+test("ensure: setup is skipped, with the reason, for a worktree a running rojo has read, and a broken entry is reported", async () => {
+	const repo = wallyRepo();
+	const served = ensureStub(repo);
+	let ran = 0;
+	const hub = served.hub as any;
+	hub.setupFor = () => ({ commands: [{ command: "wally", args: ["install"], timeoutSeconds: 600 }] });
+	hub.setupRefusal = async () => "the worktree is being served (or was, since Rojo started); stop the project to install, or install by hand.";
+	hub.setupWorktree = async () => void ran++;
+	const result = await ensureCall(served, { path: repo });
+	assert.ok(!result.isError, result.content[0].text);
+	assert.equal(ran, 0, "nothing was run");
+	assert.deepEqual(stepsOf(result), ["start:done", "setup:skipped", "serve:done", "open_place:done", "wait_for_studio:done"]);
+	assert.match(result.structuredContent.steps[1].detail, /being served/);
+	assert.ok(result.structuredContent.warnings.some((line: string) => line.startsWith("packages:")), "the missing packages are still reported");
+	assert.equal(result.structuredContent.ready, true);
+
+	const broken = ensureStub(repo);
+	(broken.hub as any).setupFor = () => ({ problem: "rojoHub.setupCommands for X is invalid, so no setup was run: cwd must not contain \"..\"." });
+	const answer = await ensureCall(broken, { path: repo });
+	assert.deepEqual(stepsOf(answer).slice(0, 2), ["start:done", "setup:skipped"]);
+	assert.match(answer.structuredContent.steps[1].detail, /invalid/);
+});
+
+test("ensure: a failed setup is setup_failed (project started, nothing served); a slow one is setup_running", async () => {
+	const repo = wallyRepo();
+	const schema = TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema;
+	const failedStub = ensureStub(repo);
+	const hub = failedStub.hub as any;
+	hub.setupFor = () => ({ commands: [{ command: "wally", args: ["install"], timeoutSeconds: 600 }] });
+	const failed = { index: 1, of: 1, text: "wally install", state: "failed", exitCode: 1, reason: "exit", seconds: 0.2, tail: "no network" };
+	hub.setupWorktree = async (_id: string, worktree: string) => ({ job: {}, joined: false, outcome: { ok: false, steps: [failed], failed, worktree, branch: null } });
+	const result = await ensureCall(failedStub, { path: repo });
+	assert.ok(result.isError);
+	assert.deepEqual(check(result.structuredContent, schema), []);
+	assert.equal(result.structuredContent.failure.reason, "setup_failed");
+	assert.match(result.structuredContent.failure.message, /wally install/);
+	assert.match(result.structuredContent.failure.message, /no network/);
+	assert.deepEqual(stepsOf(result), ["start:done", "setup:failed"]);
+	assert.equal(failedStub.calls.switch, 0, "nothing was served");
+	assert.equal(failedStub.calls.start, 1, "the project was started");
+	// a second ensure runs it again while the checks still fail
+	let again = 0;
+	hub.setupWorktree = async (_id: string, worktree: string) => (again++, { job: {}, joined: false, outcome: { ok: false, steps: [failed], failed, worktree, branch: null } });
+	await ensureCall(failedStub, { path: repo });
+	assert.equal(again, 1);
+
+	const slowStub = ensureStub(repo);
+	const slowHub = slowStub.hub as any;
+	slowHub.setupFor = () => ({ commands: [{ command: "wally", args: ["install"], timeoutSeconds: 600 }] });
+	slowHub.setupWorktree = async () => ({ job: { step: 2, of: 3, text: "npm ci" }, joined: true, outcome: null });
+	const slow = await ensureCall(slowStub, { path: repo });
+	assert.ok(slow.isError);
+	assert.equal(slow.structuredContent.failure.reason, "setup_running");
+	assert.match(slow.structuredContent.failure.message, /command 2 of 3: npm ci/);
+	assert.match(slow.structuredContent.failure.message, /ensure again/);
+	assert.equal(slowStub.calls.switch, 0);
+});
+
+test("ensure: a setup job already running is joined even when the checks pass", async () => {
+	const repo = tempRepo();
+	const stub = ensureStub(repo);
+	const hub = stub.hub as any;
+	hub.setupJobs.running = () => ({ step: 1, of: 2, text: "wally install" });
+	let joined = 0;
+	hub.setupWorktree = async (_id: string, worktree: string) => (joined++, { job: {}, joined: true, outcome: okOutcome(worktree) });
+	const result = await ensureCall(stub, { path: repo });
+	assert.equal(joined, 1);
+	assert.match(result.structuredContent.steps[1].detail, /joined the running setup/);
 });
 
 test("ensure: the failure table, each reason with its steps, as isError answers carrying data", async () => {
