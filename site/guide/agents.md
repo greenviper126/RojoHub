@@ -66,9 +66,9 @@ than one project.
 | Tool | Parameters |
 |---|---|
 | `status` | `path?` |
-| `ensure` | `path`, `project?`, `place?`, `timeout?`, `wait?`, `force?` |
-| `serve_here` | `path`, `project?`, `wait?`, `force?` |
-| `switch` | `target`, `project?`, `path?`, `wait?`, `force?` |
+| `ensure` | `path`, `project?`, `place?`, `timeout?`, `wait?`, `then_return?`, `force?` |
+| `serve_here` | `path`, `project?`, `wait?`, `then_return?`, `force?` |
+| `switch` | `target`, `project?`, `path?`, `wait?`, `then_return?`, `force?` |
 | `new_branch` | `name`, `base?`, `path?`, `project?`, `wait?`, `force?` |
 | `branches` | `path?`, `project?`, `fetch?` |
 | `release` | `path?`, `project?`, `force?` |
@@ -92,6 +92,12 @@ than one project.
 further calls from that worktree. While another worktree holds the claim, they refuse and say who
 holds it; with `wait` (up to 600 seconds) they queue and take over when it ends. `release` hands it
 back.
+
+With `then_return: true` on `serve_here`, `switch` or `ensure`, an agent borrowing a project that was
+serving someone else's worktree (or a branch) asks for it to switch back to that when the agent calls
+`release` or its claim runs out. It is an ordinary live switch (Studio stays connected), and happens only
+if nobody else has taken the project since, it is still serving, and that worktree's folder still
+exists. Without it, a release leaves the project serving the agent's worktree, as before.
 
 - `stop`, `stop_group`, `remove_project` and `start_group only` are refused while someone else holds
   the claim or a Studio place is synced. `stop_all` always needs `force`.

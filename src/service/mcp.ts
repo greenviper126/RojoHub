@@ -87,7 +87,7 @@ export const PROJECT_STATE_SCHEMA = shape({
 	rojo: shape({ state: { type: "string", enum: ["running", "starting", "stopped", "error"] }, error: orNull("string"), sessionId: orNull("string"), connections: I }),
 	served: shape({ kind: { type: "string", enum: ["worktree", "branch"] }, label: S, path: orNull("string"), branch: orNull("string"), commit: orNull("string") }),
 	claim: {
-		anyOf: [{ type: "null" }, shape({ holder: S, until: S, secondsLeft: I, yours: orNull("boolean") })],
+		anyOf: [{ type: "null" }, shape({ holder: S, until: S, secondsLeft: I, yours: orNull("boolean"), thenReturn: orNull("string") })],
 	},
 	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, reason: orNull("string"), saved: B })),
 	connecting: arrayOf(shape({ placeId: I, name: S, confirming: B })),
@@ -127,6 +127,7 @@ const ENSURE_SCHEMA = shape({
 const pathProperty = { type: "string", description: "Your working directory (absolute), or any folder inside the worktree." };
 const projectProperty = { type: "string", description: "The project's name or id, as status shows it. Only needed when a repo has more than one project, or without path." };
 const forceProperty = { type: "boolean", description: "Go ahead even though another agent or a synced Studio would be affected. Only when the user asks." };
+const thenReturnProperty = { type: "boolean", description: "When you release, or your hold runs out, switch the project back to what it served before you took it (only if nobody else has taken it since, it is still serving, and that worktree's folder still exists). For borrowing a project the user or another agent was using." };
 const waitProperty = { type: "number", description: `Seconds to wait for another worktree's claim to end, then take the project (up to ${MAX_WAIT_S}). Waiters are served in order.` };
 const groupProperty = { type: "string", description: "The group's name or id, as status shows it." };
 const listProperty = (what: string) => ({ type: "array", items: { type: "string" }, description: what });
@@ -147,7 +148,7 @@ export const TOOLS: Tool[] = [
 		title: "Serve my worktree",
 		description:
 			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 15 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
-		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, force: forceProperty }, required: ["path"] },
+		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, then_return: thenReturnProperty, force: forceProperty }, required: ["path"] },
 		outputSchema: SWITCH_SCHEMA,
 	},
 	{
@@ -155,7 +156,7 @@ export const TOOLS: Tool[] = [
 		title: "Serve a branch or worktree",
 		description:
 			"Switches a project to serve a branch (by name, e.g. main or origin/feature) or a worktree (by folder), live, and claims it. A branch checked out in a worktree is served from that worktree; any other branch from a read-only copy Rojo-Hub keeps.",
-		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, force: forceProperty }, ["target"]),
+		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, then_return: thenReturnProperty, force: forceProperty }, ["target"]),
 		outputSchema: SWITCH_SCHEMA,
 	},
 	{
@@ -171,6 +172,7 @@ export const TOOLS: Tool[] = [
 				place: { type: "number", description: "Which place to open, when the project lists several (status lists them)." },
 				timeout: { type: "number", description: "Seconds to wait for Studio to sync (default 60, 5 to 300)." },
 				wait: waitProperty,
+				then_return: thenReturnProperty,
 				force: forceProperty,
 			},
 			required: ["path"],
@@ -602,8 +604,11 @@ export class Mcp {
 		this.checkClaim(slot, key, force);
 		// Claimed before switching, so a second agent asking at the same moment is refused rather than both switching.
 		const before = this.hub.claimOf(slot.id);
-		this.hub.setClaim(slot.id, { key, label, until: Date.now() + CLAIM_MS });
 		const current = this.hub.view(this.hub.registry.get(slot.id));
+		// What to give back (spec 013): kept from this agent's earlier call, else what is served now.
+		let returnTo = before?.key === key ? before.returnTo : undefined;
+		if (!returnTo && args.then_return === true && claimKey(current.target) !== key) returnTo = { target: current.target, label: current.targetLabel };
+		this.hub.setClaim(slot.id, { key, label, until: Date.now() + CLAIM_MS, ...(returnTo ? { returnTo } : {}) });
 		if (claimKey(current.target) === key) return current;
 		try {
 			return await this.hub.switch(slot.id, target);
@@ -611,6 +616,13 @@ export class Mcp {
 			this.hub.setClaim(slot.id, before);
 			throw error;
 		}
+	}
+
+	/** One line on then_return for the answer of a call that took the project (spec 013). */
+	private returnNote(slot: SlotView, args: Args): string {
+		const back = this.hub.claimOf(slot.id)?.returnTo;
+		if (back) return `\nWhen you release, or your hold runs out, it switches back to ${back.label}${args.then_return === true ? "" : " (as you asked earlier)"}.`;
+		return args.then_return === true ? "\nthen_return: there was nothing to return to (the project already served this)." : "";
 	}
 
 	/* ---------- Rojo's side of things ---------- */
@@ -679,6 +691,7 @@ export class Mcp {
 						until: new Date(claim.until).toISOString(),
 						secondsLeft: Math.max(0, Math.round((claim.until - Date.now()) / 1000)),
 						yours: root === null ? null : claim.key === claimKey({ kind: "worktree", path: root }),
+						thenReturn: claim.returnTo?.label ?? null,
 					}
 				: null,
 			places: (slot.state === "running" ? (slot.places ?? []) : []).map((place) => ({
@@ -766,7 +779,7 @@ export class Mcp {
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`,
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -797,7 +810,7 @@ export class Mcp {
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`,
+			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -808,8 +821,10 @@ export class Mcp {
 		if (!claim) {
 			const lapsed = this.hub.lapsedClaim(slot.id);
 			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
+				const back = lapsed.returnTo ? await this.hub.handBack(slot.id, lapsed, "expiry") : null;
 				this.hub.setClaim(slot.id, null);
-				return `${root ? "Your" : `${lapsed.label}'s`} claim on ${slot.projectName} had already run out; it still serves ${slot.targetLabel}.`;
+				const now = this.hub.view(this.hub.registry.get(slot.id));
+				return `${root ? "Your" : `${lapsed.label}'s`} claim on ${slot.projectName} had already run out; ${back?.returned ? `it went back to ${back.label}.` : `it still serves ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`}`;
 			}
 			return `${slot.projectName} was not claimed.`;
 		}
@@ -818,8 +833,12 @@ export class Mcp {
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {
 			throw new Refusal(`${slot.projectName} is claimed by ${claim.label}, not by your worktree; leaving it.`);
 		}
+		// Switched back before the claim is dropped, so an agent waiting for the project cannot interleave.
+		const back = claim.returnTo ? await this.hub.handBack(slot.id, claim, "release") : null;
 		this.hub.setClaim(slot.id, null);
-		return `Released ${slot.projectName}. It keeps serving ${slot.targetLabel}.`;
+		if (back?.returned) return `Released ${slot.projectName}. It switched back to ${back.label}, which it served before you took it.`;
+		const now = this.hub.view(this.hub.registry.get(slot.id));
+		return `Released ${slot.projectName}. It keeps serving ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`;
 	}
 
 	private async start(args: Args): Promise<string> {
@@ -1020,6 +1039,8 @@ export class Mcp {
 			const switched = beforeKey !== claimKey(now.target);
 			now = await this.settled(now);
 			steps.push({ step: "serve", outcome: switched ? "done" : "already", detail: switched ? `${now.projectName} now serves ${root}` : `${now.projectName} already served ${root}; claim renewed` });
+			const returnLine = this.returnNote(now, args).trim();
+			if (returnLine) steps[steps.length - 1].detail += `; ${returnLine.replace(/^then_return: /, "")}`;
 			if (now.error || now.state === "error") {
 				const lines = this.problemLines(now).join(" ");
 				steps[steps.length - 1].detail += `; Rojo reports: ${lines}`;
