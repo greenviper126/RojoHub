@@ -2,6 +2,13 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.3
+
+- **A `version` tool for agents.** It says which Rojo-Hub service, Studio plugin and MCP launcher are
+  running, which Rojo each serving project uses, and which plugin each open Studio place loaded. A
+  place whose plugin is older than the service is marked, with the reminder to reopen it. It claims
+  nothing and never disturbs anyone.
+
 ## 0.22.2
 
 - **Agents can ask for a Studio place another project holds.** The new `request_place` tool asks the
