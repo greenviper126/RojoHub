@@ -1422,3 +1422,131 @@ test("ensure: openPlaces off with a place already synced or open needs no openin
 	assert.deepEqual(stepsOf(waited), ["start:already", "serve:done", "open_place:already", "wait_for_studio:done"]);
 	assert.deepEqual(opened.calls.openPlace, []);
 });
+
+/* ---------- handoff: then_return (spec 013) ---------- */
+
+/** A real Hub with one running slot serving `held`, whose switches are recorded instead of made. */
+function handHub(held: string) {
+	const hub = new Hub(mkdtempSync(join(tmpdir(), "rojo-hub-handoff-")));
+	const slot = { id: "game", projectName: "Game", target: { kind: "worktree", path: held } as { kind: "worktree"; path: string } };
+	const internals = hub as unknown as { registry: unknown; runtime(id: string): { state: string }; switchLocked(s: unknown, t: typeof slot.target): Promise<void> };
+	internals.registry = { get: () => slot, slots: [slot], save() {} };
+	internals.runtime("game").state = "running";
+	const switches: string[] = [];
+	internals.switchLocked = async (_s, target) => {
+		switches.push(target.path);
+		slot.target = target;
+	};
+	return { hub, slot, switches };
+}
+
+const workKey = (path: string) => `worktree:${pathKey(path)}`;
+
+test("handoff: a release switches back to what was served, once, and only if it still serves the claim's target", async () => {
+	const before = mkdtempSync(join(tmpdir(), "rojo-hub-before-"));
+	const mine = mkdtempSync(join(tmpdir(), "rojo-hub-mine-"));
+	const { hub, slot, switches } = handHub(mine);
+	const claim = { key: workKey(mine), label: "mine", until: Date.now() + 60_000, returnTo: { target: { kind: "worktree" as const, path: before }, label: "before" } };
+	hub.setClaim("game", claim);
+	assert.deepEqual(await hub.handBack("game", claim, "release"), { returned: true, label: "before" });
+	assert.deepEqual(switches, [before]);
+
+	// it no longer serves the claim's target: left alone
+	const again = await hub.handBack("game", claim, "release");
+	assert.equal(again.returned, false);
+	assert.deepEqual(switches, [before], "no second switch");
+
+	// a claim with no return does nothing
+	slot.target = { kind: "worktree", path: mine };
+	assert.equal((await hub.handBack("game", { ...claim, returnTo: undefined }, "release")).returned, false);
+});
+
+test("handoff: not to a worktree folder that is gone, and not when the slot is stopped", async () => {
+	const mine = mkdtempSync(join(tmpdir(), "rojo-hub-mine-"));
+	const gone = join(tmpdir(), "rojo-hub-gone-" + Date.now());
+	const { hub, switches } = handHub(mine);
+	const claim = { key: workKey(mine), label: "mine", until: Date.now() + 60_000, returnTo: { target: { kind: "worktree" as const, path: gone }, label: "gone" } };
+	hub.setClaim("game", claim);
+	const missing = await hub.handBack("game", claim, "release");
+	assert.equal(missing.returned, false);
+	assert.match((missing as { why: string }).why, /no longer exists/);
+
+	const exists = { ...claim, returnTo: { target: { kind: "worktree" as const, path: tmpdir() }, label: "tmp" } };
+	(hub as unknown as { runtime(id: string): { state: string } }).runtime("game").state = "stopped";
+	const stopped = await hub.handBack("game", exists, "release");
+	assert.match((stopped as { why: string }).why, /not serving/);
+	assert.deepEqual(switches, [], "nothing was switched");
+});
+
+test("handoff: a claim that runs out gives the project back by itself, unless someone took it since", async () => {
+	const before = mkdtempSync(join(tmpdir(), "rojo-hub-before-"));
+	const mine = mkdtempSync(join(tmpdir(), "rojo-hub-mine-"));
+	const { hub, slot, switches } = handHub(mine);
+	const tick = () => (hub as unknown as { returnLapsed(): void }).returnLapsed();
+	const settle = () => new Promise((done) => setTimeout(done, 20));
+	const expired = (path: string) => ({ key: workKey(path), label: "mine", until: Date.now() - 1, returnTo: { target: { kind: "worktree" as const, path: before }, label: "before" } });
+
+	hub.setClaim("game", { ...expired(mine), until: Date.now() + 60_000 });
+	tick();
+	await settle();
+	assert.deepEqual(switches, [], "a claim still running is not returned");
+
+	hub.setClaim("game", expired(mine));
+	tick();
+	await settle();
+	assert.deepEqual(switches, [before], "returned when the claim ran out");
+	tick();
+	await settle();
+	assert.deepEqual(switches, [before], "and only once");
+	assert.equal(hub.lapsedClaim("game")?.returnTo, undefined);
+
+	// taken by another agent since: the other claim is live, so nothing is switched
+	slot.target = { kind: "worktree", path: mine };
+	const other = mkdtempSync(join(tmpdir(), "rojo-hub-other-"));
+	const lapsed = expired(mine);
+	hub.setClaim("game", { key: workKey(other), label: "other", until: Date.now() + 60_000 });
+	const taken = await hub.handBack("game", lapsed, "expiry");
+	assert.equal(taken.returned, false);
+	assert.match((taken as { why: string }).why, /other/);
+	assert.deepEqual(switches, [before]);
+});
+
+test("handoff: the return survives a service restart, even one that outlasts the claim", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-handoff-home-"));
+	const first = new Hub(home);
+	const returnTo = { target: { kind: "branch" as const, ref: "main" }, label: "main" };
+	first.setClaim("game", { key: "worktree:x", label: "x", until: Date.now() - 5, returnTo });
+	first.setClaim("live", { key: "worktree:y", label: "y", until: Date.now() + 60_000, returnTo });
+	first.setClaim("plain", { key: "worktree:z", label: "z", until: Date.now() - 5 });
+	const second = new Hub(home);
+	assert.deepEqual(second.claimOf("live")?.returnTo, returnTo);
+	assert.deepEqual(second.lapsedClaim("game")?.returnTo, returnTo, "a claim that ran out while the service was down still returns");
+	assert.equal(second.lapsedClaim("plain"), null, "one without a return is dropped as before");
+});
+
+test("handoff: serve_here with then_return records what was served; release switches back and says so", async () => {
+	const repo = tempRepo();
+	const tree = join(tmpdir(), "rojo-hub-wt-" + Date.now());
+	execFileSync("git", ["worktree", "add", "-q", "-b", "feat", tree], { cwd: repo, stdio: "pipe" });
+	const { hub } = stubHub(repo, null);
+	const handBacks: string[] = [];
+	const wired = { ...hub, handBack: async (_id: string, claim: { returnTo?: { label: string } }) => (handBacks.push(claim.returnTo?.label ?? "?"), { returned: true, label: claim.returnTo?.label ?? "?" }) };
+	const mcp = new Mcp(wired as never);
+	type Result = { result: { content: { text: string }[]; structuredContent?: { project?: { claim?: { thenReturn: string | null } } } } };
+	const call = (name: string, args: object) => mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, "2025-06-18") as Promise<Result>;
+
+	const plain = await call("serve_here", { path: tree });
+	assert.ok(!plain.result.content[0].text.includes("switches back"), "without then_return nothing is promised");
+	await call("release", { path: tree });
+	assert.deepEqual(handBacks, []);
+
+	const served = await call("serve_here", { path: tree, then_return: true });
+	assert.match(served.result.content[0].text, /switches back to main/);
+	assert.equal(served.result.structuredContent?.project?.claim?.thenReturn, "main");
+	// a second call keeps the first one's return rather than returning to itself
+	const renewed = await call("serve_here", { path: tree });
+	assert.match(renewed.result.content[0].text, /switches back to main \(as you asked earlier\)/);
+	const released = await call("release", { path: tree });
+	assert.deepEqual(handBacks, ["main"]);
+	assert.match(released.result.content[0].text, /switched back to main/);
+});

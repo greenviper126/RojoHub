@@ -84,7 +84,12 @@ export interface Claim {
 	key: string;
 	label: string;
 	until: number;
+	/** What the slot served before this claim took it, when the agent asked to give it back (spec 013). */
+	returnTo?: { target: Target; label: string };
 }
+
+/** What handBack did: it switched back, or why it left the project as it is. */
+export type HandBack = { returned: true; label: string } | { returned: false; why: string };
 
 export function claimKey(target: Target): string {
 	return target.kind === "worktree" ? `worktree:${pathKey(target.path)}` : `branch:${target.ref}`;
@@ -251,7 +256,10 @@ export class Hub {
 	*/
 	async restore(): Promise<void> {
 		this.syncStudioPlugin();
-		this.poller = setInterval(() => this.pollLogs(), 1000);
+		this.poller = setInterval(() => {
+			this.pollLogs();
+			this.returnLapsed();
+		}, 1000);
 		this.poller.unref();
 		for (const slot of this.registry.slots) {
 			if (!slot.seed) slot.seed = await repoSeed(slot.repoPath, slot.projectName);
@@ -506,6 +514,53 @@ export class Hub {
 		return this.lapsed.get(id) ?? null;
 	}
 
+	/*
+		Gives back the projects whose claim ran out with a return to make (spec
+		013). Runs every second; claimOf moves the claim to `lapsed`, and
+		handBack checks, inside the slot's queue, that nobody has taken the
+		project since and that it is serving.
+	*/
+	private returnLapsed(): void {
+		for (const id of [...this.claims.keys()]) this.claimOf(id);
+		for (const [id, claim] of [...this.lapsed]) {
+			if (!claim.returnTo) continue;
+			this.lapsed.set(id, { key: claim.key, label: claim.label, until: claim.until });
+			void this.handBack(id, claim, "expiry").catch(() => undefined);
+		}
+	}
+
+	/*
+		Switches a slot back to what it served before `claim` took it, live (the
+		same switch as any other, never a restart). Only when: it is serving,
+		it still serves the claim's target, no other claim holds it, and the
+		old worktree's folder exists. `how` "release": the claim is still in
+		place (the caller clears it afterwards). "expiry": it ran out, so any
+		unexpired claim now belongs to someone who took the project since.
+	*/
+	async handBack(id: string, claim: Claim, how: "release" | "expiry"): Promise<HandBack> {
+		const back = claim.returnTo;
+		if (!back) return { returned: false, why: "it was not asked to return" };
+		let slot: SlotRecord;
+		try {
+			slot = this.registry.get(id);
+		} catch {
+			return { returned: false, why: "the project is gone" };
+		}
+		return this.enqueue(slot, async () => {
+			const current = this.claims.get(id);
+			if (current && (how === "expiry" ? current.until > Date.now() : current.key !== claim.key)) return { returned: false, why: `another agent (${current.label}) holds it now` } as HandBack;
+			if (this.runtime(id).state !== "running") return { returned: false, why: "the project is not serving" } as HandBack;
+			if (claimKey(slot.target) !== claim.key) return { returned: false, why: "it serves something else now" } as HandBack;
+			if (back.target.kind === "worktree" && !existsSync(back.target.path)) return { returned: false, why: `${back.target.path} no longer exists` } as HandBack;
+			try {
+				await this.switchLocked(slot, back.target);
+			} catch (error) {
+				return { returned: false, why: `the switch failed: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` } as HandBack;
+			}
+			return { returned: true, label: back.label } as HandBack;
+		});
+	}
+
 	/** When the Hub last restarted a crashed rojo on the slot (0: never). */
 	crashedAt(id: string): number {
 		return this.runtime(id).crashedAt;
@@ -528,8 +583,13 @@ export class Hub {
 		try {
 			const saved = JSON.parse(readFileSync(join(this.home, "claims.json"), "utf8")) as Record<string, Partial<Claim>>;
 			for (const [id, claim] of Object.entries(saved)) {
-				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number" && claim.until > Date.now()) {
-					this.claims.set(id, { key: claim.key, label: claim.label, until: claim.until });
+				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number") {
+					const back = claim.returnTo;
+					const returnTo = back && typeof back.label === "string" && back.target && (back.target.kind === "worktree" || back.target.kind === "branch") ? { target: back.target, label: back.label } : undefined;
+					const loaded: Claim = { key: claim.key, label: claim.label, until: claim.until, ...(returnTo ? { returnTo } : {}) };
+					// One that ran out while the service was down still gives its project back (returnLapsed).
+					if (claim.until > Date.now()) this.claims.set(id, loaded);
+					else if (returnTo) this.claims.set(id, loaded);
 				}
 			}
 		} catch {
@@ -944,7 +1004,12 @@ export class Hub {
 	*/
 	switch(id: string, target: Target): Promise<SlotView> {
 		const slot = this.registry.get(id);
-		return this.enqueue(slot, async () => {
+		return this.enqueue(slot, () => this.switchLocked(slot, target));
+	}
+
+	/** switch() inside the slot's queue. */
+	private async switchLocked(slot: SlotRecord, target: Target): Promise<SlotView> {
+		{
 			const runtime = this.runtime(slot.id);
 			const tree = await this.prepareTree(slot, target);
 			const plan = this.writeFiles(slot, tree);
@@ -970,7 +1035,7 @@ export class Hub {
 			await this.syncSourcemap(slot);
 			if (runtime.state !== "running") await this.collectViews(slot);
 			return this.view(slot);
-		});
+		}
 	}
 
 	async shutdown(stopServing: boolean): Promise<void> {

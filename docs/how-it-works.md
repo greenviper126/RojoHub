@@ -788,11 +788,11 @@ at once, so an agent should not need to ask you to click.
 |---|---|
 | `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
 | `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. Data: `ready`, `steps`, `project`, `placeIds`, `failure`. |
-| `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends. |
-| `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait`. |
+| `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
+| `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait` and `then_return`. |
 | `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. |
 | `branches` | Switch targets, newest first (`fetch` fetches first). |
-| `release` | Drops the agent's claim; the project keeps serving. Says so when the claim had already run out. |
+| `release` | Drops the agent's claim; the project keeps serving, unless the claim was taken with `then_return` (then it switches back). Says so when the claim had already run out. |
 | `start` | Starts a stopped project. |
 | `stop` | Stops a project. Guarded. |
 | `stop_all` | Stops every project. Always needs `force`. |
@@ -821,6 +821,8 @@ about a second (a switch applies in that time) and adds any Rojo error and the c
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
 `new_branch` wait out another worktree's claim and take the project the moment it is released or
 expires; waiters are served in the order they asked.
+
+**Handing the project back (`then_return`, spec 013).** `serve_here`, `switch` and `ensure` take `then_return: true`: the claim remembers what the project served just before (a worktree or a branch). When the agent calls `release`, or the claim runs out (a once-a-second check in the service), the project switches back to it, live like any switch, never a restart. It returns only if the project is still serving, still serves what the agent took, no other claim holds it, and a worktree's folder still exists; otherwise it stays where it is and `release` says why. The remembered target is kept in `claims.json`, so a service restart does not lose it. The answer says what it will switch back to; `status` shows it as `claim.thenReturn`. Without `then_return` nothing changes.
 
 **Which Studio to look at.** `status`, `serve_here` and `switch` name the synced places with place IDs
 (from Rojo-Hub's plugin), and `status` ends with every open place and what it syncs with, so an agent
