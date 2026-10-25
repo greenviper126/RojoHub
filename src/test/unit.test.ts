@@ -2093,9 +2093,16 @@ test("request_place: shared places show on both sides, a request is one, and Mov
 	assert.deepEqual(holderSide.structuredContent.projects.find((entry: Record<string, any>) => entry.id === "other").incomingRequests, [{ placeId: 111, name: "Lobby", from: "Game" }]);
 	assert.match((await callTool(mcp, "serve_here", { path: repo })).content[0].text, /You asked the user to move it here/, "serve_here says it too");
 
-	// Decline reaches an agent that is waiting
+	// The waiting call asks again before it waits; answer only once that request stands (finding the repo can take a while).
+	const asking = async () => {
+		const until = Date.now() + 5000;
+		while (!stub.requests.pendingFor("game", 111) && Date.now() < until) await new Promise((done) => setTimeout(done, 20));
+	};
+
+	// Decline reaches an agent that is waiting (the standing request is dropped, so asking() sees the waiting call's own)
+	stub.requests.dropAsker("game");
 	const declining = callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 10 });
-	await new Promise((done) => setTimeout(done, 100));
+	await asking();
 	assert.ok(stub.requests.answer("game:111", "decline"));
 	const declined = await declining;
 	assert.equal(declined.structuredContent.outcome, "declined");
@@ -2104,7 +2111,7 @@ test("request_place: shared places show on both sides, a request is one, and Mov
 
 	// Move reaches it too, and the place is the asker's afterwards
 	const moving = callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 10 });
-	await new Promise((done) => setTimeout(done, 100));
+	await asking();
 	assert.ok(stub.requests.answer("game:111", "move"));
 	assert.equal((await moving).structuredContent.outcome, "moved");
 	assert.deepEqual(stub.world.assigned, { 111: "game" });
