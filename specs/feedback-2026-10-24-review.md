@@ -142,3 +142,15 @@ Decided by Viper (2026-10-25):
   labelled potentially dangerous in the setting description and the panel. Needs its own spec
   (group E); covered by yolo.
 - Items 3 (drop) and the `stop`/`force` gating: not yet answered.
+
+### Decided 2026-10-25 (Viper: "do what makes the most sense for user experience")
+
+- Item 3: dropped. The Studio MCP's `get_studio_state` covers play state; no job needs a queue.
+- `stop`/`force`: not gated. Claims and the synced-place refusal already protect other agents and
+  Studio; another toggle would only add friction. Yolo still lifts the synced-place refusal.
+- Spec 011's open questions: all defaults kept.
+- Rojo-Hub's own URL entry is rewritten to the stdio launcher at every service start. Someone who
+  wants the URL form keeps it under another name (documented); a `rojohub` URL entry is taken as
+  an older install.
+- Next: group D (per-project setup commands, install checks in `ensure`) with yolo (item 22), since
+  D adds the first toggle; group C's `then_return` alongside. Group E (plugin dev host) after.
