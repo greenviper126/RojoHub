@@ -11,6 +11,7 @@ import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
+import { describeFailure, describeSteps, normaliseRepoKey, parseSetupCommands, runSetup, SetupJobs, type ParsedSetup, type SetupCommand, type SetupJob, type SetupOutcome } from "./setup";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
 import { StudioLinks, type PlaceCandidate } from "./studio";
 import { installPlugin, PLUGIN_FILE } from "./studioPlugin";
@@ -75,6 +76,15 @@ interface Runtime {
 	restarting: boolean;
 	/** When the Hub last restarted a crashed rojo, so an agent's answer can say it happened meanwhile. */
 	crashedAt: number;
+	/** pathKeys of the worktrees this slot's rojo has been pointed at since it started: it has read them (spec 012). Emptied when it stops. */
+	served: Set<string>;
+}
+
+/** A worktree's setup commands failed (spec 012): the worktree is kept, nothing is switched. */
+export class SetupFailed extends Conflict {
+	constructor(readonly outcome: SetupOutcome) {
+		super(describeFailure(outcome));
+	}
 }
 
 /*
@@ -229,6 +239,7 @@ export class Hub {
 				restarting: false,
 				crashedAt: 0,
 				rojoVersion: null,
+				served: new Set(),
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -480,11 +491,111 @@ export class Hub {
 		return this.yoloSetting;
 	}
 
+	/* ---------- setup commands (spec 012) ---------- */
+
+	/** The setup jobs, one per worktree at a time. */
+	readonly setupJobs = new SetupJobs();
+	private setupParsed: ParsedSetup | null = null;
+
+	private setupSettings(): ParsedSetup {
+		this.setupParsed ??= parseSetupCommands(loadPortSettings(this.home).setupCommands);
+		return this.setupParsed;
+	}
+
+	/** Problems with rojoHub.setupCommands, one line each, for the answer to a settings push. */
+	setupProblems(): string[] {
+		return [...this.setupSettings().problems.values()].flat();
+	}
+
+	/** The setup configured for a repo: its commands, a problem with its entry, or null for none. */
+	setupFor(repoPath: string): { commands: SetupCommand[] } | { problem: string } | null {
+		const settings = this.setupSettings();
+		const key = normaliseRepoKey(repoPath);
+		const problems = settings.problems.get(key);
+		if (problems) return { problem: `rojoHub.setupCommands for ${repoPath} is invalid, so no setup was run: ${problems.join(" ")}` };
+		const commands = settings.entries.get(key);
+		return commands && commands.length > 0 ? { commands } : null;
+	}
+
+	/*
+		True when a running or starting rojo has read this worktree: it is that
+		slot's target now, or was since the rojo started. Rojo 7.7 never unwatches
+		a folder it has read and panics when one loses a subfolder
+		(rojo-rbx/rojo#1305), so setup must not touch such a worktree. A stopped
+		slot has read nothing.
+	*/
+	worktreeRead(path: string): boolean {
+		const key = pathKey(path);
+		for (const slot of this.registry.slots) {
+			const runtime = this.runtime(slot.id);
+			if (runtime.state !== "running" && runtime.state !== "starting") continue;
+			if (slot.target.kind === "worktree" && pathKey(slot.target.path) === key) return true;
+			if (runtime.served.has(key)) return true;
+		}
+		return false;
+	}
+
+	/** Whether `path` is a linked worktree (its git dir differs from the repo's common dir), not a main checkout. */
+	async isLinkedWorktree(path: string): Promise<boolean> {
+		try {
+			const dir = (await git(path, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim();
+			const common = (await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
+			return pathKey(dir) !== pathKey(common);
+		} catch {
+			return false;
+		}
+	}
+
+	/*
+		Why setup may not run in this worktree, or null. Never the main checkout
+		(worktrees borrow its Packages), never one Rojo has read.
+	*/
+	async setupRefusal(slot: SlotRecord, worktree: string): Promise<string | null> {
+		if (pathKey(worktree) === pathKey(slot.repoPath) || !(await this.isLinkedWorktree(worktree))) return `${worktree} is the main checkout, not a linked worktree; setup never runs there (other worktrees borrow its Packages).`;
+		if (this.worktreeRead(worktree)) return "the worktree is being served (or was, since Rojo started); stop the project to install, or install by hand.";
+		return null;
+	}
+
+	/*
+		Runs the repo's setup commands in a worktree, or joins the setup already
+		running there. Null when the repo has none. `waitMs` bounds how long the
+		caller waits; the setup carries on past it (outcome null then).
+	*/
+	async setupWorktree(id: string, worktree: string, options: { actor: "panel" | "mcp"; branch: string | null; waitMs?: number }): Promise<{ job: SetupJob; outcome: SetupOutcome | null; joined: boolean } | null> {
+		const slot = this.registry.get(id);
+		const configured = this.setupFor(slot.repoPath);
+		if (configured && "problem" in configured) throw new Conflict(configured.problem);
+		const running = this.setupJobs.running(worktree);
+		if (!configured && !running) return null;
+		let started: { job: SetupJob; joined: boolean };
+		if (running) started = { job: running, joined: true };
+		else {
+			const refusal = await this.setupRefusal(slot, worktree);
+			if (refusal) throw new Conflict(`Setup was not run: ${refusal}`);
+			const commands = (configured as { commands: SetupCommand[] }).commands;
+			started = this.setupJobs.start(worktree, options.actor, options.branch, commands.length, (job) =>
+				runSetup({
+					worktree,
+					branch: options.branch,
+					commands,
+					home: this.home,
+					actor: options.actor,
+					project: slot.projectName,
+					onStep: (step, of, text) => Object.assign(job, { step, of, text }),
+				}),
+			);
+		}
+		if (options.waitMs === undefined) return { ...started, outcome: await started.job.promise };
+		const timer = new Promise<null>((done) => setTimeout(() => done(null), options.waitMs).unref());
+		return { ...started, outcome: await Promise.race([started.job.promise, timer]) };
+	}
+
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		const yoloWas = this.yoloOn;
 		savePortSettings(this.home, settings);
+		this.setupParsed = parseSetupCommands(settings.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
 		if ((settings.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: settings.yolo === true ? "yolo_on" : "yolo_off" });
 		this.yoloSetting = settings.yolo === true;
@@ -928,8 +1039,11 @@ export class Hub {
 		a git worktree beside the repo (<repo>-worktrees/<name>). Never a
 		checkout in a folder rojo is serving (see prepareTree).
 	*/
-	async createBranch(id: string, name: string, base: string): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git"; from: string; notes: string[] }> {
+	async createBranch(id: string, name: string, base: string, options: { actor?: "panel" | "mcp"; setupWaitMs?: number } = {}): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git"; from: string; notes: string[]; switched: boolean; setupNotes: string[] }> {
 		const slot = this.registry.get(id);
+		// A broken setup entry is reported before anything is made.
+		const configured = this.setupFor(slot.repoPath);
+		if (configured && "problem" in configured) throw new Conflict(configured.problem);
 		const clean = await checkBranchName(slot.repoPath, name.trim());
 		if (await branchExists(slot.repoPath, clean)) throw new Conflict(`A branch named ${clean} already exists; pick it under Local branches.`);
 		try {
@@ -959,7 +1073,22 @@ export class Hub {
 			via = "git";
 		}
 		void this.targetCache.refresh(slot.repoPath).catch(() => undefined);
-		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via, from, notes };
+		/*
+			Setup (spec 012) runs here: the worktree exists and no rojo has read it,
+			so installs may delete and recreate Packages. Only a success switches; a
+			failure keeps the worktree and the branch.
+		*/
+		const setupNotes: string[] = [];
+		const setup = await this.setupWorktree(id, path, { actor: options.actor ?? "panel", branch, waitMs: options.setupWaitMs });
+		if (setup) {
+			if (!setup.outcome) {
+				setupNotes.push(`Setup is still running in ${path} (command ${setup.job.step} of ${setup.job.of}: ${setup.job.text}).`);
+				return { slot: this.view(slot), path, branch, via, from, notes, switched: false, setupNotes };
+			}
+			if (!setup.outcome.ok) throw new SetupFailed(setup.outcome);
+			setupNotes.push(...describeSteps(setup.outcome).split("\n").filter(Boolean));
+		}
+		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via, from, notes, switched: true, setupNotes };
 	}
 
 	/** Writes the served worktree's sourcemap.json once, on request, even where the watcher would not. */
@@ -1018,38 +1147,39 @@ export class Hub {
 	*/
 	switch(id: string, target: Target): Promise<SlotView> {
 		const slot = this.registry.get(id);
+		const setting = target.kind === "worktree" ? this.setupJobs.running(target.path) : null;
+		if (setting) return Promise.reject(new Conflict(`Setup is still running in ${setting.path} (command ${setting.step} of ${setting.of}); call ensure from that worktree to wait for it.`));
 		return this.enqueue(slot, () => this.switchLocked(slot, target));
 	}
 
 	/** switch() inside the slot's queue. */
 	private async switchLocked(slot: SlotRecord, target: Target): Promise<SlotView> {
-		{
-			const runtime = this.runtime(slot.id);
-			const tree = await this.prepareTree(slot, target);
-			const plan = this.writeFiles(slot, tree);
-			// The label from the picker's list, so no status is sent with the new target under the old branch's name.
-			const known = this.targetCache.peek(slot.repoPath)?.find((option) => sameTarget(option.target, target));
-			if (known) {
-				runtime.targetLabel = known.label;
-				runtime.branch = known.branch;
-			} else if (target.kind === "branch") {
-				runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
-			}
-			slot.target = target;
-			this.registry.save();
-			runtime.mode = plan.mode;
-			runtime.warnings = plan.warnings;
-			runtime.notes = [];
-			runtime.error = null;
-			runtime.log.poll();
-			runtime.log.takeProblems();
-			this.watchBorrowed(slot, tree);
-			this.trackHead(slot);
-			await this.describeTarget(slot);
-			await this.syncSourcemap(slot);
-			if (runtime.state !== "running") await this.collectViews(slot);
-			return this.view(slot);
+		const runtime = this.runtime(slot.id);
+		const tree = await this.prepareTree(slot, target);
+		const plan = this.writeFiles(slot, tree);
+		// The label from the picker's list, so no status is sent with the new target under the old branch's name.
+		const known = this.targetCache.peek(slot.repoPath)?.find((option) => sameTarget(option.target, target));
+		if (known) {
+			runtime.targetLabel = known.label;
+			runtime.branch = known.branch;
+		} else if (target.kind === "branch") {
+			runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
 		}
+		slot.target = target;
+		if (target.kind === "worktree" && (runtime.state === "running" || runtime.state === "starting")) runtime.served.add(pathKey(target.path));
+		this.registry.save();
+		runtime.mode = plan.mode;
+		runtime.warnings = plan.warnings;
+		runtime.notes = [];
+		runtime.error = null;
+		runtime.log.poll();
+		runtime.log.takeProblems();
+		this.watchBorrowed(slot, tree);
+		this.trackHead(slot);
+		await this.describeTarget(slot);
+		await this.syncSourcemap(slot);
+		if (runtime.state !== "running") await this.collectViews(slot);
+		return this.view(slot);
 	}
 
 	async shutdown(stopServing: boolean): Promise<void> {
@@ -1080,6 +1210,9 @@ export class Hub {
 			const plan = this.writeFiles(slot, tree);
 			runtime.mode = plan.mode;
 			runtime.warnings = plan.warnings;
+			// A new rojo has read only what it starts on.
+			const starting = slot.target;
+			runtime.served = new Set(starting.kind === "worktree" ? [pathKey(starting.path)] : []);
 			await stopRojo(this.slotFile(slot.id));
 			await this.waitForPortFree(slot.port);
 			await this.collectViews(slot);
@@ -1120,6 +1253,7 @@ export class Hub {
 		runtime.state = "stopped";
 		runtime.sessionId = null;
 		runtime.error = null;
+		runtime.served.clear();
 		await this.stopProcess(slot);
 		await this.syncSourcemap(slot);
 		await this.waitForPortFree(slot.port).catch(() => undefined);

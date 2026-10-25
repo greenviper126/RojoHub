@@ -249,6 +249,10 @@ export interface BranchResult {
 	from: string;
 	/** Fetch or divergence notes for the answer. */
 	notes: string[];
+	/** False when the worktree's setup commands are still running (the MCP call waits only so long): nothing was switched (spec 012). */
+	switched: boolean;
+	/** One line per setup command that ran, or the note that setup is still running. */
+	setupNotes: string[];
 }
 
 export interface TargetOption {
@@ -308,6 +312,8 @@ export interface PortSettings {
 	openPlaces?: boolean;
 	/** rojoHub.yolo (spec 012, design 4): the user lifted the guards. Only pushed once the user accepted the warning; missing means off. */
 	yolo?: boolean;
+	/** rojoHub.setupCommands: repo path -> commands run in a new worktree before it is first served (spec 012); the service validates it. */
+	setupCommands?: unknown;
 }
 
 /*

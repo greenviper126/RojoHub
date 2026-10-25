@@ -615,6 +615,61 @@ the base is passed to Orca as given, with no fetch.
 An invalid name, an existing branch or a missing base is pointed out before anything is made. Done,
 a message offers *Open in New Window*.
 
+### Setup commands (spec 012)
+
+A new worktree has no `Packages` or `node_modules`. **Setup commands** (`rojoHub.setupCommands`, a
+map from a repo's path to a list) install them right after the worktree exists and **before the
+project is first switched to it**, so Studio's first sight of the worktree is complete and Rojo 7.7
+never sees a folder appear under a watched tree. They run for *New branch* in the panel and for
+agents' `new_branch`, and for `ensure` in a worktree not yet served ([Agents](#10-agents)).
+
+```json
+"rojoHub.setupCommands": {
+  "C:/Games/Scary": [
+    { "command": "rokit", "args": ["install"] },
+    { "command": "wally", "args": ["install"] },
+    { "command": "npm", "args": ["ci", "--ignore-scripts"], "cwd": "tools", "timeoutSeconds": 300 }
+  ]
+}
+```
+
+- **Dangerous.** These programs run on your machine with your rights, on a branch name an agent
+  chose. The setting is application-scoped and not synced, so only you set it: neither a repo, a
+  workspace nor an agent can. `npm ci` runs the repo's install scripts; prefer `--ignore-scripts`.
+- **No shell.** Each entry is one program and its arguments (`spawn`, no shell). `.cmd` and `.bat`
+  files (`npm.cmd`) run through `cmd.exe`, so arguments containing `& | < > ^ % " ` ` or a newline are
+  refused when the setting is read. The key is the repo's path, matched without regard to case,
+  slash style, a trailing slash or `\\?\`.
+- **Environment.** Rokit's `bin` folder is put first on `PATH`. The branch name reaches commands only
+  as `ROJO_HUB_BRANCH` (never in the arguments); `ROJO_HUB_WORKTREE` is the worktree and
+  `ROJO_HUB_SETUP=1`. The working directory is the worktree, or its `cwd` (relative, no `..`).
+- **Limits.** At most 10 commands; `timeoutSeconds` 1-3600 (default 600); the whole list is capped at
+  30 minutes. A timeout kills the command and its child processes.
+- **Failure.** The first failing command stops the list. The worktree and branch stay (the work done
+  is not undone), nothing is switched, and the answer names the command, its exit code and the last
+  40 lines of its output. Fix the cause and call `ensure`.
+- **Never in a worktree Rojo has read.** Setup is refused in the primary checkout and in any worktree
+  a running or starting project has served since it started (installing there would add folders under
+  a watched tree).
+- **Audit log.** Every command, with who asked (`panel`, `mcp`), its time, exit code and output tail,
+  is appended to `audit.jsonl` in the Hub's folder; it rotates to `audit.old.jsonl` at 1 MB.
+  *Show setup log* in the failure message opens it.
+- **The panel.** The ⋯ menu's *Setup commands…* edits the list for that repo: one command per line,
+  "double quotes" group words, with a preview of exactly what will run. Commands with a folder or a
+  timeout show as `#fixed N` lines and are kept as they are; edit those in `settings.json`. Invalid
+  entries are shown on the card and the Hub ignores that repo's list until fixed.
+- **Waiting.** The panel waits for setup under a progress notification (*Setting up ‹name›: ‹command›
+  (2 of 3)*). An agent's `new_branch` waits 40 seconds, then answers `switched: false`; setup carries
+  on and the agent calls `ensure`, which joins the running job. A switch to a worktree still being set
+  up is refused until it finishes.
+
+There is no stop, checkout, install or start verb for agents, and none is planned: stopping Rojo
+disconnects Studio, and a checkout or an install inside a served worktree is what crashes Rojo 7.7.
+To change what a worktree serves, an agent makes a worktree (`new_branch`, which installs first) or
+switches to an existing one (`switch`, `serve_here`). To install packages, it lists the commands in
+`rojoHub.setupCommands` (you do) and calls `ensure`; in a worktree that is already served it runs
+the install itself and reads the `packages` warning.
+
 ### Sourcemaps
 
 While a project serves a worktree, Rojo-Hub keeps its `sourcemap.json` current with the pinned
@@ -815,10 +870,10 @@ at once, so an agent should not need to ask you to click.
 | Tool | Does |
 |---|---|
 | `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
-| `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. Data: `ready`, `steps`, `project`, `placeIds`, `failure`. |
+| `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
 | `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
 | `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait` and `then_return`. |
-| `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. |
+| `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. Runs the repo's [setup commands](#setup-commands-spec-012) in the new worktree before the switch; if they fail it says so and does not switch; if they take over 40 seconds it answers `switched: false` and the agent calls `ensure`. |
 | `branches` | Switch targets, newest first (`fetch` fetches first). |
 | `release` | Drops the agent's claim; the project keeps serving, unless the claim was taken with `then_return` (then it switches back). Says so when the claim had already run out. |
 | `start` | Starts a stopped project. |
@@ -964,7 +1019,7 @@ debugging.
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | Display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). `yolo` is pushed only once the user accepted the warning; no MCP tool can set it. A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo?, setupCommands? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
@@ -991,8 +1046,8 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, port, target, whether to serve), groups (members, nested groups, running), display order, Studio place assignments (`placeChoices`), each place's last project (`placeSynced`), accepted first syncs (`placeAccepted`) |
 | `registry.json.bak` | The previous save, for recovery |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
-| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `yolo` |
-| `audit.jsonl` | One JSON line per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
+| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `yolo`, `setupCommands` |
+| `audit.jsonl` | One JSON line per setup command run (time, who asked, command, exit code, output tail), per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
 | `agent-notice.json` | Until when the agent notice stays hidden |
@@ -1034,6 +1089,7 @@ All are **user settings for every project and window**; workspaces cannot overri
 | `rojoHub.studioAutoConnect` | `"remembered"` | Which places connect by themselves: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) or assigned in Studio places; `"remembered"` also a place's last project ([Connecting Studio](#7-connecting-studio)). |
 | `rojoHub.openPlaces` | `false` | Open, close and reopen places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. |
 | `rojoHub.yolo` | `false` | **DANGEROUS.** Lifts the guards for agents ([Yolo mode](#yolo-mode)). Application scope, not synced. |
+| `rojoHub.setupCommands` | `{}` | **Dangerous.** Per repo path, programs run in a new worktree before it is first served ([Setup commands](#setup-commands-spec-012)). Edited in the panel (⋯ → *Setup commands…*) or `settings.json`; user-level only, not synced. |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies. Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents get the MCP server ([Agents](#10-agents)). Checkboxes. Not synced by Settings Sync (it describes this machine's agent configs). |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Message when Studio disconnects from a serving project, in the window with it open (else the focused one). |

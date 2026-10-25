@@ -1,6 +1,6 @@
 # 012 — Setup commands for new worktrees, install checks in `ensure`, and yolo mode
 
-Status: **draft** (review group D of `specs/feedback-2026-10-24.md`, items 8, 10 (install checks), 14
+Status: **designs 1-3 built (setup commands, install checks, the item 14 docs); design 4 (yolo) not yet** (review group D of `specs/feedback-2026-10-24.md`, items 8, 10 (install checks), 14
 (decided: not built) and 22; `specs/feedback-2026-10-24-review.md` sections 3, 3b and 4). Asked for by
 Viper's agents in the 2026-10-24 feedback session. Builds on 008 (agent control), 009 (open places,
 the pattern for an off-by-default application setting) and 011 (`ensure`). Version bump on release:
@@ -61,7 +61,7 @@ application-scoped setting, and the service never reads anything from a repo for
   the service loads it) if any of its args contain `& | < > ^ % " ` or a newline. Executables run
   directly. The service's `PATH` gets Rokit's tool-storage `bin` folder added in front, so `wally` and
   `rokit`-installed tools resolve however VS Code was started. (Whether a Rokit shim opens a console
-  window when started with `windowsHide` from the console-less service is measured when built; the
+  window when started with `windowsHide` from the console-less service was measured: wally.exe, spawned six times with `windowsHide` from a console-less process, opened no visible console or Terminal window, while the same run without it opened six (a polling check of one tool, not a pixel-level observation); the
   CLAUDE.md rule about the shim concerns `rojo serve` only.)
 
 **Opt-in: the commands are the toggle.** There is no separate `enableSetup` switch, and yolo is not

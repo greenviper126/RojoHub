@@ -77,7 +77,9 @@ export type ToPanel =
 	/** A picker's Fetch finished; `error` when it failed (the list is unchanged then). */
 	| { type: "fetched"; id: string; error?: string }
 	/** A picker's New branch finished; `error` keeps the form open with the reason. */
-	| { type: "branchCreated"; id: string; error?: string };
+	| { type: "branchCreated"; id: string; error?: string }
+	/** A card's Setup commands editor (spec 012): its text on open, or the outcome of a Save (`saved`, or `error`). */
+	| { type: "setupEditor"; id: string; text?: string; saved?: boolean; error?: string };
 
 export type FromPanel =
 	| { type: "ready" }
@@ -89,6 +91,8 @@ export type FromPanel =
 	| { type: "fetch"; id: string }
 	| { type: "createBranch"; id: string; name: string; base: string }
 	| { type: "build"; id: string }
+	| { type: "openSetupEditor"; id: string }
+	| { type: "setSetupCommands"; id: string; text: string }
 	| { type: "sourcemap"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }

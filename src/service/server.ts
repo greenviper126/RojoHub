@@ -169,6 +169,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				response.on("close", () => subscribers.delete(response));
 				return;
 			}
+			if (method === "GET" && url.pathname === "/setup") {
+				return send(response, 200, hub.setupJobs.all().map((job) => ({ path: job.path, state: job.state, step: job.step, of: job.of, text: job.text })));
+			}
 			if (method === "GET" && url.pathname === "/health") {
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
 				return send(response, 200, health);
@@ -207,8 +210,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
 					yolo: input.yolo === true,
+					setupCommands: input.setupCommands,
 				});
-				return send(response, 200, { ok: true });
+				return send(response, 200, { ok: true, setupProblems: hub.setupProblems() });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {
 				const input = await body(request);

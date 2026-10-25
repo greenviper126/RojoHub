@@ -425,6 +425,28 @@
           "ignoreSync": true,
           "markdownDescription": "**DANGEROUS:** lifts Rojo-Hub's guards for agents. They may open Studio places (as if `rojoHub.openPlaces` were on) and stop or remove projects that Studio places are synced to, and `stop_all` works without `force` (it still keeps projects other agents claimed). Claims still hold, and every agent action is logged to `audit.jsonl`. Turning it on from here asks you to confirm. Stays on until you turn it off."
         },
+        "rojoHub.setupCommands": {
+          "type": "object",
+          "scope": "application",
+          "default": {},
+          "ignoreSync": true,
+          "markdownDescription": "**DANGEROUS: runs these programs on your machine whenever Rojo-Hub makes a worktree** (the panel's New branch, the `new_branch` tool), and from `ensure` for a worktree that lacks `Packages` or `node_modules` and that no running Rojo has read. `npm ci` runs the repo's install scripts, so prefer `--ignore-scripts`. Keys are a project's repo path (its primary checkout); each value is a list of up to 10 commands run in order, never through a shell: `{ \"command\": \"wally\", \"args\": [\"install\"], \"cwd\": \"tools\", \"timeoutSeconds\": 300 }` (`cwd` is relative to the worktree, default timeout 600 s). Agents can neither read nor change this setting. Empty: nothing runs. The panel's project menu has **Setup commands…** to edit one repo's list.",
+          "additionalProperties": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": ["command"],
+              "properties": {
+                "command": { "type": "string", "description": "A program name (looked up on PATH and in Rokit's tool folder) or an absolute path." },
+                "args": { "type": "array", "items": { "type": "string" } },
+                "cwd": { "type": "string", "description": "Relative to the worktree; no \"..\"." },
+                "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 3600, "default": 600 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",
           "scope": "application",

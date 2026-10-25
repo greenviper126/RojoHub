@@ -86,6 +86,32 @@ than one project.
 | `build` | `output`, `path?`, `project?` |
 :::
 
+## Setup commands
+
+A new worktree has no `Packages` or `node_modules`. List the programs that install them in
+`rojoHub.setupCommands` (panel: ⋯ → *Setup commands…*), keyed by the repo's path:
+
+```json
+"rojoHub.setupCommands": {
+  "C:/Games/Scary": [
+    { "command": "rokit", "args": ["install"] },
+    { "command": "wally", "args": ["install"] }
+  ]
+}
+```
+
+They run after the worktree is made and before Studio is first pointed at it, for *New branch*, an
+agent's `new_branch`, and `ensure` in a worktree not yet served. If one fails, the worktree stays,
+nothing is switched, and the answer names the command and its output; fix it and call `ensure`.
+
+- **Dangerous**: these run on your machine. Only you can set them (user settings, not synced), and
+  each entry is one program with arguments, no shell. Prefer `npm ci --ignore-scripts`.
+- The branch name arrives as `ROJO_HUB_BRANCH`, never in the arguments.
+- Every run is logged to `audit.jsonl` in `%LOCALAPPDATA%\RojoHub`.
+- Never in a worktree Rojo is already serving. Agents have no stop, checkout or install tool: stopping
+  disconnects Studio, and changing a served worktree can crash Rojo. They make a new worktree or switch.
+- `ensure` also reports `checks` (Rojo installed, packages, `node_modules`, sourcemap) as warnings.
+
 ## Claims: several agents, one Studio
 
 `serve_here`, `switch` and `new_branch` claim the project for 15 minutes, renewed by the agent's

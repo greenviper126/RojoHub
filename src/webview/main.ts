@@ -17,6 +17,7 @@
 
 import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { parseSetupText } from "../common/setupText";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
 import * as pending from "./pending";
@@ -69,6 +70,8 @@ const ui = {
 	targets: new Map<string, TargetOption[]>(),
 	/** The project whose project file list is open; the files come with its status (spec 005). */
 	filePicker: null as null | { id: string },
+	/** The card whose Setup commands editor is open (spec 012); the text arrives from the extension. */
+	setupEditor: null as null | { id: string; text: string; loading: boolean; busy: boolean; error: string | null },
 	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
 	menuDown: false,
@@ -395,6 +398,33 @@ function filePicker(slot: SlotView): string {
 }
 
 /*
+	The Setup commands editor (spec 012): one command per line, below it exactly
+	what each line will run, so nothing is a surprise.
+*/
+function setupEditor(slot: SlotView): string {
+	const open = ui.setupEditor;
+	if (!open || open.id !== slot.id) return "";
+	const lines = parseSetupText(open.text);
+	const preview = lines
+		.map((line) => {
+			if (line.fixed !== undefined) return `<div class="setup-line">${icon("lock-small")}<span class="muted">kept as set in settings.json</span></div>`;
+			if (!line.argv) return `<div class="setup-line bad">${icon("warning")}<span>${escape(line.error ?? "invalid")}</span></div>`;
+			return `<div class="setup-line">${icon("terminal")}<span><code>${escape(line.argv[0])}</code>${line.argv.slice(1).map((arg) => ` <code>${escape(arg)}</code>`).join("")}</span></div>`;
+		})
+		.join("");
+	return `<div class="setup-editor">
+		<div class="notice error">${icon("warning")}<span><strong>Dangerous.</strong> These programs run on your machine whenever Rojo-Hub makes a worktree for ${escape(slot.projectName)} (New branch, an agent's new_branch), before it is first served. <code>npm ci</code> runs the repo's install scripts: prefer <code>npm ci --ignore-scripts</code>.</span></div>
+		<label>Commands, one per line (a program, then its arguments; "double quotes" group words)
+			<textarea data-key="setup-text-${escape(slot.id)}" data-input="setup-text" rows="5" spellcheck="false" placeholder="rokit install&#10;wally install&#10;npm ci --ignore-scripts" value="${escape(open.text)}"${open.loading || open.busy ? " disabled" : ""}>${escape(open.text)}</textarea>
+		</label>
+		${open.loading ? `<p class="muted small">${icon("loading", "codicon-modifier-spin")} Reading your settings…</p>` : `<div class="setup-preview" aria-label="What will run">${preview || `<p class="muted small">Nothing will run.</p>`}</div>`}
+		<p class="muted small">No shell, no variables, no <code>&amp;&amp;</code>: each line is one program. A folder or timeout per command is set in settings.json (rojoHub.setupCommands). Saved to your user settings.</p>
+		${open.error ? `<div class="notice error">${icon("error")}<span>${escape(open.error)}</span></div>` : ""}
+		<div class="row">${button("save-setup", open.busy ? "Saving…" : "Save", { icon: open.busy ? "loading" : "save", kind: "primary", disabled: open.loading || open.busy || lines.some((line) => line.argv === null), data: { id: slot.id } })}${button("cancel-setup", "Cancel", { kind: "secondary", disabled: open.busy })}</div>
+	</div>`;
+}
+
+/*
 	A project card. Folded, it is one row (light, name, port, start/stop);
 	open, the full card. `list` is the drag list it belongs to.
 */
@@ -453,6 +483,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		</button>`
 		}
 		${filePicker(slot)}
+		${setupEditor(slot)}
 		${claimNote(slot)}
 		${notices(slot)}
 		${cardPlaces(slot)}
@@ -566,6 +597,7 @@ function cardMenu(slot: SlotView): string {
 							: ""
 					}
 					${state?.openPlaces && (slot.listedPlaces ?? []).some((place) => !place.open) ? item("open-all-places", "link-external", "Open all places in Studio") : ""}
+					${item("setup-commands", "terminal", "Setup commands…")}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
@@ -1512,6 +1544,19 @@ document.addEventListener("click", (event) => {
 			return;
 		case "create-branch":
 			return createBranch();
+		case "setup-commands":
+			ui.setupEditor = { id, text: "", loading: true, busy: false, error: null };
+			send({ type: "openSetupEditor", id });
+			return render();
+		case "save-setup":
+			if (!ui.setupEditor) return;
+			ui.setupEditor.busy = true;
+			ui.setupEditor.error = null;
+			send({ type: "setSetupCommands", id, text: ui.setupEditor.text });
+			return render();
+		case "cancel-setup":
+			ui.setupEditor = null;
+			return render();
 		case "sourcemap":
 			sendTracked(`slot:${id}`, { type: "sourcemap", id });
 			return render();
@@ -1769,6 +1814,12 @@ document.addEventListener("input", (event) => {
 		case "filter":
 			ui.filter = input.value;
 			return render();
+		case "setup-text":
+			if (ui.setupEditor) {
+				ui.setupEditor.text = input.value;
+				ui.setupEditor.error = null;
+			}
+			return render();
 		case "rename":
 			if (ui.renaming) ui.renaming.name = input.value;
 			return;
@@ -1789,6 +1840,7 @@ document.addEventListener("keydown", (event) => {
 	if (event.key === "Escape") {
 		if (ui.menu) ui.menu = null;
 		else if (ui.filePicker) ui.filePicker = null;
+		else if (kind === "setup-text") ui.setupEditor = null;
 		else if (kind === "search") ui.picker = null;
 		else if (kind === "branch-name" && ui.picker) ui.picker.create = null;
 		else if (kind === "filter") ui.filter = null;
@@ -1946,6 +1998,20 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 					ui.picker.create.busy = false;
 					ui.picker.create.error = message.error;
 				} else ui.picker = null;
+				render();
+			}
+			return;
+		case "setupEditor":
+			if (ui.setupEditor?.id === message.id) {
+				if (message.saved) ui.setupEditor = null;
+				else if (message.error) {
+					ui.setupEditor.busy = false;
+					ui.setupEditor.loading = false;
+					ui.setupEditor.error = message.error;
+				} else {
+					ui.setupEditor.text = message.text ?? "";
+					ui.setupEditor.loading = false;
+				}
 				render();
 			}
 			return;
