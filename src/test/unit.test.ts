@@ -22,10 +22,11 @@ import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, loadPortSettings, parsePortSettings, preferredPort, savePortSettings, settingsToken, tokenMatches, type PortRequest } from "../service/ports";
-import { Hub } from "../service/hub";
+import { claimKey, Hub } from "../service/hub";
 import { Groups } from "../service/groups";
 import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../service/audit";
 import { SourcemapWatcher } from "../service/sourcemap";
+import { listersOf, OUTCOME_MS, PlaceRequests, type RequestDeps } from "../service/requests";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
@@ -451,8 +452,8 @@ test("MCP: initialize, tools/list, notifications and unknown methods", async () 
 	assert.equal(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null, "notifications get no answer");
 	const list = (await mcp.handle({ jsonrpc: "2.0", id: 3, method: "tools/list" })) as { result: { tools: { name: string }[] } };
 	const names = list.result.tools.map((tool) => tool.name);
-	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap"]) {
-		assert.ok(names.includes(name), `the ${name} tool (spec 008)`);
+	for (const name of ["status", "serve_here", "switch", "release", "start", "stop", "stop_all", "add_project", "remove_project", "project_files", "set_project_file", "branches", "new_branch", "log", "wait_for_studio", "start_group", "stop_group", "create_group", "edit_group", "delete_group", "build", "sourcemap", "request_place"]) {
+		assert.ok(names.includes(name), `the ${name} tool (spec 008, 014)`);
 	}
 	assert.ok(!names.some((name) => /assign|setting|agent/.test(name)), "nothing for what stays the user's: place assignments, settings, agent registration");
 	for (const tool of TOOLS) {
@@ -1047,6 +1048,13 @@ function tempRepo(): string {
 	return dir;
 }
 
+/** What a stub hub answers about shared places (spec 014) when its projects share none. */
+const noSharing = {
+	requestProjects: () => [] as { id: string; projectName: string; listed: number[] }[],
+	placeHolder: (): string | null => null,
+	requests: { pendingFor: (): unknown => null, outcomeFor: (): unknown => null, against: (): unknown[] => [], dropAsker: (): void => undefined },
+};
+
 /** A hub with one running project serving `repo`, enough for status, serve_here and switch to answer. */
 function stubHub(repo: string, claim: { key: string; label: string; until: number } | null) {
 	const slot = {
@@ -1085,6 +1093,7 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 		view: () => slot,
 		registry: { get: () => slot, slots: [slot] },
 		studio: { places: () => open, unappliedOn: () => [{ placeId: 111, placeName: "Lobby", total: 2, items: ["a", "b"] }] },
+		...noSharing,
 		openPlacesOn: false,
 		crashedAt: () => 0,
 		switch: async () => slot,
@@ -1097,7 +1106,7 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 
 test("structured answers: every outputSchema is well formed JSON Schema", () => {
 	const withSchema = TOOLS.filter((tool) => tool.outputSchema);
-	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["ensure", "serve_here", "status", "switch"]);
+	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["ensure", "request_place", "serve_here", "status", "switch"]);
 	for (const tool of withSchema) wellFormed(tool.outputSchema as Schema, tool.name);
 	assert.deepEqual(check({ a: 1 }, { type: "object", required: ["b"], properties: { a: { type: "string" } } }), ["$.b: missing", "$.a: integer is not string"], "the checker itself finds both kinds of mistake");
 	assert.deepEqual(check(null, { type: ["string", "null"] }), []);
@@ -1223,6 +1232,7 @@ function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[];
 		view: () => slot,
 		registry: { get: () => slot, slots: [slot] },
 		studio: { places: () => open, unappliedOn: () => [] },
+		...noSharing,
 		openPlacesOn: over.openPlacesOn ?? true,
 		crashedAt: () => 0,
 		home: mkdtempSync(join(tmpdir(), "rojo-hub-home-")),
@@ -1852,4 +1862,306 @@ test("audit log: appends lines, rotates at 1 MB, and never throws", () => {
 	assert.equal(readFileSync(join(home, AUDIT_OLD_FILE), "utf8").length, AUDIT_MAX_BYTES);
 	assert.deepEqual(auditLines(home).map((line) => line.action), ["three"]);
 	assert.doesNotThrow(() => writeAudit(join(home, "missing", "folder"), { action: "lost" }));
+});
+
+/* ---------- place requests (spec 014) ---------- */
+
+/** PlaceRequests over a fake world: two projects listing place 111, held by "b", with a clock to move. */
+function requestWorld(over: { holder?: string | null; claims?: Record<string, string> } = {}) {
+	const world = {
+		holder: over.holder === undefined ? "b" : over.holder,
+		assigned: {} as Record<number, string>,
+		claims: { a: "worktree:a", ...(over.claims ?? {}) } as Record<string, string>,
+		listed: { a: [111], b: [111, 222] } as Record<string, number[]>,
+		removed: new Set<string>(),
+		clock: 1000,
+	};
+	const deps: RequestDeps = {
+		projects: () => ["a", "b"].filter((id) => !world.removed.has(id)).map((id) => ({ id, projectName: id.toUpperCase(), listed: world.listed[id] })),
+		holderOf: () => world.holder,
+		assigned: (placeId) => world.assigned[placeId] ?? null,
+		assign: (placeId, slotId) => {
+			world.assigned[placeId] = slotId;
+			world.holder = slotId;
+		},
+		claimKeyOf: (id) => world.claims[id] ?? null,
+		now: () => world.clock,
+	};
+	return { world, requests: new PlaceRequests(deps) };
+}
+
+test("shared places: the projects listing a place are found", () => {
+	const projects = [
+		{ id: "a", projectName: "A", listed: [111] },
+		{ id: "b", projectName: "B", listed: [111, 222] },
+		{ id: "c", projectName: "C", listed: [] },
+	];
+	assert.deepEqual(listersOf(projects, 111).map((project) => project.id), ["a", "b"]);
+	assert.deepEqual(listersOf(projects, 222).map((project) => project.id), ["b"]);
+	assert.deepEqual(listersOf(projects, 333), []);
+});
+
+test("shared places: the place stays with the project it last synced with, whether the rival is running or not", () => {
+	const candidate = (slotId: string, state: "running" | "stopped"): PlaceCandidate => ({
+		slotId,
+		projectName: slotId.toUpperCase(),
+		port: slotId === "a" ? 1 : 2,
+		state,
+		sessionId: state === "running" ? slotId : null,
+		branch: null,
+		targetLabel: "main",
+		rojoVersion: "7.7.0",
+		servePlaceIds: [111],
+		blockedPlaceIds: null,
+		placeId: null,
+	});
+	for (const aState of ["running", "stopped"] as const) {
+		const answer = matchPlace({ placeId: 111, unsaved: false, remembered: "B" }, [candidate("a", aState), candidate("b", "running")], null);
+		assert.equal(answer.projectId, "b", `a ${aState} rival does not take it`);
+	}
+});
+
+test("place requests: a repeat call refreshes one request; the holder's side sees it", () => {
+	const { world, requests } = requestWorld();
+	const first = requests.ask("a", 111, "worktree:a", false);
+	assert.equal(first.kind, "pending");
+	assert.equal(first.kind === "pending" && first.fresh, true);
+	world.clock += 5000;
+	const again = requests.ask("a", 111, "worktree:a", false);
+	assert.equal(again.kind === "pending" && again.fresh, false, "no second notification");
+	assert.equal(requests.pending().length, 1);
+	assert.equal(requests.pending()[0].since, 1000, "it keeps its first time");
+	assert.deepEqual(requests.against("b").map((request) => request.askerId), ["a"]);
+	assert.deepEqual(requests.against("a"), []);
+	assert.equal(requests.pendingFor("a", 111)?.id, "a:111");
+	assert.equal(requests.pendingFor("a", 222), null);
+	assert.deepEqual(world.assigned, {}, "nothing was taken from the holder");
+});
+
+test("place requests: nothing is asked when the asker holds the place, or nobody does", () => {
+	const mine = requestWorld({ holder: "a" });
+	assert.deepEqual(mine.requests.ask("a", 111, "worktree:a", false), { kind: "already" });
+	assert.equal(mine.requests.pending().length, 0);
+
+	const free = requestWorld({ holder: null });
+	assert.deepEqual(free.requests.ask("a", 111, "worktree:a", false), { kind: "assigned" });
+	assert.deepEqual(free.world.assigned, { 111: "a" }, "saved like the panel's assignment");
+	assert.equal(free.requests.pending().length, 0, "no notification for a free place");
+});
+
+test("place requests: Move assigns, Decline does not, and a second answer finds nothing", () => {
+	const moved = requestWorld();
+	moved.requests.ask("a", 111, "worktree:a", false);
+	assert.equal(moved.requests.answer("a:111", "move")?.askerId, "a");
+	assert.deepEqual(moved.world.assigned, { 111: "a" });
+	assert.equal(moved.requests.outcomeFor("a", 111), "moved");
+	assert.equal(moved.requests.pending().length, 0);
+	assert.equal(moved.requests.answer("a:111", "move"), null, "answered in another window: nothing to do");
+
+	const declined = requestWorld();
+	declined.requests.ask("a", 111, "worktree:a", false);
+	assert.ok(declined.requests.answer("a:111", "decline"));
+	assert.deepEqual(declined.world.assigned, {});
+	assert.equal(declined.requests.outcomeFor("a", 111), "declined");
+	assert.equal(declined.requests.answer("a:111", "decline"), null);
+	declined.requests.ask("a", 111, "worktree:a", false);
+	assert.equal(declined.requests.outcomeFor("a", 111), null, "asking again starts over");
+	assert.equal(declined.requests.pending().length, 1);
+	declined.requests.answer("a:111", "decline");
+	declined.world.clock += OUTCOME_MS + 1;
+	assert.equal(declined.requests.outcomeFor("a", 111), null, "an answer is remembered for a while only");
+});
+
+test("place requests: yolo moves at once only from a holder no agent claimed", () => {
+	const free = requestWorld();
+	assert.deepEqual(free.requests.ask("a", 111, "worktree:a", true), { kind: "moved", from: "b" });
+	assert.deepEqual(free.world.assigned, { 111: "a" });
+	assert.equal(free.requests.pending().length, 0);
+
+	const busy = requestWorld({ claims: { b: "worktree:elsewhere" } });
+	assert.equal(busy.requests.ask("a", 111, "worktree:a", true).kind, "pending", "an agent's claim still holds under yolo");
+	assert.deepEqual(busy.world.assigned, {});
+
+	const off = requestWorld();
+	assert.equal(off.requests.ask("a", 111, "worktree:a", false).kind, "pending", "without yolo the user is asked");
+});
+
+test("place requests: they end on release, claim lapse or change, removal, an unlisted place, and a panel assignment", () => {
+	const ask = () => {
+		const made = requestWorld();
+		made.requests.ask("a", 111, "worktree:a", false);
+		assert.equal(made.requests.pending().length, 1);
+		return made;
+	};
+
+	const released = ask();
+	released.requests.dropAsker("a");
+	assert.equal(released.requests.pending().length, 0);
+
+	const lapsed = ask();
+	delete lapsed.world.claims.a;
+	assert.equal(lapsed.requests.pending().length, 0, "the asking claim ran out");
+
+	const taken = ask();
+	taken.world.claims.a = "worktree:someone-else";
+	assert.equal(taken.requests.pending().length, 0, "the claim changed hands");
+
+	const askerGone = ask();
+	askerGone.world.removed.add("a");
+	assert.equal(askerGone.requests.pending().length, 0);
+
+	const holderGone = ask();
+	holderGone.world.removed.add("b");
+	assert.equal(holderGone.requests.pending().length, 0);
+
+	const unlisted = ask();
+	unlisted.world.listed.a = [];
+	assert.equal(unlisted.requests.pending().length, 0, "the asker stopped listing the place");
+
+	const panel = ask();
+	panel.world.assigned[111] = "a";
+	assert.equal(panel.requests.pending().length, 0, "the user assigned it in the panel instead");
+	assert.equal(panel.requests.outcomeFor("a", 111), "moved");
+
+	const synced = ask();
+	synced.world.holder = "a";
+	assert.equal(synced.requests.pending().length, 0, "the place now syncs with the asker");
+});
+
+/** Two projects, Game (the caller's, claimed by its worktree) and Other, listing Lobby (111); the real PlaceRequests behind an MCP stub. */
+function sharedStub(repo: string, over: { yolo?: boolean; holder?: string | null; claimMine?: boolean; claimTheirs?: boolean } = {}) {
+	const { hub, slot } = stubHub(repo, null);
+	const other = { ...slot, id: "other", projectName: "Other", repoPath: tempRepo(), places: [], listedPlaces: [{ placeId: 111, placeName: "Lobby", open: true, busy: null, error: null }] };
+	const home = yoloHome();
+	const claims = new Map<string, { key: string; label: string; until: number }>();
+	if (over.claimMine !== false) claims.set("game", { key: claimKey({ kind: "worktree", path: repo }), label: "mine", until: Date.now() + 600_000 });
+	if (over.claimTheirs) claims.set("other", { key: "worktree:theirs", label: "theirs", until: Date.now() + 600_000 });
+	const world = { holder: over.holder === undefined ? "other" : over.holder, assigned: {} as Record<number, string> };
+	const projects = () => [
+		{ id: "game", projectName: "Game", listed: [111] },
+		{ id: "other", projectName: "Other", listed: [111] },
+	];
+	const requests = new PlaceRequests({
+		projects,
+		holderOf: () => world.holder,
+		assigned: (placeId) => world.assigned[placeId] ?? null,
+		assign: (placeId, slotId) => {
+			world.assigned[placeId] = slotId;
+			world.holder = slotId;
+		},
+		claimKeyOf: (id) => claims.get(id)?.key ?? null,
+	});
+	const wired = {
+		...hub,
+		home,
+		yoloOn: over.yolo === true,
+		list: () => [slot, other],
+		registry: { get: (id: string) => (id === "other" ? other : slot), slots: [slot, other] },
+		claimOf: (id: string) => claims.get(id) ?? null,
+		lapsedClaim: () => null,
+		setClaim: (id: string, next: { key: string; label: string; until: number } | null) => void (next ? claims.set(id, next) : claims.delete(id)),
+		requestProjects: projects,
+		placeHolder: () => world.holder,
+		requests,
+	};
+	return { hub: wired, other, home, world, requests };
+}
+
+test("request_place: shared places show on both sides, a request is one, and Move or Decline reach the waiting agent", async () => {
+	const repo = tempRepo();
+	const stub = sharedStub(repo);
+	const mcp = new Mcp(stub.hub as never);
+
+	const before = await callTool(mcp, "status", { path: repo });
+	assert.match(before.content[0].text, /Lobby \(111\) is synced with Other, which also lists it\. Call request_place to ask the user to move it here\./);
+	const project = before.structuredContent.projects.find((entry: Record<string, any>) => entry.id === "game");
+	assert.deepEqual(project.sharedPlaces, [{ placeId: 111, name: "Lobby", heldBy: "Other", alsoListedBy: ["Other"], request: "none" }]);
+	assert.deepEqual(check(before.structuredContent, TOOLS.find((tool) => tool.name === "status")!.outputSchema as Schema), []);
+
+	const asked = await callTool(mcp, "request_place", { path: repo, place_id: 111 });
+	assert.ok(!asked.isError, asked.content[0].text);
+	assert.equal(asked.structuredContent.outcome, "pending");
+	assert.equal(asked.structuredContent.holder, "Other");
+	assert.deepEqual(check(asked.structuredContent, TOOLS.find((tool) => tool.name === "request_place")!.outputSchema as Schema), []);
+	assert.equal((await callTool(mcp, "request_place", { path: repo, place_id: 111 })).structuredContent.outcome, "pending");
+	assert.equal(stub.requests.pending().length, 1, "a repeat call refreshes, it does not add");
+
+	// both sides hear of it
+	assert.match((await callTool(mcp, "status", { path: repo })).content[0].text, /You asked the user to move it here; waiting for the answer\./);
+	const holderSide = await callTool(mcp, "status", { path: stub.other.repoPath });
+	assert.match(holderSide.content[0].text, /Game asked the user to move Lobby \(111\) to it; Other holds it now\. Finish what you are doing in Studio and release\./);
+	assert.deepEqual(holderSide.structuredContent.projects.find((entry: Record<string, any>) => entry.id === "other").incomingRequests, [{ placeId: 111, name: "Lobby", from: "Game" }]);
+	assert.match((await callTool(mcp, "serve_here", { path: repo })).content[0].text, /You asked the user to move it here/, "serve_here says it too");
+
+	// Decline reaches an agent that is waiting
+	const declining = callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 10 });
+	await new Promise((done) => setTimeout(done, 100));
+	assert.ok(stub.requests.answer("game:111", "decline"));
+	const declined = await declining;
+	assert.equal(declined.structuredContent.outcome, "declined");
+	assert.match(declined.content[0].text, /declined/);
+	assert.match((await callTool(mcp, "status", { path: repo })).content[0].text, /The user declined moving it here\./, "its next status says so too");
+
+	// Move reaches it too, and the place is the asker's afterwards
+	const moving = callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 10 });
+	await new Promise((done) => setTimeout(done, 100));
+	assert.ok(stub.requests.answer("game:111", "move"));
+	assert.equal((await moving).structuredContent.outcome, "moved");
+	assert.deepEqual(stub.world.assigned, { 111: "game" });
+	assert.match((await callTool(mcp, "request_place", { path: repo, place_id: 111 })).content[0].text, /already syncs with Game/);
+
+	// a wait that runs out says still pending; release ends the request
+	stub.world.holder = "other";
+	stub.world.assigned = {};
+	assert.equal((await callTool(mcp, "request_place", { path: repo, place_id: 111 })).structuredContent.outcome, "pending");
+	assert.equal((await callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 0.1 })).structuredContent.outcome, "pending");
+	await callTool(mcp, "release", { path: repo });
+	assert.equal(stub.requests.pending().length, 0);
+});
+
+test("request_place: refuses without the asker's claim, for an unlisted place, and assigns a place nobody holds", async () => {
+	const repo = tempRepo();
+	const unclaimed = await callTool(new Mcp(sharedStub(repo, { claimMine: false }).hub as never), "request_place", { path: repo, place_id: 111 });
+	assert.equal(unclaimed.isError, true);
+	assert.match(unclaimed.content[0].text, /hold no claim.*serve_here/);
+
+	const theirs = sharedStub(repo, { claimMine: false });
+	theirs.hub.setClaim("game", { key: "worktree:elsewhere", label: "Other worktree", until: Date.now() + 600_000 });
+	const busy = await callTool(new Mcp(theirs.hub as never), "request_place", { path: repo, place_id: 111 });
+	assert.equal(busy.isError, true);
+	assert.match(busy.content[0].text, /claimed by an agent working in Other worktree/);
+
+	const stub = sharedStub(repo, { holder: null });
+	const mcp = new Mcp(stub.hub as never);
+	const unlisted = await callTool(mcp, "request_place", { path: repo, place_id: 999 });
+	assert.equal(unlisted.isError, true);
+	assert.match(unlisted.content[0].text, /999 is not one of Game's places: Lobby \(place 111, open\)/);
+	assert.equal((await callTool(mcp, "request_place", { path: repo })).isError, true, "place_id is required");
+
+	const free = await callTool(mcp, "request_place", { path: repo, place_id: 111 });
+	assert.ok(!free.isError, free.content[0].text);
+	assert.equal(free.structuredContent.outcome, "assigned");
+	assert.deepEqual(stub.world.assigned, { 111: "game" }, "assigned straight away");
+	assert.equal(stub.requests.pending().length, 0);
+	assert.match(free.content[0].text, /Nobody held it/);
+});
+
+test("request_place: under yolo it moves at once from an unclaimed holder and is audited; a claimed holder still asks the user", async () => {
+	const repo = tempRepo();
+	const open = sharedStub(repo, { yolo: true });
+	const moved = await callTool(new Mcp(open.hub as never), "request_place", { path: repo, place_id: 111 });
+	assert.ok(!moved.isError, moved.content[0].text);
+	assert.equal(moved.structuredContent.outcome, "moved");
+	assert.equal(moved.structuredContent.holder, "Game");
+	assert.deepEqual(open.world.assigned, { 111: "game" });
+	const lines = auditLines(open.home);
+	assert.deepEqual(lines.map((line) => line.action), ["move_place", "request_place"]);
+	assert.deepEqual(lines[0].args, { placeId: 111, from: "Other" });
+	assert.equal(lines[1].lifted, true, "only yolo allowed it");
+
+	const busy = sharedStub(repo, { yolo: true, claimTheirs: true });
+	const asked = await callTool(new Mcp(busy.hub as never), "request_place", { path: repo, place_id: 111 });
+	assert.equal(asked.structuredContent.outcome, "pending");
+	assert.deepEqual(busy.world.assigned, {});
+	assert.equal(busy.requests.pending().length, 1);
 });

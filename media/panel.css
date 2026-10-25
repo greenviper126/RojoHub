@@ -1814,6 +1814,23 @@ button:focus-visible {
 	flex: none;
 }
 
+.studio-place .shared {
+	margin-left: 4px;
+}
+
+/* An agent's ask for a shared place (spec 014) */
+.studio-places .place-request {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	padding: 2px 4px 4px 7px;
+}
+
+.studio-places .place-request .btn {
+	flex: none;
+}
+
 .studio-places .by-hand {
 	display: flex;
 	flex-wrap: wrap;

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PlaceOpened, PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
+import type { PlaceOpened, PlaceRequestView, PortMove, PortSettings, SlotView, StudioPlaceView, StudioPluginStatus, Target, TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, resolveBase, sameFolders, sameTarget } from "./git";
@@ -9,6 +9,7 @@ import { writeAudit } from "./audit";
 import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
+import { PlaceRequests, listersOf, type RequestProject } from "./requests";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
 import { describeFailure, describeSteps, normaliseRepoKey, parseSetupCommands, runSetup, SetupJobs, type ParsedSetup, type SetupCommand, type SetupJob, type SetupOutcome } from "./setup";
@@ -155,6 +156,9 @@ export class Hub {
 	/** Opening a project's places in Studio (spec 009). */
 	readonly places: Places;
 
+	/** Agents' asks to move a Studio place to their project, waiting for the user (spec 014). */
+	readonly requests: PlaceRequests;
+
 	/** The Studio plugin's install, for the panel (spec 007). */
 	studioPlugin: StudioPluginStatus = { state: "off", detail: "", removed: [], officialRojo: false };
 
@@ -181,6 +185,13 @@ export class Hub {
 			},
 		});
 		this.studio.rememberedAutoConnect = loadPortSettings(home).studioAutoConnect !== "listed";
+		this.requests = new PlaceRequests({
+			projects: () => this.requestProjects(),
+			holderOf: (placeId) => this.placeHolder(placeId),
+			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
+			assign: (placeId, slotId) => this.studio.assign(String(placeId), slotId),
+			claimKeyOf: (slotId) => this.claimOf(slotId)?.key ?? null,
+		});
 		this.places = new Places(
 			home,
 			() => this.openPlacesOn,
@@ -820,6 +831,49 @@ export class Hub {
 		const fields = this.placeFieldsOf(slot);
 		const ids = [...(fields.servePlaceIds ?? []), ...(fields.placeId ? [fields.placeId] : [])].filter((id) => id > 0 && !fields.blockedPlaceIds?.includes(id));
 		return [...new Set(ids)];
+	}
+
+	/** Every project with the places it lists, for place requests and for spotting shared places (spec 014). */
+	requestProjects(): RequestProject[] {
+		return this.registry.slots.map((slot) => ({ id: slot.id, projectName: slot.projectName, listed: this.listedPlaceIds(slot) }));
+	}
+
+	/*
+		The project an open place is synced with, else the one it is connecting to
+		(a place whose plugin has not reported yet), else none. A place that is
+		not open, or that no project answers for, is nobody's to take (spec 014).
+	*/
+	placeHolder(placeId: number): string | null {
+		const open = this.studio.places().find((place) => !place.unsaved && place.placeId === placeId);
+		if (!open) return null;
+		if (open.syncedWith) return this.registry.slots.find((slot) => slot.projectName === open.syncedWith)?.id ?? null;
+		return open.status === "connect" ? open.projectId : null;
+	}
+
+	/** The open Studio places for the panel, each with the projects that list it. */
+	studioPlaces(): StudioPlaceView[] {
+		const projects = this.requestProjects();
+		return this.studio.places().map((place) => ({ ...place, listedBy: place.unsaved ? [] : listersOf(projects, place.placeId).map((project) => project.projectName) }));
+	}
+
+	/** The pending asks, for the panel and the notification. */
+	requestViews(): PlaceRequestView[] {
+		const names = new Map(this.registry.slots.map((slot) => [slot.id, slot.projectName]));
+		const open = this.studio.places();
+		return this.requests.pending().map((request) => {
+			const holderId = this.placeHolder(request.placeId) ?? request.holderId;
+			return {
+				id: request.id,
+				placeId: request.placeId,
+				placeName: open.find((place) => place.placeId === request.placeId)?.placeName ?? this.places.listed([request.placeId])[0]?.placeName ?? null,
+				askerId: request.askerId,
+				asker: names.get(request.askerId) ?? request.askerId,
+				holderId,
+				holder: holderId ? (names.get(holderId) ?? null) : null,
+				holderClaimed: holderId !== null && this.claimOf(holderId) !== null,
+				since: request.since,
+			};
+		});
 	}
 
 	/** Looks up the names of every project's places for the panel, in the background, while opening places is on. */

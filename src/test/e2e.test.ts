@@ -952,3 +952,112 @@ test("opening places (spec 009): off by default, only a project's own places, se
 		await call("DELETE", `/slots/${slot.id}`);
 	}
 });
+
+test("place requests: a free place is assigned at once; a held one is a request the user moves or declines; release ends it; yolo moves from an unclaimed holder", async () => {
+	const placeId = 616161616;
+	const [one, two] = await Promise.all([makeRepo("ReqOne"), makeRepo("ReqTwo")]);
+	// both projects list the same place
+	for (const dir of [one, two]) {
+		const file = join(dir, "default.project.json");
+		writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), servePlaceIds: [placeId] }));
+	}
+	const a = await call<SlotView>("POST", "/slots", { path: one });
+	const b = await call<SlotView>("POST", "/slots", { path: two });
+	await call("POST", `/slots/${a.id}/start`);
+	await call("POST", `/slots/${b.id}/start`);
+
+	type Requests = { id: string; placeId: number; asker: string; holder: string | null; holderClaimed: boolean }[];
+	const requests = () => call<Requests>("GET", "/studio/requests");
+	const syncedWith = async () => ((await structured("status", {})).studioPlaces as { placeId: number; syncedWith: string | null }[]).find((place) => place.placeId === placeId)?.syncedWith ?? null;
+	const ask = (path: string, extra: Record<string, unknown> = {}) => structured("request_place", { path, place_id: placeId, ...extra });
+
+	let plugin: WebSocket | null = null;
+	try {
+		// the place is not open and nobody holds it: assigned straight away, no notification
+		assert.ok(!(await tool("serve_here", { path: one })).isError);
+		assert.match((await tool("request_place", { path: two, place_id: placeId })).text, /hold no claim/, "an agent without a claim cannot ask");
+		const free = await ask(one);
+		assert.equal(free.outcome, "assigned");
+		assert.deepEqual(await requests(), []);
+		// the panel's own route moves it to the other project, which the open place then syncs with
+		await call("PUT", `/studio/places/${placeId}`, { slotId: b.id });
+		plugin = new WebSocket(`ws://127.0.0.1:${API_PORT}${STUDIO_PATH}`);
+		const socket = plugin;
+		socket.onmessage = (event) => {
+			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "welcome" | "ping" };
+			if (message.type === "welcome") {
+				socket.send(JSON.stringify({ type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "e2e", placeId: String(placeId), gameId: "1", placeName: "Shared Lobby", unsaved: false, remembered: null }));
+			}
+			if (message.type === "match" && message.status === "connect" && message.target) {
+				socket.send(JSON.stringify({ type: "state", connected: { port: message.target.port, projectName: message.target.projectName, sessionId: message.target.sessionId } }));
+			}
+		};
+		await until("the place to sync with ReqTwo", async () => (await syncedWith()) === b.projectName);
+
+		// both sides see it: the losing project names the holder and suggests request_place
+		assert.ok(!(await tool("serve_here", { path: two })).isError, "ReqTwo's agent claims its project");
+		const status = await tool("status", { path: one });
+		assert.match(status.text, new RegExp(`Shared Lobby \\(${placeId}\\) is synced with ${b.projectName}, which also lists it\\. Call request_place`));
+
+		// one request, however often it is asked; the holder's side sees it, and its claim shows
+		assert.equal((await ask(one)).outcome, "pending");
+		assert.equal((await ask(one)).outcome, "pending");
+		const pending = await requests();
+		assert.equal(pending.length, 1, "a repeat call refreshes");
+		assert.equal(pending[0].asker, a.projectName);
+		assert.equal(pending[0].holder, b.projectName);
+		assert.equal(pending[0].holderClaimed, true);
+		assert.match((await tool("status", { path: two })).text, new RegExp(`${a.projectName} asked the user to move Shared Lobby \\(${placeId}\\) to it`));
+		// the panel's snapshot (the first event of the stream) carries it, and marks the place shared
+		const stream = await fetch(`${api}/events`);
+		const reader = stream.body!.getReader();
+		let text = "";
+		while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+		await reader.cancel();
+		const snapshot = JSON.parse(text.slice(text.indexOf("data: ") + 6, text.indexOf("\n\n"))) as Snapshot;
+		assert.equal(snapshot.placeRequests?.length, 1, "the panel's snapshot carries it");
+		assert.deepEqual(snapshot.studioPlaces?.find((place) => place.placeId === placeId)?.listedBy?.sort(), [a.projectName, b.projectName].sort(), "and marks the place shared");
+
+		// Decline: the agent's next status says so, and a second answer finds nothing
+		await call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/decline`);
+		assert.deepEqual(await requests(), []);
+		assert.match((await tool("status", { path: one })).text, /The user declined moving it here\./);
+		await assert.rejects(call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/move`), /already answered/);
+		assert.equal(await syncedWith(), b.projectName, "declining moved nothing");
+
+		// Move, while the agent waits: the place reconnects to the asker and stays assigned
+		const waiting = ask(one, { wait: 20 });
+		await until("the request again", async () => (await requests()).length === 1);
+		await call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/move`);
+		assert.equal((await waiting).outcome, "moved");
+		await until("the place to sync with ReqOne", async () => (await syncedWith()) === a.projectName);
+		assert.deepEqual(await requests(), []);
+		assert.equal((await ask(one)).outcome, "already");
+
+		// the other agent asks back; releasing ends the request
+		assert.equal((await ask(two)).outcome, "pending");
+		assert.equal((await requests()).length, 1);
+		assert.match((await tool("release", { path: two })).text, /Released/);
+		assert.deepEqual(await requests(), [], "release ended it");
+
+		// yolo: ReqOne's agent still holds a claim, so the user is asked; once it lets go, the move is at once and audited
+		await call("PUT", "/settings", { yolo: true });
+		assert.ok(!(await tool("serve_here", { path: two })).isError);
+		assert.equal((await ask(two)).outcome, "pending", "an agent's claim holds under yolo");
+		assert.ok(!(await tool("release", { path: one })).isError);
+		assert.equal((await ask(two)).outcome, "moved");
+		assert.deepEqual(await requests(), []);
+		await until("the place to sync with ReqTwo again", async () => (await syncedWith()) === b.projectName);
+		const audit = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { action: string; args: Record<string, unknown>; lifted: boolean });
+		const move = audit.find((line) => line.action === "move_place");
+		assert.ok(move, "the move is in the audit log");
+		assert.deepEqual(move.args, { placeId, from: a.projectName });
+	} finally {
+		plugin?.close();
+		await call("PUT", "/settings", { yolo: false, sourcemaps: false });
+		await tool("release", { path: one });
+		await tool("release", { path: two });
+		await call("DELETE", `/slots/${a.id}`);
+		await call("DELETE", `/slots/${b.id}`);
+	}
+});

@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView, type PlaceRequestView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { fromEditor, toEditor, type RawCommand } from "../common/setupText";
@@ -57,6 +57,8 @@ let lastGroups: GroupView[] = [];
 let lastStudioPlugin: StudioPluginStatus | null = null;
 /** Open Studio places, from the last snapshot (spec 007). */
 let lastStudioPlaces: StudioPlaceView[] = [];
+/** Agents' pending asks for Studio places, from the last snapshot (spec 014). */
+let lastPlaceRequests: PlaceRequestView[] = [];
 /** rojoHub.openPlaces as the service has it (spec 009). */
 let lastOpenPlaces = false;
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
@@ -189,7 +191,9 @@ async function refresh(): Promise<void> {
 	}
 	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
+	if (health && !streaming) lastPlaceRequests = await client.placeRequests().catch(() => lastPlaceRequests);
 	noticeDisconnects(health ? lastSlots : []);
+	noticePlaceRequests(health ? lastPlaceRequests : []);
 	if (health) {
 		noticePortMoves(lastSlots);
 		prefetch();
@@ -210,9 +214,11 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastOrder = snapshot.order;
 	lastStudioPlugin = snapshot.studioPlugin ?? null;
 	lastStudioPlaces = snapshot.studioPlaces ?? [];
+	lastPlaceRequests = snapshot.placeRequests ?? [];
 	lastOpenPlaces = snapshot.openPlaces === true;
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
+	noticePlaceRequests(lastPlaceRequests);
 	render();
 	prefetch();
 	await refreshWorkspaces();
@@ -305,6 +311,7 @@ function render(): void {
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
 		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
+		placeRequests: serviceHealth.running ? lastPlaceRequests : [],
 		// The service's copy of rojoHub.openPlaces decides; a service older than 0.20.0 cannot open places.
 		openPlaces: serviceHealth.running && lastOpenPlaces,
 		yolo: yoloSetting(),
@@ -334,6 +341,45 @@ function noticePortMoves(slots: SlotView[]): void {
 			.then(async (choice) => {
 				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
 				if (choice === "Show Project") void panel.focus(slot.id);
+			});
+	}
+}
+
+/** The asks (id and when it began) this window already showed a notification for (spec 014). */
+const shownRequests = new Set<string>();
+
+/*
+	An agent asked for a Studio place that another project holds (spec 014). Like
+	noticeDisconnects, only a window with the asking or the holding project open,
+	or else the focused window, shows it, and each ask once per window. A
+	dismissed notification leaves the ask pending, answerable in the panel; an
+	answer in any window ends it everywhere, and a click here afterwards does
+	nothing.
+*/
+function noticePlaceRequests(requests: PlaceRequestView[]): void {
+	const live = new Set(requests.map((request) => `${request.id}@${request.since}`));
+	for (const key of shownRequests) if (!live.has(key)) shownRequests.delete(key);
+	for (const request of requests) {
+		const key = `${request.id}@${request.since}`;
+		if (shownRequests.has(key)) continue;
+		const here = [request.askerId, request.holderId].some((id) => {
+			const repo = lastSlots.find((slot) => slot.id === id)?.repoPath;
+			return repo !== undefined && workspaceRepos.includes(pathKey(repo));
+		});
+		if (!here && !vscode.window.state.focused) continue;
+		shownRequests.add(key);
+		const place = request.placeName ? `${request.placeName} (${request.placeId})` : `place ${request.placeId}`;
+		const busy = request.holderClaimed && request.holder ? ` (an agent is using ${request.holder})` : "";
+		void vscode.window
+			.showInformationMessage(`Rojo-Hub: ${request.asker} asks for ${place}, now synced with ${request.holder ?? "another project"}${busy}.`, "Move", "Decline")
+			.then(async (choice) => {
+				if (choice !== "Move" && choice !== "Decline") return;
+				try {
+					lastPlaceRequests = await client.answerPlaceRequest(request.id, choice === "Move" ? "move" : "decline");
+					render();
+				} catch {
+					// Answered elsewhere or ended meanwhile: nothing to do.
+				}
 			});
 	}
 }
@@ -1382,6 +1428,16 @@ async function handlePanel(message: FromPanel): Promise<void> {
 				void vscode.window.setStatusBarMessage(opened > 0 ? `$(device-desktop) Rojo-Hub is opening ${opened} place${opened === 1 ? "" : "s"} in Studio` : "Rojo-Hub: every place is already open", 5000);
 			});
 			return;
+		case "answerPlaceRequest":
+			await act(`request:${message.id}`, async () => {
+				try {
+					lastPlaceRequests = await client.answerPlaceRequest(message.id, message.answer);
+				} catch {
+					// Answered in another window, or it ended meanwhile: the next snapshot says so.
+				}
+				render();
+			});
+			return;
 		case "assignPlace":
 			await act(`place:${message.key}`, async () => {
 				lastStudioPlaces = await client.assignPlace(message.key, message.slotId);
@@ -1421,6 +1477,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			agentNudge: false,
 			studioPlugin: null,
 			studioPlaces: [],
+			placeRequests: [],
 			openPlaces: false,
 			yolo: false,
 		});

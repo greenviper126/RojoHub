@@ -200,6 +200,28 @@ export interface StudioPlaceView {
 	syncedWith: string | null;
 	/** Rojo's first-sync confirmation is open in the place, waiting for the user. */
 	confirming: boolean;
+	/** The names of the registered projects whose project files list this place; more than one makes it shared (spec 014). Missing from services older than 0.22.2. */
+	listedBy?: string[];
+}
+
+/*
+	An agent's ask to move a Studio place to its project, waiting for the user
+	(spec 014). Move saves the assignment the panel makes; Decline ends the ask.
+	Kept in the service's memory only.
+*/
+export interface PlaceRequestView {
+	id: string;
+	placeId: number;
+	/** From the open place or the project's file; null until known. */
+	placeName: string | null;
+	askerId: string;
+	asker: string;
+	/** The project that holds the place now; null when none does (the place closed meanwhile). */
+	holderId: string | null;
+	holder: string | null;
+	/** Another agent has claimed the holding project. */
+	holderClaimed: boolean;
+	since: number;
 }
 
 /*
@@ -236,6 +258,8 @@ export interface Snapshot {
 	studioPlaces?: StudioPlaceView[];
 	/** rojoHub.openPlaces (spec 009); missing from services older than 0.20.0, which cannot open places. */
 	openPlaces?: boolean;
+	/** Agents' pending asks for Studio places (spec 014); missing from services older than 0.22.2. */
+	placeRequests?: PlaceRequestView[];
 }
 
 /** What POST /slots/:id/branch made. */

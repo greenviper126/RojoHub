@@ -52,6 +52,7 @@ registration and settings.
 | `log` | The last lines of Rojo's log |
 | `wait_for_studio` | Wait until a Studio place has synced |
 | `open_place` | Open a project's place in Studio (needs `rojoHub.openPlaces`) |
+| `request_place` | Ask you to move a Studio place another project holds to the agent's project (you answer Move or Decline in VS Code) |
 | `build` | `rojo build` what a project serves |
 | `sourcemap` | Write the served worktree's `sourcemap.json` |
 
@@ -79,6 +80,7 @@ than one project.
 | `set_project_file` | `file`, `path?`, `project?` |
 | `wait_for_studio` | `path?`, `project?`, `timeout?` |
 | `open_place` | `placeId?`, `path?`, `project?` |
+| `request_place` | `place_id`, `path`, `wait?` (seconds, up to 300), `project?` |
 | `start_group` / `stop_group` | `group`, `only?`, `force?` |
 | `create_group` | `name`, `projects?`, `groups?` |
 | `edit_group` | `group`, `name?`, `add_projects?`, `remove_projects?`, `add_groups?`, `remove_groups?` |

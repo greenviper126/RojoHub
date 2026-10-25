@@ -4,7 +4,7 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption, StudioPluginStatus, StudioPlaceView } from "./api";
+import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption, StudioPluginStatus, StudioPlaceView, PlaceRequestView } from "./api";
 
 /*
 	Something to add to or take out of a group: a project, a nested group, or
@@ -55,6 +55,8 @@ export interface PanelState {
 	studioPlugin: StudioPluginStatus | null;
 	/** Open Studio places with Rojo-Hub's plugin, and what each syncs with (spec 007). */
 	studioPlaces: StudioPlaceView[];
+	/** Agents' pending asks to move a Studio place to their project (spec 014). */
+	placeRequests: PlaceRequestView[];
 	/** rojoHub.openPlaces (spec 009): cards list their places with Open, Close and Reopen only while it is on. */
 	openPlaces: boolean;
 	/** rojoHub.yolo (spec 012): the red banner above everything, with a Turn off button. */
@@ -125,6 +127,8 @@ export type FromPanel =
 	| { type: "yoloOff" }
 	/** Studio places (spec 007): the project a place syncs with; null goes back to its project files. */
 	| { type: "assignPlace"; key: string; slotId: string | null }
+	/** The user's answer to an agent's ask for a shared place (spec 014). */
+	| { type: "answerPlaceRequest"; id: string; answer: "move" | "decline" }
 	/** A project's place in Studio (spec 009). */
 	| { type: "placeAction"; id: string; placeId: number; action: "open" | "close" | "reopen" }
 	| { type: "openAllPlaces"; id: string };

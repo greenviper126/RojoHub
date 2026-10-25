@@ -43,6 +43,9 @@ import { acceptWebSocket } from "./websocket";
 	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
 	GET    /studio                                   WebSocket for the Studio plugin (spec 007, src/service/studio.ts)
 	PUT    /studio/places/:key    { slotId }         assign a project to an open Studio place (null: back to its project files)
+	GET    /studio/requests                          agents' pending asks to move a place to their project (spec 014)
+	POST   /studio/requests/:id/move                 the user agrees: saves the assignment the panel makes, ends the ask
+	POST   /studio/requests/:id/decline              the user refuses: ends the ask (both 409 when it is already answered or ended)
 	POST   /slots/:id/places/:placeId/open           open one of the project's places in Studio, unless it is open (spec 009)
 	POST   /slots/:id/places/:placeId/close          ask that place's Studio to close (never killed)
 	POST   /slots/:id/places/:placeId/reopen         close it, wait for Studio to exit, open it again
@@ -108,7 +111,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 	const mcp = new Mcp(hub, groups);
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places(), openPlaces: hub.openPlacesOn } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studioPlaces(), openPlaces: hub.openPlacesOn, placeRequests: hub.requestViews() } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -198,7 +201,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				if (input.slotId !== null && typeof input.slotId !== "string") return send(response, 400, { error: "slotId must be a project id or null" });
 				if (typeof input.slotId === "string") hub.registry.get(input.slotId);
 				hub.studio.assign(parts[2], input.slotId as string | null);
-				return send(response, 200, hub.studio.places());
+				return send(response, 200, hub.studioPlaces());
+			}
+			if (method === "GET" && url.pathname === "/studio/requests") return send(response, 200, hub.requestViews());
+			if (method === "POST" && parts[0] === "studio" && parts[1] === "requests" && parts.length === 4 && (parts[3] === "move" || parts[3] === "decline")) {
+				if (!hub.requests.answer(parts[2], parts[3])) throw new Conflict("That request was already answered, or it ended.");
+				return send(response, 200, hub.requestViews());
 			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {

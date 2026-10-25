@@ -891,9 +891,22 @@ function studioPlaces(): string {
 				.map((slot) => `<option value="${escape(slot.id)}"${place.assigned === slot.id ? " selected" : ""}>${escape(slot.projectName)}  :${slot.port}${slot.state === "running" ? "" : " (stopped)"}</option>`)
 				.join("");
 			const title = `${place.placeName} (${place.unsaved ? "not saved to Roblox" : place.placeId}) · plugin ${place.pluginVersion}`;
+			/* A place several projects list syncs with one at a time (spec 014); an agent's ask to move it shows with its answer buttons. */
+			const listedBy = place.listedBy ?? [];
+			const shared = listedBy.length > 1 ? ` <span class="pill info shared" title="${escape(`Listed by ${listedBy.join(", ")}. It syncs with one project at a time.`)}">Shared</span>` : "";
+			const asks = (state!.placeRequests ?? [])
+				.filter((request) => !place.unsaved && request.placeId === place.placeId)
+				.map(
+					(request) => `<div class="place-request">
+						<span class="grow" title="${escape(`${request.asker} asks to move this place from ${request.holder ?? "its project"}.`)}">${icon("question")} <b>${escape(request.asker)}</b> asks for this place, now synced with ${escape(request.holder ?? "another project")}${request.holderClaimed ? ` <span class="muted">(an agent is using it)</span>` : ""}</span>
+						${button("request-move", "Move", { data: { id: request.id }, kind: "primary", title: `Sync this place with ${request.asker}` })}
+						${button("request-decline", "Decline", { data: { id: request.id }, kind: "secondary", title: "Keep the place where it is" })}
+					</div>`,
+				)
+				.join("");
 			return `<div class="member studio-place">
 				<span class="grow two-line">
-					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}</span>
+					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}${shared}</span>
 					<span class="sub ellipsis" title="${escape(place.message)}">${escape(place.message)}</span>
 				</span>
 				<span class="pill ${status.kind}" title="${escape(place.message)}">${icon(status.icon, status.icon === "loading" ? "codicon-modifier-spin" : "")}<span class="ellipsis">${escape(status.label)}</span></span>
@@ -901,7 +914,7 @@ function studioPlaces(): string {
 					<option value=""${place.assigned ? "" : " selected"}>Automatic</option>
 					${options}
 				</select>
-			</div>${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
+			</div>${asks}${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
 		})
 		.join("");
 	return `<div class="card studio-places">${rows}</div>`;
@@ -1749,6 +1762,9 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "yolo-off":
 			return send({ type: "yoloOff" });
+		case "request-move":
+		case "request-decline":
+			return send({ type: "answerPlaceRequest", id, answer: action === "request-move" ? "move" : "decline" });
 		case "nudge-setup":
 			ui.collapsed.agents = false;
 			persist();

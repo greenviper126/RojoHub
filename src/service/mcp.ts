@@ -10,6 +10,7 @@ import type { Groups } from "./groups";
 import { claimKey, type Hub } from "./hub";
 import { OFF_MESSAGE } from "./places";
 import { loadPortSettings } from "./ports";
+import { listersOf } from "./requests";
 import { Conflict, NotFound } from "./registry";
 import { describeFailure, describeSteps, installChecks, type CheckResult } from "./setup";
 import { resolveRojo } from "./tools";
@@ -28,7 +29,8 @@ import { resolveRojo } from "./tools";
 	one Studio shows one of them, so switching claims the project for the
 	switcher's target for CLAIM_MS; others are refused, or wait with `wait`. A
 	switch made by the user clears the claim. What stays the user's: which
-	project a Studio place syncs with, agent registration, settings.
+	project a Studio place syncs with (an agent can only ask, with request_place, spec
+	014), agent registration, settings.
 */
 
 export const CLAIM_MS = 15 * 60 * 1000;
@@ -36,6 +38,8 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
 const MAX_WAIT_S = 600;
+/** The longest request_place waits for the user: the user is a person, not a claim. */
+const MAX_REQUEST_WAIT_S = 300;
 /** How long new_branch waits for setup commands: below Codex's 60 s tool timeout (spec 012). */
 const SETUP_WAIT_MS = 40000;
 /** The first protocol version with outputSchema and structuredContent. */
@@ -58,9 +62,11 @@ To get ready in one call, use ensure: it starts the project, serves your worktre
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
-Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.
+Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with on your own; the user does that in the Rojo-Hub panel in VS Code.
 
-Yolo mode: when the user turned on rojoHub.yolo, status and ensure say so (yolo: true in their data). Then you may open Studio places and stop or remove projects that Studio places are synced to, and stop_all works without force but keeps projects other agents claimed; their claims still hold. Everything you do is logged. Without it, the rules above apply.`;
+Shared places: a Studio place syncs with one project at a time, even when several projects list it. status, serve_here, switch and ensure say when a place of your project is synced with another project, which projects list it, and any pending request. To get such a place, call request_place with its place ID (from your worktree, holding your claim): if no project holds the place it is assigned to yours at once; otherwise the user is asked in VS Code to move it (Move or Decline), and with wait (seconds, up to 300) the call waits for the answer. Asking again only refreshes your request. It ends when you release, your claim runs out, or the user answers. When status says another project asked for a place yours holds, finish what you are doing in Studio and release. Never open or inspect a Studio place that is synced with another project.
+
+Yolo mode: when the user turned on rojoHub.yolo, status and ensure say so (yolo: true in their data). Then you may open Studio places and stop or remove projects that Studio places are synced to, and stop_all works without force but keeps projects other agents claimed; their claims still hold. request_place moves a place at once when the project holding it is not claimed by another agent. Everything you do is logged. Without it, the rules above apply.`;
 
 interface Tool {
 	name: string;
@@ -89,6 +95,10 @@ const orNull = (type: string) => ({ type: [type, "null"] });
 const arrayOf = (items: Record<string, unknown>) => ({ type: "array", items });
 const shape = (properties: Record<string, unknown>, required: string[] = Object.keys(properties)) => ({ type: "object", properties, required });
 
+/** How a project's own request for a shared place stands (spec 014). */
+export const REQUEST_STATES = ["none", "pending", "declined", "moved"] as const;
+export const REQUEST_OUTCOMES = ["already", "assigned", "moved", "pending", "declined", "ended"] as const;
+
 /** One project, as `status`, `serve_here`, `switch` (and later `ensure`) describe it. */
 export const PROJECT_STATE_SCHEMA = shape({
 	id: S,
@@ -107,6 +117,8 @@ export const PROJECT_STATE_SCHEMA = shape({
 	sourcemap: shape({ state: { type: "string", enum: ["watching", "off", "error"] }, detail: S }),
 	warnings: arrayOf(S),
 	yourWorktreeServed: orNull("boolean"),
+	sharedPlaces: arrayOf(shape({ placeId: I, name: orNull("string"), heldBy: orNull("string"), alsoListedBy: arrayOf(S), request: { type: "string", enum: [...REQUEST_STATES] } })),
+	incomingRequests: arrayOf(shape({ placeId: I, name: orNull("string"), from: S })),
 });
 
 const UNAPPLIED_SCHEMA = arrayOf(shape({ placeId: I, placeName: S, total: I, items: arrayOf(S) }));
@@ -118,6 +130,7 @@ const STATUS_SCHEMA = shape({
 	yolo: B,
 	setup: arrayOf(shape({ path: S, state: { type: "string", enum: ["running", "ok", "failed"] }, step: I, of: I })),
 });
+const REQUEST_PLACE_SCHEMA = shape({ outcome: { type: "string", enum: [...REQUEST_OUTCOMES] }, placeId: I, name: orNull("string"), project: S, holder: orNull("string") });
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
 export const ENSURE_STEPS = ["start", "setup", "serve", "open_place", "wait_for_studio"] as const;
@@ -202,6 +215,23 @@ export const TOOLS: Tool[] = [
 		description: "Drops your claim on a project, so other agents can switch it. Pass path (your working directory) so it is your claim that is dropped. The project keeps serving what it serves.",
 		inputSchema: project({ force: { type: "boolean", description: "Drop the claim without a path, whoever holds it. Only when the user asks." } }),
 		annotations: { idempotentHint: true },
+	},
+	{
+		name: "request_place",
+		title: "Ask for a shared Studio place",
+		description:
+			"Asks the user, in VS Code, to move a Studio place your project lists to your project, when another project holds it (status says so). Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 300) waits for the answer. Yolo mode moves it at once unless an agent claimed the holder.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				path: pathProperty,
+				project: projectProperty,
+				place_id: { type: "number", description: "The place ID, one of your project's places (status lists them)." },
+				wait: { type: "number", description: `Seconds to wait for the user's answer (up to ${MAX_REQUEST_WAIT_S}).` },
+			},
+			required: ["path", "place_id"],
+		},
+		outputSchema: REQUEST_PLACE_SCHEMA,
 	},
 	{
 		name: "start",
@@ -490,6 +520,8 @@ export class Mcp {
 				return this.ensure(args);
 			case "release":
 				return this.release(args);
+			case "request_place":
+				return this.requestPlace(args);
 			case "start":
 				return this.start(args);
 			case "stop":
@@ -723,6 +755,7 @@ export class Mcp {
 	async projectState(slot: SlotView, root: string | null): Promise<Record<string, unknown>> {
 		const claim = this.hub.claimOf(slot.id);
 		const open = this.hub.studio.places();
+		const sharing = this.sharing(slot);
 		const onWorktree = slot.target.kind === "worktree" ? slot.target.path : null;
 		const commit = slot.target.kind === "worktree" ? await revParse(slot.target.path, "HEAD") : await revParse(slot.repoPath, slot.target.ref);
 		const mine = root !== null && onWorktree !== null && pathKey(onWorktree) === pathKey(root);
@@ -762,7 +795,70 @@ export class Mcp {
 			sourcemap: { state: slot.sourcemap.state, detail: slot.sourcemap.detail },
 			warnings: [...slot.warnings],
 			yourWorktreeServed: root === null ? null : mine,
+			sharedPlaces: sharing.shared,
+			incomingRequests: sharing.incoming,
 		};
+	}
+
+	/*
+		The places of `slot` that another project also lists or holds, and the asks
+		other projects made for places it holds (spec 014): the facts behind the
+		"synced with another project" lines and the data fields.
+	*/
+	private sharing(slot: SlotView): {
+		shared: { placeId: number; name: string | null; heldBy: string | null; alsoListedBy: string[]; request: (typeof REQUEST_STATES)[number] }[];
+		incoming: { placeId: number; name: string | null; from: string }[];
+	} {
+		const projects = this.hub.requestProjects();
+		const nameOf = (placeId: number) => slot.listedPlaces?.find((place) => place.placeId === placeId)?.placeName ?? this.hub.studio.places().find((place) => place.placeId === placeId)?.placeName ?? null;
+		const shared = [];
+		for (const placeId of projects.find((project) => project.id === slot.id)?.listed ?? []) {
+			const others = listersOf(projects, placeId).filter((project) => project.id !== slot.id).map((project) => project.projectName);
+			const holderId = this.hub.placeHolder(placeId);
+			const heldBy = holderId && holderId !== slot.id ? (projects.find((project) => project.id === holderId)?.projectName ?? null) : null;
+			if (others.length === 0 && !heldBy) continue;
+			const request: (typeof REQUEST_STATES)[number] = this.hub.requests.pendingFor(slot.id, placeId) ? "pending" : (this.hub.requests.outcomeFor(slot.id, placeId) ?? "none");
+			shared.push({ placeId, name: nameOf(placeId), heldBy, alsoListedBy: others, request });
+		}
+		const incoming = this.hub.requests.against(slot.id).map((request) => ({
+			placeId: request.placeId,
+			name: nameOf(request.placeId),
+			from: projects.find((project) => project.id === request.askerId)?.projectName ?? request.askerId,
+		}));
+		return { shared, incoming };
+	}
+
+	/** `DL Game - Dev (106807032284628)`, or `place 106807032284628` while its name is not known. */
+	private placeLabel(placeId: number, name: string | null): string {
+		return name ? `${name} (${placeId})` : `place ${placeId}`;
+	}
+
+	/** One line per shared or held-elsewhere place, and per ask against this project's places, for status and the switching tools. */
+	private sharingLines(slot: SlotView): string[] {
+		const { shared, incoming } = this.sharing(slot);
+		const lines = shared.map((entry) => {
+			const label = this.placeLabel(entry.placeId, entry.name);
+			if (!entry.heldBy) return `${label} is shared: ${entry.alsoListedBy.join(", ")} also ${entry.alsoListedBy.length === 1 ? "lists" : "list"} it. It stays with the project it last synced with.`;
+			const also = entry.alsoListedBy.includes(entry.heldBy) ? ", which also lists it" : "";
+			const next =
+				entry.request === "pending"
+					? "You asked the user to move it here; waiting for the answer."
+					: entry.request === "declined"
+						? "The user declined moving it here."
+						: entry.request === "moved"
+							? "The user moved it here; it connects within a few seconds."
+							: "Call request_place to ask the user to move it here.";
+			return `${label} is synced with ${entry.heldBy}${also}. ${next}`;
+		});
+		for (const ask of incoming) {
+			lines.push(`${ask.from} asked the user to move ${this.placeLabel(ask.placeId, ask.name)} to it; ${slot.projectName} holds it now. Finish what you are doing in Studio and release.`);
+		}
+		return lines;
+	}
+
+	private sharingText(slot: SlotView): string {
+		const lines = this.sharingLines(slot);
+		return lines.length ? `\n${lines.join("\n")}` : "";
 	}
 
 	/** Rojo's error lines and the card's warnings, for `problems`. */
@@ -833,7 +929,7 @@ export class Mcp {
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -864,7 +960,7 @@ export class Mcp {
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
+			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -875,6 +971,7 @@ export class Mcp {
 		if (!claim) {
 			const lapsed = this.hub.lapsedClaim(slot.id);
 			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
+				this.hub.requests.dropAsker(slot.id);
 				const back = lapsed.returnTo ? await this.hub.handBack(slot.id, lapsed, "expiry") : null;
 				this.hub.setClaim(slot.id, null);
 				const now = this.hub.view(this.hub.registry.get(slot.id));
@@ -887,12 +984,75 @@ export class Mcp {
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {
 			throw new Refusal(`${slot.projectName} is claimed by ${claim.label}, not by your worktree; leaving it.`);
 		}
+		// Its asks for shared places end with the claim they were made under (spec 014).
+		this.hub.requests.dropAsker(slot.id);
 		// Switched back before the claim is dropped, so an agent waiting for the project cannot interleave.
 		const back = claim.returnTo ? await this.hub.handBack(slot.id, claim, "release") : null;
 		this.hub.setClaim(slot.id, null);
 		if (back?.returned) return `Released ${slot.projectName}. It switched back to ${back.label}, which it served before you took it.`;
 		const now = this.hub.view(this.hub.registry.get(slot.id));
 		return `Released ${slot.projectName}. It keeps serving ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`;
+	}
+
+	/*
+		Asks for a shared Studio place (spec 014). Only the agent holding the
+		project's claim may ask, so a request can end with that claim; the
+		decision itself is PlaceRequests', the user's answer arrives over the
+		service's HTTP API (the notification and the panel).
+	*/
+	private async requestPlace(args: Args): Promise<Answer> {
+		const { slot, root } = await this.pick(args);
+		if (!root) throw new Refusal("path is required: your working directory.");
+		const wanted = args.place_id ?? args.placeId;
+		const placeId = typeof wanted === "string" && /^\d+$/.test(wanted.trim()) ? Number(wanted) : wanted;
+		if (typeof placeId !== "number" || !Number.isSafeInteger(placeId) || placeId <= 0) throw new Refusal("place_id is required: one of the project's place IDs (status lists them).");
+		const key = claimKey({ kind: "worktree", path: root });
+		const claim = this.hub.claimOf(slot.id);
+		if (claim && claim.key !== key) throw this.claimRefusal(slot, claim, "Only the agent holding a project can ask for a Studio place for it.");
+		if (!claim) throw new Refusal(`You hold no claim on ${slot.projectName}. Call serve_here from your worktree first (it claims the project), then request_place.`);
+		this.renew(slot, root);
+		const listed = slot.listedPlaces ?? [];
+		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to ask for. Ask the user to open the place in Studio.`);
+		if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(wanted)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
+
+		const names = new Map(this.hub.registry.slots.map((entry) => [entry.id, entry.projectName]));
+		const holderOf = () => {
+			const id = this.hub.placeHolder(placeId);
+			return id ? (names.get(id) ?? null) : null;
+		};
+		const heldBefore = holderOf();
+		const name = listed.find((place) => place.placeId === placeId)?.placeName ?? this.hub.studio.places().find((place) => place.placeId === placeId)?.placeName ?? null;
+		const label = this.placeLabel(placeId, name);
+		const answer = (outcome: (typeof REQUEST_OUTCOMES)[number], text: string, holder: string | null = holderOf()): Answer => ({ text, data: { outcome, placeId, name, project: slot.projectName, holder } });
+
+		const result = this.hub.requests.ask(slot.id, placeId, key, this.hub.yoloOn);
+		switch (result.kind) {
+			case "already":
+				return answer("already", `${label} already syncs with ${slot.projectName}; nothing to do.`);
+			case "assigned":
+				return answer("assigned", `${label} is assigned to ${slot.projectName}. Nobody held it, so nothing was taken from anyone.${slot.state === "running" ? " If it is open in Studio it connects within a few seconds; call wait_for_studio." : ` ${slot.projectName} is not serving: start it, and the place connects by itself.`}`);
+			case "moved": {
+				this.lifted();
+				const from = names.get(result.from) ?? result.from;
+				writeAudit(this.hub.home, { actor: "mcp", action: "move_place", project: slot.projectName, args: { placeId, from }, yolo: true, lifted: true, outcome: "ok" });
+				return answer("moved", `Yolo mode is on and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.`, slot.projectName);
+			}
+		}
+		const holder = heldBefore ?? names.get(result.request.holderId ?? "") ?? null;
+		const seconds = clamp(args.wait, 0, MAX_REQUEST_WAIT_S);
+		const deadline = Date.now() + seconds * 1000;
+		for (;;) {
+			const outcome = this.hub.requests.outcomeFor(slot.id, placeId);
+			if (outcome === "moved") return answer("moved", `The user moved ${label} from ${holder ?? "its project"} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.`, slot.projectName);
+			if (outcome === "declined") return answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${holder ?? "its project"}. Do not ask again unless the user says to.`);
+			if (!this.hub.requests.pendingFor(slot.id, placeId)) return answer("ended", `The request for ${label} ended without an answer (it was released, your claim ran out, or the project or place changed). Call request_place again if you still need it.`);
+			if (Date.now() >= deadline) break;
+			await sleep(500);
+		}
+		return answer(
+			"pending",
+			`${result.fresh ? "Asked" : "Still asking"} the user, in VS Code, to move ${label} from ${holder ?? "its project"} to ${slot.projectName}${seconds > 0 ? `; no answer in ${seconds} s` : ""}. Keep working; status shows the answer, or call request_place again with wait. It ends if you release or your claim runs out.`,
+		);
 	}
 
 	private async start(args: Args): Promise<string> {
@@ -1234,7 +1394,7 @@ export class Mcp {
 		const places = slot && slot.state === "running" ? (slot.places ?? []) : [];
 		const ready = failure === null && slot !== null && slot.state === "running" && project?.yourWorktreeServed === true && places.length > 0;
 		const lines = steps.map((step) => `${step.step}: ${step.outcome}, ${step.detail}`);
-		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
+		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.sharingText(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
 		return {
 			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}${warnings.map((warning) => `\nwarning: ${warning}`).join("")}`,
 			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), checks, warnings, failure, yolo: this.hub.yoloOn === true },
@@ -1374,6 +1534,7 @@ ${body}` : body, data };
 			if (claim) lines.push(`  claimed by an agent in ${claim.label} until ${time(claim.until)}`);
 			if (slot.listedPlaces?.length) lines.push(`  places: ${this.listedText(slot.listedPlaces)}${this.hub.openPlacesOn ? " (open_place opens one)" : ""}`);
 			for (const warning of slot.warnings) lines.push(`  note: ${warning}`);
+			for (const line of this.sharingLines(slot)) lines.push(`  place: ${line}`);
 			if (slot.state === "running") lines.push(`  sourcemap.json: ${slot.sourcemap.detail}`);
 			if (repo && pathKey(slot.repoPath) === repo) {
 				this.renew(slot, root);
