@@ -630,7 +630,7 @@ export class Mcp {
 			const lapsed = this.hub.lapsedClaim(slot.id);
 			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
 				this.hub.setClaim(slot.id, null);
-				return `Your claim on ${slot.projectName} had already run out; it still serves ${slot.targetLabel}.`;
+				return `${root ? "Your" : `${lapsed.label}'s`} claim on ${slot.projectName} had already run out; it still serves ${slot.targetLabel}.`;
 			}
 			return `${slot.projectName} was not claimed.`;
 		}
