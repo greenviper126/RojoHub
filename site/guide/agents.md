@@ -38,6 +38,7 @@ registration and settings.
 | Tool | Does |
 |---|---|
 | `status` | Every project, what it serves, who claims it, its Studio places and warnings; open places |
+| `ensure` | Get ready in one call: start the project, serve the worktree, open the place (needs `rojoHub.openPlaces`), wait for Studio |
 | `serve_here` | Serve the agent's own worktree to Studio, live, and claim the project |
 | `switch` | Serve a branch or worktree, and claim the project |
 | `new_branch` | Make a branch in its own worktree, serve it, and claim the project |
@@ -65,6 +66,7 @@ than one project.
 | Tool | Parameters |
 |---|---|
 | `status` | `path?` |
+| `ensure` | `path`, `project?`, `place?`, `timeout?`, `wait?`, `force?` |
 | `serve_here` | `path`, `project?`, `wait?`, `force?` |
 | `switch` | `target`, `project?`, `path?`, `wait?`, `force?` |
 | `new_branch` | `name`, `base?`, `path?`, `project?`, `wait?`, `force?` |

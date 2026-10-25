@@ -127,6 +127,12 @@ applies, with the stdio entry described.
 
 ### 2. `ensure`: get me ready in one call (items 2, 18, 20, 10)
 
+**Built** (`src/service/mcp.ts`). Differences from the text below: `project` in the data is null for
+`no_project` (no step ran); a missing `path` is also `no_project`; a `place` that is not listed is
+`no_listed_places`; a listed place already open in Studio (not yet synced) skips opening, so with
+`openPlaces` off it is waited for instead of failing; a `timeout` under 5 s is raised to 5; a switch
+that throws something other than a claim refusal is `rojo_error`.
+
 One new tool, `ensure`, for an agent about to check its worktree in Studio. Arguments: `path`
 (required, the working directory), `project`, `place` (a place ID, for projects with several),
 `timeout` (seconds to wait for Studio, default 60, 5 to 300), `wait` and `force` (as `serve_here`).
@@ -172,8 +178,8 @@ Install and dependency checks (item 10's Packages, node_modules) are not part of
 
 ### 3. Structured answers (items 7, 16)
 
-**Built** for `status`, `serve_here` and `switch` (`src/service/mcp.ts`; `ensure` joins when it is
-built: it reuses `projectState` and the `{ text, data }` answer). Open questions 6 and 7 took their
+**Built** for `status`, `serve_here` and `switch` (`src/service/mcp.ts`; `ensure` has joined: it reuses
+`projectState` and the `{ text, data }` answer). Open questions 6 and 7 took their
 defaults: no `dirty` flag; the claim carries `until` and `secondsLeft`. `listedPlaces[].name` is
 nullable (a name is not always known), and `claim` is `anyOf` null or an object in the schema.
 

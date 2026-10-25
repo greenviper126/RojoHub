@@ -495,6 +495,37 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	await call("DELETE", `/slots/${slot.id}`);
 });
 
+test("ensure over MCP (spec 011): starts a stopped project and serves the worktree, then does nothing twice; with no Studio it says so at once", async () => {
+	const dir = await makeRepo("Ensurey");
+	const alpha = join(root, "Ensurey-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "ensure-alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	assert.equal((await view()).state, "stopped");
+
+	const first = await structured("ensure", { path: alpha });
+	assert.deepEqual(first.steps.slice(0, 2).map((step: Record<string, string>) => `${step.step}:${step.outcome}`), ["start:done", "serve:done"]);
+	assert.equal(first.ready, false);
+	assert.equal(first.failure.reason, "no_listed_places", "the project file names no places and no Studio is open");
+	assert.equal(first.project.rojo.state, "running");
+	assert.equal(first.project.yourWorktreeServed, true);
+	assert.deepEqual(first.placeIds, []);
+	const now = await view();
+	assert.equal(now.state, "running");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha));
+	assert.equal(now.claim?.label, "Ensurey-alpha");
+	const { sessionId } = now;
+
+	const second = await structured("ensure", { path: join(alpha, "src") });
+	assert.deepEqual(second.steps.slice(0, 2).map((step: Record<string, string>) => `${step.step}:${step.outcome}`), ["start:already", "serve:already"]);
+	assert.equal(second.failure.reason, "no_listed_places");
+	assert.equal((await view()).sessionId, sessionId, "no restart");
+	assert.ok((await tool("ensure", { path: alpha })).isError, "a failure is an error result");
+	assert.equal((await structured("ensure", { path: dir, project: "nothing-like-this" })).failure.reason, "no_project");
+
+	await call("DELETE", `/slots/${slot.id}`);
+});
+
 test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, branches, guarded stops, waiting for a claim", async () => {
 	const dir = await makeRepo("Controlly");
 	const other = join(root, "Controlly-other");
