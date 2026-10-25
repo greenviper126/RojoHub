@@ -2,6 +2,24 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.0
+
+- **Agents connect even when the service is down.** Agent entries now point at a stdio launcher that
+  starts the service when needed, so an agent's MCP connection no longer fails because Rojo-Hub is
+  not running.
+- `ensure` gets a project ready for Studio in one call. `status`, `serve_here`, `switch` and `ensure`
+  return structured answers next to their text.
+- **Setup commands.** A project can run setup commands (for example an install) before a new worktree
+  is first served. `ensure` also runs install checks and reports what is missing.
+- **Yolo mode** (`rojoHub.yolo`, off by default, dangerous). Lifts the guards that refuse agents' actions,
+  such as opening Studio places. The status bar and panel show when it is on.
+- **Handoff.** `then_return` on `serve_here`, `switch` and `ensure` hands the project back to the
+  previous worktree when the claim is released or runs out.
+- `new_branch` fetches its base first and starts from the remote when local is behind.
+- Claims last 15 minutes. `release` says when a claim ran out instead of failing silently.
+- `serve_here` and `switch` say when Rojo crashed and restarted meanwhile.
+- The sourcemap watcher retries every 30 seconds after it gives up, and `status` says so.
+
 ## 0.21.0
 
 - **Switching no longer drops Studio's connection.** A switch to a branch whose project file adds a

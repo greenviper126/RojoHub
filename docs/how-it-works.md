@@ -1,8 +1,8 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.21.0,
-2026-10-04. Why each design choice was made, with measurements:
+underneath, and the known limits. It is the source for user documentation. Version 0.22.0,
+2026-10-25. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
