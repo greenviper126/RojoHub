@@ -103,7 +103,9 @@ Windows user's Rojo-Hub (‹their folder›). Only one signed-in user can run Ro
 Rojo-Hub never uses or stops that service; it works again once that user signs out.
 
 **Uninstall** from every profile. On VS Code's next start, the uninstall step removes its Claude Code
-and Codex entries (if ticked), then stops the service and every Rojo it serves (only your own).
+and Codex entries (the launcher entry, or an old URL or stale one of Rojo-Hub's; never an entry of
+another shape), then stops the service and every Rojo it serves (only your own) and deletes the
+`launcher` folder.
 Delete `%LOCALAPPDATA%\RojoHub\` to remove state and views.
 
 ## 4. Where to find it in VS Code
@@ -706,17 +708,49 @@ make branches in their own worktrees, read Rojo's log and wait for Studio to syn
 an MCP server the service runs at `http://127.0.0.1:34870/mcp`; no extra files, scripts or
 instructions, since the server describes itself when the agent connects.
 
+**The launcher (spec 011).** Claude Code and Codex are pointed at a small program, not at that URL,
+so a session started while the service is down (no VS Code window open, or just after an update)
+still gets Rojo-Hub. The entry runs VS Code's own program as Node (`ELECTRON_RUN_AS_NODE=1`; no Node
+install needed) on `%LOCALAPPDATA%\RojoHub\launcher\rojohub-mcp.cjs`. That script speaks MCP over
+stdin/stdout and forwards each message to the service's `/mcp`:
+
+- **Starting the service.** Only when `/health` gets no answer, and only this Windows user's service
+  (another user's on the port is never started over or used). It starts the highest-version
+  `dist/service.js` it finds: `ROJO_HUB_SERVICE` (tests), else the hint file `launcher\service.json`
+  (written by the extension each time it starts a service, so development hosts and portable installs
+  work), else `greenviper126.rojo-hub-<version>` in `~\.vscode\extensions`, `.vscode-insiders`,
+  `.vscode-oss`, `.cursor`, `.windsurf` and `VSCODE_EXTENSIONS`. It never stops or replaces a running
+  service. Nothing found: calls say Rojo-Hub is not installed in VS Code.
+- **While it starts.** `initialize` and `tools/list` are always answered (live, else from
+  `launcher\cache.json`, else a placeholder `rojohub_starting` tool) and the agent gets
+  `notifications/tools/list_changed` once the real list is there or the service's version changed.
+  A `tools/call` is held up to 20 s, then returns an error result saying to call again in a few seconds.
+- **A restart mid-session** (idle exit, an update). A refused connection never reached the service,
+  so the launcher starts it again and sends the request once more. A connection that dies after the
+  request was sent is not repeated, since the call may have happened: the result says the service
+  restarted and to call `status`.
+- It sends the `MCP-Protocol-Version` it negotiated with the agent on every call. It ends when the
+  agent closes stdin and never stops the service.
+- The service copies the launcher there on every start (`// rojo-hub-launcher <version>` first line;
+  never replaces a newer one) because agents' configs cannot point into the extension's versioned
+  folder. The URL form still works for agents that only take a URL, and VS Code's own provider is
+  unchanged.
+
 **Turning it on**: a switch per agent in the panel's **Agent access**, or a checkbox per agent in
 `rojoHub.agents` (the same setting).
 
 | Agent | Default | Turning it on |
 |---|---|---|
 | VS Code agents | on | Registers the server with VS Code; nothing written to disk. |
-| Claude Code | off | `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
-| Codex | off | `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
+| Claude Code | off | `claude mcp add --transport stdio -e ELECTRON_RUN_AS_NODE=1 --scope user rojohub -- <Code.exe> <launcher>` |
+| Codex | off | `codex mcp add rojohub --env ELECTRON_RUN_AS_NODE=1 -- <Code.exe> <launcher>` |
 
-Turning off runs the matching `mcp remove`. Switches reflect each agent's own config, so a
-hand-removed entry shows off:
+(`-e` takes any number of values in `claude`, so options must follow it before the name.) Turning off
+runs the matching `mcp remove`. **Old entries are rewritten:** when the service starts, an old URL
+entry of Rojo-Hub's (*legacy*) and a launcher entry whose program or script is gone (*stale*, e.g.
+VS Code moved) are replaced with the current launcher entry (remove, then add), unless the switch is
+being turned off. Not when `ROJO_HUB_HOME` is set, which only tests do. Switches reflect each agent's
+own config, so a hand-removed entry shows off:
 
 - Claude Code: top-level `mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json` when `CLAUDE_CONFIG_DIR`
   is set **and that file exists**, else `~/.claude.json`;
@@ -724,10 +758,11 @@ hand-removed entry shows off:
 
 | Chip | Meaning |
 |---|---|
-| *Connected* | The config has Rojo-Hub's `rojohub` entry. |
+| *Connected* | The config has Rojo-Hub's launcher entry (`rojohub`, args ending in the launcher script under this hub home, program and script present). |
+| *Updating* | An old URL entry of Rojo-Hub's, or a launcher entry whose program or script is gone; the service rewrites it. The switch still works (off removes it). |
 | *Off* | Installed, no `rojohub` entry. |
 | *Not installed* | Its CLI (`claude`, `codex`) is not on `PATH`; switch greyed out. |
-| *Set up by you* | A `rojohub` entry with another URL. Never changed or removed; switch greyed out. |
+| *Set up by you* | A `rojohub` entry of any other shape (another URL, command or script). Never changed or removed; switch greyed out. |
 | *Can't read config* | The file exists but cannot be read or parsed (maybe mid-write). Left alone and rechecked; never taken for "no entry", so nothing is added, removed or switched off because of it. Switch greyed out. |
 
 While a change applies the chip reads *Working…*; a failure shows under the row.
@@ -741,7 +776,8 @@ made, it asks once: *Let … use Rojo-Hub's tools?* Yes turns them on; No turns 
 agent notice for 14 days.
 
 **Another agent?** Under *Other agents and manual setup*: *Copy commands* (**Rojo-Hub: Copy Agent
-Setup Commands**) copies both commands and a JSON entry for JSON-configured agents; *Copy prompt*
+Setup Commands**) copies the stdio commands and a JSON entry first, then the URL form for agents
+that only take a URL (the service must then be running); *Copy prompt*
 (**Rojo-Hub: Copy Agent Setup Prompt**) copies a paragraph to paste into any agent, which then adds
 Rojo-Hub to its own config.
 
@@ -887,7 +923,7 @@ debugging.
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
-| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (unreadable), last error |
+| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`legacy`/`stale`/`absent`/`other`/`unknown` (unreadable), last error |
 | `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` removes it (installed agents only; never on `other` or `unknown`) |
 | `POST /mcp` | JSON-RPC | The MCP server ([Agents](#10-agents)): one request per POST, plain JSON answer; a notification gets 202 with no body. Other methods on `/mcp`: 405 |
 
@@ -914,6 +950,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
 | `agent-notice.json` | Until when the agent notice stays hidden |
+| `launcher\rojohub-mcp.cjs` | The stdio launcher agents run ([Agents](#10-agents)), copied by every service start; `service.json` is the hint to the newest service script, `cache.json` what the service last said (`instructions`, tool list, version). Deleted on uninstall |
 | `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and every change of what it is told to sync with |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
 | `slots\<id>\borrowed.project.json` | The borrowed-mode copy |
