@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.2
+
+- **Agents can ask for a Studio place another project holds.** The new `request_place` tool asks the
+  user in VS Code to move a shared place to the agent's project. The notification has Move and
+  Decline, and so does the panel's Studio places section, which now also marks shared places.
+- `status`, `serve_here`, `switch` and `ensure` say which project a place is synced with, which other
+  projects list it, and any pending request, on both the asking and the holding side.
+- A place nobody holds is assigned at once. Under yolo mode, a place held by a project no other agent
+  claimed moves at once and is written to the audit log.
+
 ## 0.22.1
 
 - Setup commands run only in worktrees of the project's own repo.
