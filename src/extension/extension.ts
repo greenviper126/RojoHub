@@ -8,6 +8,8 @@ import * as vscode from "vscode";
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
+import { fromEditor, toEditor, type RawCommand } from "../common/setupText";
+import { parseSetupCommands } from "../service/setup";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
@@ -824,6 +826,15 @@ async function addProject(): Promise<void> {
 	Sends the user-level port settings to the service. They are application
 	scoped, so every window sends the same values.
 */
+/** What setupCommands problems were last shown, so an unchanged setting is not nagged about on every push. */
+let shownSetupProblems = "";
+function reportSetupProblems(problems: string[]): void {
+	const signature = problems.join("\n");
+	if (signature === shownSetupProblems) return;
+	shownSetupProblems = signature;
+	if (problems.length > 0) void vscode.window.showWarningMessage(`Rojo-Hub: rojoHub.setupCommands has problems, so those repos run no setup: ${problems.join(" ")}`);
+}
+
 async function pushSettings(): Promise<void> {
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	await client
@@ -834,7 +845,10 @@ async function pushSettings(): Promise<void> {
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
+			// Only the user's own (global) value, never a workspace one: a repo cannot give itself commands to run (spec 012).
+			setupCommands: config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {},
 		})
+		.then((answer) => reportSetupProblems(answer?.setupProblems ?? []))
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
 
@@ -889,10 +903,26 @@ async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefine
 */
 async function createBranch(id: string, name: string, base: string): Promise<void> {
 	try {
-		const result = await panel.progress(async () => {
-			await ensureRunning();
-			return client.createBranch(id, name, base);
-		});
+		// The notification follows the setup commands' progress (spec 012) while the service runs them before the switch.
+		const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Rojo-Hub: new branch ${name}` }, (progress) =>
+			panel.progress(async () => {
+				await ensureRunning();
+				const timer = setInterval(() => {
+					void client
+						.setupJobs()
+						.then((jobs) => {
+							const job = jobs.find((entry) => entry.state === "running");
+							if (job) progress.report({ message: `Setting up ${name}: ${job.text} (${job.step} of ${job.of})` });
+						})
+						.catch(() => undefined);
+				}, 1000);
+				try {
+					return await client.createBranch(id, name, base);
+				} finally {
+					clearInterval(timer);
+				}
+			}),
+		);
 		panel.post({ type: "branchCreated", id });
 		await refresh();
 		void panel.focus(id);
@@ -903,9 +933,53 @@ async function createBranch(id: string, name: string, base: string): Promise<voi
 		);
 		if (choice) await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.path), { forceNewWindow: true });
 	} catch (error) {
-		panel.post({ type: "branchCreated", id, error: error instanceof Error ? error.message : String(error) });
+		const message = error instanceof Error ? error.message : String(error);
+		panel.post({ type: "branchCreated", id, error: message });
 		await refresh();
+		// A failed setup keeps the worktree: offer its folder and the audit log, where every command's output tail is (spec 012).
+		const kept = /^Setup failed at/.test(message) ? /The worktree (.+?) was kept/.exec(message)?.[1] : undefined;
+		if (kept) {
+			const choice = await vscode.window.showErrorMessage(`Rojo-Hub: ${message}`, "Open folder", "Show setup log");
+			if (choice === "Open folder") await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(kept));
+			else if (choice === "Show setup log") await vscode.window.showTextDocument(vscode.Uri.file(join(hubHome, "audit.jsonl")), { preview: true }).then(undefined, () => undefined);
+		}
 	}
+}
+
+/*
+	The card's Setup commands editor (spec 012): the repo's list in the user's
+	global rojoHub.setupCommands as one line per command. Commands the text
+	cannot hold (a folder, a timeout) stay in settings.json and come back as
+	`#fixed N` lines.
+*/
+const setupFixed = new Map<string, RawCommand[]>();
+
+function repoKey(path: string): string {
+	return pathKey(path.replace(/^\\\\\?\\/, ""));
+}
+
+async function openSetupEditor(slot: SlotView): Promise<void> {
+	const global = vscode.workspace.getConfiguration("rojoHub").inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {};
+	const key = Object.keys(global).find((entry) => repoKey(entry) === repoKey(slot.repoPath));
+	const { text, fixed } = toEditor(key === undefined ? [] : global[key]);
+	setupFixed.set(slot.id, fixed);
+	panel.post({ type: "setupEditor", id: slot.id, text });
+}
+
+async function saveSetupCommands(slot: SlotView, text: string): Promise<void> {
+	const merged = fromEditor(text, setupFixed.get(slot.id) ?? []);
+	if ("error" in merged) return void panel.post({ type: "setupEditor", id: slot.id, error: merged.error });
+	const config = vscode.workspace.getConfiguration("rojoHub");
+	const global = { ...(config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {}) };
+	for (const key of Object.keys(global)) if (repoKey(key) === repoKey(slot.repoPath)) delete global[key];
+	// Checked as the service will check it, so a mistake is shown here and not only as a warning later.
+	const check = parseSetupCommands({ [slot.repoPath]: merged.commands });
+	const problems = [...check.problems.values()].flat();
+	if (problems.length > 0) return void panel.post({ type: "setupEditor", id: slot.id, error: problems.join(" ") });
+	if (merged.commands.length > 0) global[slot.repoPath] = merged.commands;
+	await config.update("setupCommands", global, vscode.ConfigurationTarget.Global);
+	panel.post({ type: "setupEditor", id: slot.id, saved: true });
+	void vscode.window.showInformationMessage("Rojo-Hub: saved to your user settings (rojoHub.setupCommands). They run when Rojo-Hub makes a worktree for this project.");
 }
 
 const BUILD_FOLDER = "rojoHub.buildFolder";
@@ -1112,6 +1186,12 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			return createBranch(message.id, message.name, message.base);
 		case "build":
 			if (slot) await buildPlace(slot);
+			return;
+		case "openSetupEditor":
+			if (slot) await openSetupEditor(slot);
+			return;
+		case "setSetupCommands":
+			if (slot) await saveSetupCommands(slot, message.text);
 			return;
 		case "sourcemap": {
 			const written = await act(`slot:${message.id}`, () => client.sourcemap(message.id));
