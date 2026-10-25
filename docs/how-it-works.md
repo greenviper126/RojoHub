@@ -791,6 +791,20 @@ with a Studio tool picks the right Studio. The server's instructions also say Ro
 syncs (change files, not Studio), a switch reaches Studio within about a second, and agents cannot
 choose which project a place syncs with.
 
+**Structured answers (spec 011).** `status`, `serve_here` and `switch` also return their facts as data,
+in the result's `structuredContent`, with an `outputSchema` in `tools/list`, so an agent reads a place
+ID, the claim's expiry or the served commit without parsing sentences. The text beside it is unchanged.
+Only clients that send the `MCP-Protocol-Version` header with 2025-06-18 or later get either; any other
+client gets exactly the text-only answers it always did. Each project is one *ProjectState*: `id`,
+`name`, `port`, `repoPath`, `projectFile`; `rojo` (`state`, `error`, `sessionId`, `connections`);
+`served` (`kind`, `label`, `path`, `branch`, `commit`: the full hash of the served worktree's HEAD or
+branch ref, `null` when git does not answer in 2 s); `claim` (`holder`, `until` as ISO 8601 UTC,
+`secondsLeft`, `yours`) or `null`; `places` (synced: `placeId`, `name`, `pluginVersion`, `reason`,
+`saved`; an unsaved place has ID 0), `connecting`, `listedPlaces`, `sourcemap`, `warnings`, and
+`yourWorktreeServed` (`null` without a `path`). `status` returns `projects`, `groups`, `studioPlaces`
+and `yourProject`; `serve_here` and `switch` return `project`, `switched` (false when it already served
+the target), `problems` (Rojo's error lines and the card's warnings) and `unapplied`.
+
 **Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them, so
 `serve_here` and `switch` claim the project for their target (worktree or branch) for 15 minutes.
 While another target holds it, they refuse, naming holder and expiry (`force` overrides, only when you

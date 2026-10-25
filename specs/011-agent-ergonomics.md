@@ -158,6 +158,11 @@ Install and dependency checks (item 10's Packages, node_modules) are not part of
 
 ### 3. Structured answers (items 7, 16)
 
+**Built** for `status`, `serve_here` and `switch` (`src/service/mcp.ts`; `ensure` joins when it is
+built: it reuses `projectState` and the `{ text, data }` answer). Open questions 6 and 7 took their
+defaults: no `dirty` flag; the claim carries `until` and `secondsLeft`. `listedPlaces[].name` is
+nullable (a name is not always known), and `claim` is `anyOf` null or an object in the schema.
+
 The repo has no MCP SDK (`package.json` lists none, and `node_modules` has none): `mcp.ts` is a
 hand-written JSON-RPC handler. So `structuredContent` and `outputSchema` are written by hand, which
 the protocol allows from 2025-06-18; `PROTOCOL_VERSIONS` already includes it. The text stays exactly
