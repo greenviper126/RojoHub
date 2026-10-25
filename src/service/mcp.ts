@@ -973,109 +973,125 @@ export class Mcp {
 		}
 		const fresh = () => this.hub.view(this.hub.registry.get(slot.id));
 		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since);
+		const raw = args.place === undefined || args.place === null || args.place === "" ? null : typeof args.place === "string" ? args.place.trim() : args.place;
+		const wantedPlace = raw === null ? null : typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
+		if (wantedPlace !== null && (!Number.isSafeInteger(wantedPlace) || wantedPlace <= 0)) return fail("no_listed_places", `place must be a positive integer place ID (a number or digits), not ${JSON.stringify(args.place)}. Call ensure again with place as one of the project's places.`);
 		const placeCount = (view: SlotView) => (view.state === "running" ? (view.places ?? []).length : 0);
 
-		// 2. start
-		if (slot.state === "stopped" || slot.state === "error" || slot.state === "offline") {
-			try {
-				await this.hub.start(slot.id);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				steps.push({ step: "start", outcome: "failed", detail: message });
-				return fail("start_failed", `${slot.projectName} did not start: ${message.split("\n")[0]} Nothing was served. Fix that, then call ensure again.`);
-			}
-			const started = await this.settled(slot);
-			if (started.state === "error") {
-				const lines = this.problemLines(started).join(" ");
-				steps.push({ step: "start", outcome: "failed", detail: lines });
-				return fail("start_failed", `${started.projectName} is in error after starting: ${lines || "see log"} Nothing was served. Fix that, then call ensure again.`);
-			}
-			steps.push({ step: "start", outcome: "done", detail: `started ${started.projectName} on port ${started.port}` });
-			slot = started;
-		} else {
-			steps.push({ step: "start", outcome: "already", detail: `${slot.projectName} is ${slot.state}` });
-			if (slot.state === "starting") slot = await this.settled(slot);
-		}
-
-		// 3. claim and serve
-		const beforeKey = claimKey(slot.target);
-		let now: SlotView;
+		// An error nothing above turned into an answer still keeps the steps done.
+		let stage: EnsureStep["step"] = "start";
+		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", serve: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
 		try {
-			now = await this.take(slot, { kind: "worktree", path: root! }, basename(root!), args);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			if (!(error instanceof Refusal) && !(error instanceof Conflict) && !(error instanceof NotFound)) throw error;
-			steps.push({ step: "serve", outcome: "failed", detail: message });
-			return fail(error instanceof Refusal ? "claimed" : "rojo_error", `${message} ${error instanceof Refusal ? "The project was not switched." : "Nothing was switched."}`);
-		}
-		const switched = beforeKey !== claimKey(now.target);
-		now = await this.settled(now);
-		steps.push({ step: "serve", outcome: switched ? "done" : "already", detail: switched ? `${now.projectName} now serves ${root}` : `${now.projectName} already served ${root}; claim renewed` });
-		if (now.error || now.state === "error") {
-			const lines = this.problemLines(now).join(" ");
-			steps[steps.length - 1].detail += `; Rojo reports: ${lines}`;
-			return fail("rojo_error", `The switch was made, but Rojo reports: ${lines} Fix the files in your worktree (log shows more); do not restart the project.`);
-		}
-
-		// 4. open_place
-		const listed = now.listedPlaces ?? [];
-		const wanted = args.place === undefined || args.place === null || args.place === "" ? null : Number(args.place);
-		const connecting = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
-		const hadPlace = placeCount(now) > 0;
-		if (hadPlace) {
-			steps.push({ step: "open_place", outcome: "already", detail: `${this.placeList(now.places ?? [])} synced` });
-		} else if (connecting.length > 0) {
-			steps.push({ step: "open_place", outcome: "skipped", detail: `${this.placeList(connecting)} already connecting` });
-		} else {
-			const chosen = wanted === null ? (listed.length === 1 ? listed[0] : null) : (listed.find((place) => place.placeId === wanted) ?? null);
-			const openOnes = wanted === null ? listed.filter((place) => place.open) : chosen?.open ? [chosen] : [];
-			if (listed.length === 0) {
-				steps.push({ step: "open_place", outcome: "skipped", detail: "the project file names no places" });
-				return fail("no_listed_places", `${now.projectName}'s project file names no places (servePlaceIds, placeId), so none can be opened. Ask the user to open the place in Studio, then call wait_for_studio.`);
-			}
-			if (wanted !== null && !chosen) {
-				steps.push({ step: "open_place", outcome: "skipped", detail: `place ${wanted} is not listed` });
-				return fail("no_listed_places", `${wanted} is not one of ${now.projectName}'s places: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
-			}
-			if (openOnes.length > 0) {
-				steps.push({ step: "open_place", outcome: "already", detail: `${this.listedText(openOnes)} already open in Studio` });
-			} else if (!this.hub.openPlacesOn) {
-				steps.push({ step: "open_place", outcome: "skipped", detail: "rojoHub.openPlaces is off" });
-				return fail("open_places_off", `${OFF_MESSAGE} The project is started and serves your worktree; ask the user to open one of its places in Studio (${this.listedText(listed)}), then call wait_for_studio.`);
-			} else if (!chosen) {
-				steps.push({ step: "open_place", outcome: "skipped", detail: "several places and none chosen" });
-				return fail("several_places", `${now.projectName} has several places and none was opened: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
-			} else {
+			// 2. start
+			stage = "start";
+			if (slot.state === "stopped" || slot.state === "error" || slot.state === "offline") {
 				try {
-					const opened = await this.hub.openPlace(now.id, chosen.placeId);
-					steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
+					await this.hub.start(slot.id);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					steps.push({ step: "open_place", outcome: "failed", detail: message });
-					const open = listed.filter((place) => place.open);
-					return fail("open_failed", `Opening place ${chosen.placeId} failed: ${message.split("\n")[0]} Places open already: ${open.length ? this.listedText(open) : "none"}. Ask the user to open it in Studio.`);
+					steps.push({ step: "start", outcome: "failed", detail: message });
+					return fail("start_failed", `${slot.projectName} did not start: ${message.split("\n")[0]} Nothing was served. Fix that, then call ensure again.`);
+				}
+				const started = await this.settled(slot);
+				if (started.state === "error") {
+					const lines = this.problemLines(started).join(" ");
+					steps.push({ step: "start", outcome: "failed", detail: lines });
+					return fail("start_failed", `${started.projectName} is in error after starting: ${lines || "see log"} Nothing was served. Fix that, then call ensure again.`);
+				}
+				steps.push({ step: "start", outcome: "done", detail: `started ${started.projectName} on port ${started.port}` });
+				slot = started;
+			} else {
+				steps.push({ step: "start", outcome: "already", detail: `${slot.projectName} is ${slot.state}` });
+				if (slot.state === "starting") slot = await this.settled(slot);
+			}
+
+			// 3. claim and serve
+			stage = "serve";
+			const beforeKey = claimKey(slot.target);
+			let now: SlotView;
+			try {
+				now = await this.take(slot, { kind: "worktree", path: root! }, basename(root!), args);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!(error instanceof Refusal) && !(error instanceof Conflict) && !(error instanceof NotFound)) throw error;
+				steps.push({ step: "serve", outcome: "failed", detail: message });
+				return fail(error instanceof Refusal ? "claimed" : "rojo_error", `${message} ${error instanceof Refusal ? "The project was not switched." : "Nothing was switched."}`);
+			}
+			const switched = beforeKey !== claimKey(now.target);
+			now = await this.settled(now);
+			steps.push({ step: "serve", outcome: switched ? "done" : "already", detail: switched ? `${now.projectName} now serves ${root}` : `${now.projectName} already served ${root}; claim renewed` });
+			if (now.error || now.state === "error") {
+				const lines = this.problemLines(now).join(" ");
+				steps[steps.length - 1].detail += `; Rojo reports: ${lines}`;
+				return fail("rojo_error", `The switch was made, but Rojo reports: ${lines} Fix the files in your worktree (log shows more); do not restart the project.`);
+			}
+
+			// 4. open_place
+			stage = "open_place";
+			const listed = now.listedPlaces ?? [];
+			const wanted = args.place === undefined || args.place === null || args.place === "" ? null : wantedPlace;
+			const connecting = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+			const hadPlace = placeCount(now) > 0;
+			if (hadPlace) {
+				steps.push({ step: "open_place", outcome: "already", detail: `${this.placeList(now.places ?? [])} synced` });
+			} else if (connecting.length > 0) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: `${this.placeList(connecting)} already connecting` });
+			} else {
+				const chosen = wanted === null ? (listed.length === 1 ? listed[0] : null) : (listed.find((place) => place.placeId === wanted) ?? null);
+				const openOnes = wanted === null ? listed.filter((place) => place.open) : chosen?.open ? [chosen] : [];
+				if (listed.length === 0) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "the project file names no places" });
+					return fail("no_listed_places", `${now.projectName}'s project file names no places (servePlaceIds, placeId), so none can be opened. Ask the user to open the place in Studio, then call wait_for_studio.`);
+				}
+				if (wanted !== null && !chosen) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: `place ${wanted} is not listed` });
+					return fail("no_listed_places", `${wanted} is not one of ${now.projectName}'s places: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+				}
+				if (openOnes.length > 0) {
+					steps.push({ step: "open_place", outcome: "already", detail: `${this.listedText(openOnes)} already open in Studio` });
+				} else if (!this.hub.openPlacesOn) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "rojoHub.openPlaces is off" });
+					return fail("open_places_off", `${OFF_MESSAGE} The project is started and serves your worktree; ask the user to open one of its places in Studio (${this.listedText(listed)}), then call wait_for_studio.`);
+				} else if (!chosen) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "several places and none chosen" });
+					return fail("several_places", `${now.projectName} has several places and none was opened: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+				} else {
+					try {
+						const opened = await this.hub.openPlace(now.id, chosen.placeId);
+						steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						steps.push({ step: "open_place", outcome: "failed", detail: message });
+						const open = listed.filter((place) => place.open);
+						return fail("open_failed", `Opening place ${chosen.placeId} failed: ${message.split("\n")[0]} Places open already: ${open.length ? this.listedText(open) : "none"}. Ask the user to open it in Studio.`);
+					}
 				}
 			}
-		}
 
-		// 5. wait_for_studio
-		if (hadPlace) {
-			steps.push({ step: "wait_for_studio", outcome: "already", detail: "a place is synced" });
-		} else {
-			const waited = await this.awaitStudio(now, Math.max(5, clamp(args.timeout, 60, 300)));
-			now = waited.slot;
-			if (waited.outcome === "synced") {
-				steps.push({ step: "wait_for_studio", outcome: "done", detail: `${this.placeList(now.places ?? [])} synced` });
+			// 5. wait_for_studio
+			stage = "wait_for_studio";
+			if (hadPlace) {
+				steps.push({ step: "wait_for_studio", outcome: "already", detail: "a place is synced" });
 			} else {
-				const connectingNow = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
-				const detail = waited.outcome === "stopped" ? "the project stopped" : waited.outcome === "confirming" ? "a place waits for the user to accept the first sync" : `nothing synced in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}`;
-				steps.push({ step: "wait_for_studio", outcome: "failed", detail });
-				if (waited.outcome === "stopped") return fail("stopped", `${now.projectName} was stopped while waiting, by someone else; the files were switched to your worktree. Start it again with ensure.`);
-				if (waited.outcome === "confirming") return fail("studio_confirming", `A Studio place is waiting for the user to accept its first sync with ${now.projectName} (Rojo asks once per place and project). Ask the user to accept it in Studio, then call wait_for_studio.`);
-				return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
+				const waited = await this.awaitStudio(now, Math.max(5, clamp(args.timeout, 60, 300)));
+				now = waited.slot;
+				if (waited.outcome === "synced") {
+					steps.push({ step: "wait_for_studio", outcome: "done", detail: `${this.placeList(now.places ?? [])} synced` });
+				} else {
+					const connectingNow = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+					const detail = waited.outcome === "stopped" ? "the project stopped" : waited.outcome === "confirming" ? "a place waits for the user to accept the first sync" : `nothing synced in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}`;
+					steps.push({ step: "wait_for_studio", outcome: "failed", detail });
+					if (waited.outcome === "stopped") return fail("stopped", `${now.projectName} was stopped while waiting, by someone else; the files were switched to your worktree. Start it again with ensure.`);
+					if (waited.outcome === "confirming") return fail("studio_confirming", `A Studio place is waiting for the user to accept its first sync with ${now.projectName} (Rojo asks once per place and project). Ask the user to accept it in Studio, then call wait_for_studio.`);
+					return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
+				}
 			}
+			return this.ensureAnswer(fresh(), root, steps, null, since);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			steps.push({ step: stage, outcome: "failed", detail: message });
+			return fail(failed[stage], `${message.split("\n")[0]} (step ${stage}); the steps above were done.`);
 		}
-		return this.ensureAnswer(fresh(), root, steps, null, since);
 	}
 
 	/** The answer of ensure: the steps, then why it stopped or how Studio looks. ready: running, serving this worktree, a place synced. */

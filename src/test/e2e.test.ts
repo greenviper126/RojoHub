@@ -522,6 +522,9 @@ test("ensure over MCP (spec 011): starts a stopped project and serves the worktr
 	assert.equal((await view()).sessionId, sessionId, "no restart");
 	assert.ok((await tool("ensure", { path: alpha })).isError, "a failure is an error result");
 	assert.equal((await structured("ensure", { path: dir, project: "nothing-like-this" })).failure.reason, "no_project");
+	const badPlace = await structured("ensure", { path: alpha, place: "abc" });
+	assert.equal(badPlace.failure.reason, "no_listed_places");
+	assert.match(badPlace.failure.message, /positive integer/);
 
 	await call("DELETE", `/slots/${slot.id}`);
 });
@@ -600,6 +603,7 @@ test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, bran
 	const behind = await ok("new_branch", { path: dir, name: "from-remote", base: "main" });
 	assert.match(behind, /Made branch from-remote from origin\/main/);
 	assert.equal(gitIn(dir, "rev-parse", "from-remote").trim(), remoteTip, "started from the remote commit");
+	assert.throws(() => gitIn(dir, "config", "--get", "branch.from-remote.merge"), "a branch started from a remote ref does not track it (the key is unset)");
 	await tool("release", { project: name, force: true });
 	// local main now diverges from the remote's
 	write(join(dir, "src", "Local.server.luau"), 'print("local")\n');

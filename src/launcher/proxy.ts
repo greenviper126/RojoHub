@@ -62,7 +62,7 @@ interface Cache {
 }
 
 type Down = "starting" | "noscript" | "otheruser";
-type Post = { kind: "ok"; status: number; body: Json | null } | { kind: "refused" } | { kind: "reset" };
+type Post = { kind: "ok"; status: number; body: Json | null } | { kind: "refused" } | { kind: "reset" } | { kind: "http"; status: number; text: string };
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
@@ -86,7 +86,6 @@ export class Proxy {
 	/** The agent was given a stand-in tools list (cache or placeholder) and must be told when the real one is there. */
 	private toolsStale = false;
 	private starting: Promise<Down | "up"> | null = null;
-	private noScript = false;
 	private notifyAfter = false;
 	private readonly pending = new Set<Promise<void>>();
 
@@ -167,7 +166,8 @@ export class Proxy {
 		this.options.write({ jsonrpc: "2.0", id, result });
 	}
 
-	private failure(outcome: { kind: "down"; why: Down } | { kind: "reset" }): string {
+	private failure(outcome: { kind: "down"; why: Down } | { kind: "reset" } | { kind: "http"; status: number; text: string }): string {
+		if (outcome.kind === "http") return `Rojo-Hub's service answered HTTP ${outcome.status}: ${outcome.text.trim().split(/[\r\n]/)[0].slice(0, 300)}`;
 		if (outcome.kind === "reset") return "Rojo-Hub's service restarted while this call ran; call status to see whether it took effect.";
 		if (outcome.why === "noscript") return "Rojo-Hub is not installed in VS Code (no dist/service.js found). Install or reinstall the extension.";
 		if (outcome.why === "otheruser") return `Port ${this.options.port} is used by another Windows user's Rojo-Hub. Only one signed-in user can run Rojo-Hub at a time.`;
@@ -180,7 +180,7 @@ export class Proxy {
 		service, so that request is sent once more; a connection that dies
 		after it was sent is not, since the call may have happened.
 	*/
-	private async forward(message: Json): Promise<{ kind: "answer"; body: Json } | { kind: "down"; why: Down } | { kind: "reset" }> {
+	private async forward(message: Json): Promise<{ kind: "answer"; body: Json } | { kind: "down"; why: Down } | { kind: "reset" } | { kind: "http"; status: number; text: string }> {
 		const deadline = Date.now() + this.holdMs;
 		for (let attempt = 0; attempt < 2; attempt++) {
 			if (!this.verified) {
@@ -194,6 +194,7 @@ export class Proxy {
 			}
 			this.verified = false;
 			if (posted.kind === "reset") return { kind: "reset" };
+			if (posted.kind === "http") return posted;
 		}
 		return { kind: "down", why: "starting" };
 	}
@@ -203,17 +204,14 @@ export class Proxy {
 		const first = await this.health();
 		if (first === "up") return this.up();
 		if (first === "otheruser") return "otheruser";
-		if (this.noScript) return "noscript";
 		this.starting ??= this.start().finally(() => (this.starting = null));
 		const result = await Promise.race([this.starting, sleep(Math.max(0, deadline - Date.now())).then(() => "starting" as const)]);
 		return result === "up" ? this.up() : result;
 	}
 
 	private async start(): Promise<Down | "up"> {
-		if (!this.options.startService()) {
-			this.noScript = true;
-			return "noscript";
-		}
+		// Looked for on every attempt, so installing the extension mid-session works.
+		if (!this.options.startService()) return "noscript";
 		// Polled for as long as a start can take; every call waiting on it gives up at its own deadline.
 		for (let i = 0; i < 400; i++) {
 			const state = await this.health();
@@ -284,13 +282,14 @@ export class Proxy {
 		if (this.protocol && message.method !== "initialize") headers["mcp-protocol-version"] = this.protocol;
 		const body = JSON.stringify(message);
 		headers["content-length"] = String(Buffer.byteLength(body));
-		const answer = await this.send("POST", "/mcp", body, headers, 10 * 60_000);
+		const answer = await this.send("POST", "/mcp", body, headers, 30 * 60_000); // above the longest tool (ensure can wait 600 s, run 300 s and start)
 		if (typeof answer === "string") return { kind: answer };
+		if (answer.status >= 500) return { kind: "http", status: answer.status, text: answer.text };
 		if (answer.status === 202 || answer.text === "") return { kind: "ok", status: answer.status, body: null };
 		try {
 			return { kind: "ok", status: answer.status, body: JSON.parse(answer.text) as Json };
 		} catch {
-			return { kind: "reset" };
+			return { kind: "http", status: answer.status, text: answer.text };
 		}
 	}
 

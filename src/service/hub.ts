@@ -880,7 +880,8 @@ export class Hub {
 			path = join(parent, clean.replace(/[\\/]+/g, "-"));
 			if (existsSync(path)) throw new Conflict(`${path} already exists`);
 			mkdirSync(parent, { recursive: true });
-			await git(slot.repoPath, ["worktree", "add", "-b", clean, path, from]);
+			// --no-track: a branch started from a remote ref (origin/main) would otherwise track it, and a plain git push would aim at main.
+			await git(slot.repoPath, ["worktree", "add", "--no-track", "-b", clean, path, from]);
 			via = "git";
 		}
 		void this.targetCache.refresh(slot.repoPath).catch(() => undefined);

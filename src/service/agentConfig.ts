@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -7,7 +7,7 @@ import { parse as parseToml } from "smol-toml";
 
 import { AGENT_CLIS, SERVER_NAME, type Launch } from "../common/agents";
 import { MCP_URL, type AgentId, type AgentStatus, type AgentWishes } from "../common/api";
-import { hubHome, launcherScript } from "../common/launcher";
+import { hubHome, launcherDir, launcherScript } from "../common/launcher";
 import { pathKey } from "../common/paths";
 
 /*
@@ -154,6 +154,31 @@ function onPath(cli: string): Promise<boolean> {
 }
 
 /*
+	Agents whose entry was removed for a rewrite and could not be added back.
+	Kept in the hub home, so the next reconcile adds it again instead of seeing
+	an absent entry with no wish.
+*/
+const pendingFile = () => join(launcherDir(hubHome()), "pending-add.json");
+
+function readPending(): AgentId[] {
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(pendingFile(), "utf8"));
+		return Array.isArray(parsed) ? parsed.filter((id): id is AgentId => AGENTS.some((agent) => agent.id === id)) : [];
+	} catch {
+		return [];
+	}
+}
+
+function writePending(ids: AgentId[]): void {
+	try {
+		mkdirSync(launcherDir(hubHome()), { recursive: true });
+		writeFileSync(pendingFile(), JSON.stringify(ids));
+	} catch {
+		// the marker is a safety net; the error is reported either way
+	}
+}
+
+/*
 	The service's registrar: status for the panel, and wishes from VS Code's
 	setting applied one at a time, so windows that send them at once never run
 	two CLIs against the same config file.
@@ -206,8 +231,17 @@ export class AgentRegistrar {
 	private queued(wishes: AgentWishes): Promise<AgentStatus[]> {
 		const work = async () => {
 			await this.detect();
+			const pending = new Set(readPending());
+			const setPending = (id: AgentId, on: boolean) => {
+				if (pending.has(id) === on) return;
+				if (on) pending.add(id);
+				else pending.delete(id);
+				writePending([...pending]);
+			};
 			for (const agent of AGENTS) {
-				const wish = wishes[agent.id];
+				// An entry taken out for a rewrite whose add failed is added again, unless the wish is to have it gone.
+				const wish = wishes[agent.id] ?? (pending.has(agent.id) && agentState(agent) === "absent" ? true : undefined);
+				if (wishes[agent.id] === false) setPending(agent.id, false);
 				const state = agentState(agent);
 				const outdated = state === "legacy" || state === "stale";
 				if (wish === undefined && !outdated) continue;
@@ -222,8 +256,19 @@ export class AgentRegistrar {
 					else if (outdated) {
 						// Remove, then add: both CLIs refuse to add a name that exists.
 						await this.run(agent.cli, agent.remove);
-						await this.run(agent.cli, agent.add(this.launch()));
+						try {
+							await this.run(agent.cli, agent.add(this.launch()));
+						} catch {
+							try {
+								await this.run(agent.cli, agent.add(this.launch()));
+							} catch (error) {
+								// Removed but not added: remember it, so the next reconcile adds it again.
+								setPending(agent.id, true);
+								throw error;
+							}
+						}
 					} else continue;
+					setPending(agent.id, false);
 					this.errors.delete(agent.id);
 				} catch (error) {
 					this.errors.set(agent.id, error instanceof Error ? error.message : String(error));

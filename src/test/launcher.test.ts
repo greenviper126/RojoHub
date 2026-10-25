@@ -157,6 +157,26 @@ test("launcher: the registrar rewrites legacy and stale entries with remove then
 		writeFileSync(join(home, ".claude.json"), "{}");
 		await registrar().apply({ claudeCode: true });
 		assert.deepEqual(calls.splice(0), [claudeAdd], "turning it on adds the launcher entry");
+
+		// A rewrite whose add fails (twice) loses the entry; the next reconcile adds it again.
+		claudeJson({ type: "http", url: MCP_URL });
+		let failAdds = 2;
+		const flaky = new AgentRegistrar(
+			async (cli, args) => {
+				calls.push(`${cli} ${args.join(" ")}`);
+				if (args[1] === "add" && failAdds-- > 0) throw new Error("add failed");
+			},
+			() => launch,
+			async () => true,
+		);
+		const failed = await flaky.reconcile();
+		assert.deepEqual(calls.splice(0), [claudeRemove, claudeAdd, claudeAdd], "the add is tried twice");
+		assert.match(failed.find((agent) => agent.id === "claudeCode")!.error ?? "", /add failed/);
+		writeFileSync(join(home, ".claude.json"), "{}"); // what the remove left behind
+		await registrar().reconcile();
+		assert.deepEqual(calls.splice(0), [claudeAdd], "the next reconcile adds the removed entry back");
+		await registrar().reconcile();
+		assert.deepEqual(calls.splice(0), [], "and only once");
 	} finally {
 		for (const key of keys) {
 			if (saved[key] === undefined) delete process.env[key];
@@ -202,7 +222,7 @@ class Fake {
 	home: string;
 	seen: Seen[] = [];
 	/** What to do with a tools/call: answer, or drop the connection after reading it. */
-	onCall: "answer" | "reset" = "answer";
+	onCall: "answer" | "reset" | "http500" = "answer";
 	private server: Server | null = null;
 
 	constructor(
@@ -228,6 +248,10 @@ class Fake {
 					return response.end();
 				}
 				if (body.method === "tools/call" && this.onCall === "reset") return request.socket.destroy();
+				if (body.method === "tools/call" && this.onCall === "http500") {
+					response.writeHead(500, { "content-type": "text/plain" });
+					return response.end("boom");
+				}
 				const result =
 					body.method === "initialize"
 						? { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rojo-hub", version: this.version }, instructions: "Use serve_here." }
@@ -435,6 +459,22 @@ test("launcher proxy: a connection that dies after the request was sent is not r
 		assert.match(result.content[0].text, /restarted while this call ran; call status to see whether it took effect/);
 		assert.equal(fake.seen.filter((seen) => seen.body.method === "tools/call").length, 1, "the call was not sent again");
 		assert.equal(starts(), 0);
+	} finally {
+		await fake.close();
+	}
+});
+
+test("launcher proxy: a non-JSON or 5xx answer is an error naming the status, not a restart", async () => {
+	const { fake, out, send } = await rig({ startService: (f) => f.listen() });
+	await fake.listen();
+	try {
+		await send(initialize);
+		fake.onCall = "http500";
+		await send(call(2, "switch"));
+		const result = out[out.length - 1].result as { isError: boolean; content: { text: string }[] };
+		assert.equal(result.isError, true);
+		assert.match(result.content[0].text, /HTTP 500: boom/);
+		assert.doesNotMatch(result.content[0].text, /restarted/);
 	} finally {
 		await fake.close();
 	}
