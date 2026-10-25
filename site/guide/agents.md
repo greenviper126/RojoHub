@@ -4,6 +4,10 @@ Rojo-Hub is meant to be driven by agents. Claude Code, Codex, Copilot and other 
 through an MCP server the background service runs at `http://127.0.0.1:34870/mcp`. The server tells
 the agent what it is for when it connects; no extra files or prompts are needed.
 
+Claude Code and Codex are pointed at a small launcher rather than at that address. It starts the
+service when nothing is running, so an agent session begun with VS Code closed still gets Rojo-Hub,
+and it keeps the connection alive across service restarts and updates.
+
 ## Turn it on
 
 ![The Agent access section](/images/panel-agent-access.png){.panel-shot}
@@ -13,12 +17,17 @@ Switch agents on in the panel's **Agent access** section (or `rojoHub.agents`).
 | Agent | Default | Turning it on runs |
 |---|---|---|
 | VS Code agents | on | nothing; registered with VS Code |
-| Claude Code | off | `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
-| Codex | off | `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
+| Claude Code | off | `claude mcp add --transport stdio -e ELECTRON_RUN_AS_NODE=1 --scope user rojohub -- <Code.exe> <launcher>` |
+| Codex | off | `codex mcp add rojohub --env ELECTRON_RUN_AS_NODE=1 -- <Code.exe> <launcher>` |
 
-Other agents: *Copy commands* or *Copy prompt* under *Other agents and manual setup*.
+`<Code.exe>` is VS Code's own program, run as Node, so nothing needs installing; `<launcher>` is
+`%LOCALAPPDATA%\RojoHub\launcher\rojohub-mcp.cjs`. Rojo-Hub fills both in. An older entry that
+points at the web address is rewritten to the launcher automatically.
 
-The switches follow each agent's own config. *Set up by you* means a `rojohub` entry with another URL
+Other agents: *Copy commands* or *Copy prompt* under *Other agents and manual setup*. The copied
+commands also include the web-address form, for agents that only take a URL.
+
+The switches follow each agent's own config. *Set up by you* means a `rojohub` entry of another shape
 exists; Rojo-Hub leaves it alone.
 
 ## What agents can do

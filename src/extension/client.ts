@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { writeHint } from "../common/launcher";
 import { pathKey } from "../common/paths";
 import { compareVersions } from "../common/version";
 import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type PlaceOpened, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
@@ -80,6 +81,8 @@ export async function ensureService(serviceScript: string): Promise<Health> {
 		await call("POST", "/shutdown", { stopServing: false }).catch(() => undefined);
 		for (let i = 0; i < 40 && (await anyHealth()); i++) await sleep(100);
 	}
+	// So the stdio launcher (spec 011) can start this very script when a session begins while no window is open.
+	writeHint(expectedHome(), SERVICE_VERSION, serviceScript);
 	const child = spawn(process.execPath, [serviceScript], {
 		detached: true,
 		stdio: "ignore",

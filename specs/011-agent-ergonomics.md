@@ -23,6 +23,20 @@ Asked for by Viper's agents in the 2026-10-24 feedback session. Builds on 004 (a
 
 ### 1. A stdio launcher (items 1, 17)
 
+**Built** (open questions 1 to 3 at their defaults). Measured: a script run as
+`Code.exe <script>` with `ELECTRON_RUN_AS_NODE=1` and `windowsHide`, spawned from node, speaks JSON
+lines over stdin/stdout on Windows (it reported Electron 43.7 / Node 24.21). Changes from this text:
+`claude mcp add -e` takes any number of values, so with the name right after it the CLI fails
+("missing required argument"); the entry is added as `claude mcp add --transport stdio -e
+ELECTRON_RUN_AS_NODE=1 --scope user rojohub -- <Code.exe> <launcher>` (measured against a throwaway
+config; Codex as written). The shell that starts the agent CLIs on Windows quotes arguments with
+spaces (`Microsoft VS Code`). The launcher opens a new connection per request (no keep-alive pool): a
+pooled connection to a service that exited fails with a reset, which looks like a call that died
+halfway, and killing the service between two calls must be retried. The service rewrites legacy and
+stale entries at start except when `ROJO_HUB_HOME` is set (tests), so a test service never touches a
+real agent config; the launcher announces `tools: { listChanged: true }` itself, whatever the service
+says. The unit tests are in `src/test/launcher.test.ts`.
+
 Agents point at a small program instead of the URL. It speaks MCP over stdio to the agent, and
 forwards each message to the service's `/mcp`, starting the service first when nothing answers. The
 service stays as it is (streamable HTTP, JSON answers, no sessions); `/mcp` is unchanged, so VS Code's

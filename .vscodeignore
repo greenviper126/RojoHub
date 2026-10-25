@@ -2,6 +2,7 @@
 !dist/extension.js
 !dist/service.js
 !dist/uninstall.js
+!dist/mcp-stdio.js
 !dist/webview.js
 !dist/RojoHub.rbxm
 !dist/codicons/**
