@@ -23,6 +23,7 @@ import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
 import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
 import { Hub } from "../service/hub";
+import { SourcemapWatcher } from "../service/sourcemap";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
 import { countConnections, decodeInfo, findRojo } from "../service/rojo";
@@ -976,4 +977,23 @@ test("closing places: only a Studio whose command line names the place, asked (n
 	await sleep(1000);
 	assert.match(places.listed([222])[0].error ?? "", /did not close/);
 	assert.equal(fake.calls.launched.length, 1);
+});
+
+test("SourcemapWatcher pauses after repeated crashes, then retries, and stays stopped once stopped", async () => {
+	// node run with rojo's arguments exits at once with an error: a rojo that crashes on start
+	const watcher = new SourcemapWatcher(process.execPath, tmpdir(), "x.project.json", { restartMs: 5, pauseMs: 500, maxCrashes: 3 });
+	const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+	const until = async (check: () => boolean) => {
+		for (let i = 0; i < 200 && !check(); i++) await sleep(20);
+		assert.ok(check(), `timed out: ${watcher.status.detail}`);
+	};
+	await until(() => watcher.status.state === "error" && /crashed 3 times in a minute, retrying in 1 s/.test(watcher.status.detail));
+	assert.match(watcher.status.detail, /: \S/, "keeps the last error line");
+	// the pause ends and a fresh budget starts: back to restarting, then paused again
+	await until(() => watcher.status.state === "watching");
+	await until(() => watcher.status.state === "error");
+	watcher.stop();
+	const stoppedAt = watcher.status.detail;
+	await sleep(700);
+	assert.equal(watcher.status.detail, stoppedAt, "no restart after stop");
 });

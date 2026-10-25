@@ -8,6 +8,14 @@ import { findRojo } from "./rojo";
 
 const RESTART_MS = 1000;
 const MAX_CRASHES_PER_MINUTE = 5;
+const PAUSE_MS = 30000;
+
+/** The delays and the crash budget; only tests change them. */
+export interface SourcemapTiming {
+	restartMs: number;
+	pauseMs: number;
+	maxCrashes: number;
+}
 
 /*
 	The arguments luau-lsp's VS Code extension uses (sourcemap <project>
@@ -59,7 +67,8 @@ export async function stopStrayWatchers(tree: string): Promise<void> {
 	Keeps one worktree's sourcemap.json current with `rojo sourcemap --watch`.
 	Rojo 7.7's watcher panics when a watched folder is deleted (rojo-rbx/rojo#1305),
 	as serve does; a sourcemap is no Studio session, so it is started again after
-	a second, and given up on after five crashes in a minute.
+	a second. After five crashes in a minute it pauses for 30 s and then tries
+	again with a fresh budget, for as long as the slot serves.
 */
 export class SourcemapWatcher {
 	private child: ChildProcess | null = null;
@@ -72,6 +81,7 @@ export class SourcemapWatcher {
 		private readonly binary: string,
 		readonly tree: string,
 		private readonly projectFile: string,
+		private readonly timing: SourcemapTiming = { restartMs: RESTART_MS, pauseMs: PAUSE_MS, maxCrashes: MAX_CRASHES_PER_MINUTE },
 	) {
 		this.status = { state: "watching", detail: `Kept up to date in ${basename(tree)}` };
 		this.launch();
@@ -79,6 +89,7 @@ export class SourcemapWatcher {
 
 	private launch(): void {
 		if (this.stopped) return;
+		this.timer = null;
 		let stderr = "";
 		const child = spawn(this.binary, args(this.tree, this.projectFile, true), { cwd: this.tree, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
 		this.child = child;
@@ -91,18 +102,21 @@ export class SourcemapWatcher {
 			const now = Date.now();
 			this.crashes = [...this.crashes.filter((at) => now - at < 60000), now];
 			const reason = stderr.split(/\r?\n/).find((line) => line.includes("Details:"))?.replace(/^\[ERROR rojo\]\s*/, "") ?? stderr.trim().split(/\r?\n/).pop() ?? "";
-			if (this.crashes.length >= MAX_CRASHES_PER_MINUTE) {
-				this.status = { state: "error", detail: `rojo sourcemap keeps stopping, so it was left off: ${reason}`.trim() };
+			if (this.crashes.length >= this.timing.maxCrashes) {
+				this.crashes = [];
+				this.status = { state: "error", detail: `rojo sourcemap crashed ${this.timing.maxCrashes} times in a minute, retrying in ${Math.round(this.timing.pauseMs / 1000)} s${reason ? `: ${reason}` : ""}` };
+				this.timer = setTimeout(() => this.launch(), this.timing.pauseMs);
 				return;
 			}
 			this.status = { state: "watching", detail: `Kept up to date in ${basename(this.tree)} (restarted after: ${reason || "it stopped"})` };
-			this.timer = setTimeout(() => this.launch(), RESTART_MS);
+			this.timer = setTimeout(() => this.launch(), this.timing.restartMs);
 		});
 	}
 
 	stop(): void {
 		this.stopped = true;
 		if (this.timer) clearTimeout(this.timer);
+		this.timer = null;
 		this.child?.kill();
 		this.child = null;
 	}
