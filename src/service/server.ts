@@ -101,10 +101,9 @@ const HEARTBEAT_MS = 15000;
 const subscribers = new Set<ServerResponse>();
 export const eventSubscribers = (): number => subscribers.size;
 
-export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void) {
+export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void, agents: AgentRegistrar = new AgentRegistrar()) {
 	const groups = new Groups(hub);
 	const mcp = new Mcp(hub, groups);
-	const agents = new AgentRegistrar();
 
 	let lastSent = "";
 	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places(), openPlaces: hub.openPlacesOn } satisfies Snapshot);

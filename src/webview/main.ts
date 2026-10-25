@@ -763,6 +763,8 @@ function agentsBody(): string {
 	const chip = (agent: AgentStatus) =>
 		agent.state === "connected"
 			? { text: "Connected", tone: "ok", title: `Rojo-Hub is in ${agent.label}'s user config. Turn off to take it out.` }
+			: agent.state === "legacy" || agent.state === "stale"
+				? { text: "Updating", tone: "info", title: `Rojo-Hub's entry in ${agent.label}'s user config is an old one; the service rewrites it to the launcher that starts Rojo-Hub by itself. Turn off to take it out.` }
 			: agent.state === "other"
 				? { text: "Set up by you", tone: "info", title: `${agent.label}'s config already has a rojohub entry pointing elsewhere; Rojo-Hub leaves it alone.` }
 				: agent.state === "unknown"
@@ -772,7 +774,7 @@ function agentsBody(): string {
 					: { text: "Not installed", tone: "", title: `${agent.label} was not found on PATH.` };
 	const rows = [
 		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? { text: "Connected", tone: "ok", title: "Copilot and other agents in VS Code. Nothing is written to disk." } : { text: "Off", tone: "", title: "Turn on to let Copilot and other agents in VS Code use Rojo-Hub." }, false, null),
-		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && agent.state !== "connected"), agent.error)),
+		...agents.list.map((agent) => row(agent.id, agent.label, ["connected", "legacy", "stale"].includes(agent.state), chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && !["connected", "legacy", "stale"].includes(agent.state)), agent.error)),
 	].join("");
 	const manual = ui.agentsManual
 		? `<div class="agents-manual">

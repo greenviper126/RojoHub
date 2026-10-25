@@ -473,7 +473,7 @@ test("agent config: Rojo-Hub's entry, another rojohub entry, or none", () => {
 		const [claude, codex] = AGENTS;
 		assert.equal(agentState(claude), "absent", "no config file at all");
 		writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { rojohub: { type: "http", url: MCP_URL } }, projects: {} }));
-		assert.equal(agentState(claude), "connected");
+		assert.equal(agentState(claude), "legacy", "the old URL entry is rewritten to the launcher (spec 011)");
 		writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { rojohub: { type: "http", url: "http://example.com/mcp" } } }));
 		assert.equal(agentState(claude), "other", "someone else's rojohub is left alone");
 		writeFileSync(join(home, ".claude.json"), '{"mcpServers": {"rojohub": ');
@@ -483,7 +483,7 @@ test("agent config: Rojo-Hub's entry, another rojohub entry, or none", () => {
 [mcp_servers.rojohub]
 url = "${MCP_URL}"
 `);
-		assert.equal(agentState(codex), "connected");
+		assert.equal(agentState(codex), "legacy");
 		writeFileSync(join(home, "config.toml"), `[mcp_servers.other]
 command = "x"
 `);

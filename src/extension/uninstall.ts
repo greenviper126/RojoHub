@@ -1,7 +1,5 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 import { SERVICE_PORT, type Health } from "../common/api";
+import { hubHome as stateHome, removeLauncher } from "../common/launcher";
 import { pathKey } from "../common/paths";
 import { AGENTS, agentState, runCli } from "../service/agentConfig";
 import { loadPortSettings } from "../service/ports";
@@ -21,7 +19,7 @@ import { removePlugin } from "../service/studioPlugin";
 
 const homeKey = pathKey;
 
-const hubHome = (): string => process.env.ROJO_HUB_HOME ?? join(process.env.LOCALAPPDATA ?? join(homedir(), ".local", "share"), "RojoHub");
+const hubHome = (): string => stateHome();
 
 /*
 	Port 34870 is machine-wide: another signed-in Windows user's service can be
@@ -48,10 +46,12 @@ async function stopService(): Promise<void> {
 
 async function main(): Promise<void> {
 	for (const agent of AGENTS) {
-		if (agentState(agent) !== "connected") continue;
+		// Rojo-Hub's own entry in any shape it has had; an entry named rojohub that is something else stays.
+		if (!["connected", "legacy", "stale"].includes(agentState(agent))) continue;
 		await runCli(agent.cli, agent.remove).catch(() => undefined);
 	}
 	await stopService();
+	removeLauncher(hubHome());
 	if (loadPortSettings(hubHome()).studioPlugin !== false) removePlugin();
 }
 

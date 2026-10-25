@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { parse as parseToml } from "smol-toml";
 
-import { AGENT_CLIS, SERVER_NAME } from "../common/agents";
+import { AGENT_CLIS, SERVER_NAME, type Launch } from "../common/agents";
 import { MCP_URL, type AgentId, type AgentStatus, type AgentWishes } from "../common/api";
+import { hubHome, launcherScript } from "../common/launcher";
+import { pathKey } from "../common/paths";
 
 /*
 	Adds Rojo-Hub's MCP server to Claude Code's and Codex's user config, and
@@ -14,18 +16,27 @@ import { MCP_URL, type AgentId, type AgentStatus, type AgentWishes } from "../co
 	documented way; state is read from their config files, because the CLIs'
 	own `get` health-checks every server and is far too slow to poll.
 
-	An entry named rojohub with another URL is the user's own and is never
-	changed or removed. Also used by the uninstall hook (dist/uninstall.js).
+	The entry is the stdio launcher (spec 011). An old URL entry of Rojo-Hub's is
+	rewritten to it, as is a launcher entry whose program is gone. An entry
+	named rojohub of any other shape is the user's own and is never changed or
+	removed. Also used by the uninstall hook (dist/uninstall.js).
 */
 
 interface Agent {
 	id: AgentId;
 	label: string;
 	cli: string;
-	/** The URL of the agent's user-config entry named rojohub ("" when it has none), or null when there is no such entry. Throws when the file cannot be parsed. */
-	readUrl(): string | null | undefined;
-	add: string[];
+	/** The agent's user-config entry named rojohub, or null when there is none. Throws when the file cannot be parsed. */
+	readEntry(): Entry | null | undefined;
+	add(launch: Launch): string[];
 	remove: string[];
+}
+
+/** What an agent's config holds under rojohub: a URL, or a command with its arguments. */
+export interface Entry {
+	url?: string;
+	command?: string;
+	args?: string[];
 }
 
 /*
@@ -49,10 +60,14 @@ function readCached(file: string, parse: (text: string) => unknown): unknown {
 	return value;
 }
 
-function entryUrl(servers: unknown): string | null {
-	const entry = (servers as Record<string, { url?: unknown }> | undefined)?.[SERVER_NAME];
-	if (!entry) return null;
-	return typeof entry.url === "string" ? entry.url : "";
+function entryOf(servers: unknown): Entry | null {
+	const entry = (servers as Record<string, { url?: unknown; command?: unknown; args?: unknown }> | undefined)?.[SERVER_NAME];
+	if (!entry || typeof entry !== "object") return null;
+	return {
+		url: typeof entry.url === "string" ? entry.url : undefined,
+		command: typeof entry.command === "string" ? entry.command : undefined,
+		args: Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === "string") : undefined,
+	};
 }
 
 /*
@@ -74,40 +89,58 @@ export const AGENTS: Agent[] = [
 		id: "claudeCode",
 		...AGENT_CLIS.claudeCode,
 		// User-scope servers are the top-level mcpServers of ~/.claude.json (or $CLAUDE_CONFIG_DIR/.claude.json).
-		readUrl: () => entryUrl((readCached(claudeConfigFile(), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
+		readEntry: () => entryOf((readCached(claudeConfigFile(), JSON.parse) as { mcpServers?: unknown } | undefined)?.mcpServers),
 	},
 	{
 		id: "codex",
 		...AGENT_CLIS.codex,
-		readUrl: () =>
-			entryUrl((readCached(join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "config.toml"), parseToml) as { mcp_servers?: unknown } | undefined)?.mcp_servers),
+		readEntry: () =>
+			entryOf((readCached(join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "config.toml"), parseToml) as { mcp_servers?: unknown } | undefined)?.mcp_servers),
 	},
 ];
 
 /*
-	"connected", "absent", "other" (someone else's rojohub entry), or "unknown"
-	when the config file exists but cannot be read or parsed, as when the agent
-	is writing it at that moment. Unknown is never taken for absent: nothing is
+	"connected" (the launcher entry, its program and script present), "stale"
+	(a launcher entry whose program or script is gone), "legacy" (the old URL
+	entry), "absent", "other" (someone else's rojohub entry), or "unknown" when
+	the config file exists but cannot be read or parsed, as when the agent is
+	writing it at that moment. Unknown is never taken for absent: nothing is
 	added, removed or reconciled on it.
 */
 export function agentState(agent: Agent): AgentStatus["state"] {
-	let url: string | null | undefined;
+	let entry: Entry | null | undefined;
 	try {
-		url = agent.readUrl();
+		entry = agent.readEntry();
 	} catch {
 		return "unknown";
 	}
-	if (url === null || url === undefined) return "absent";
-	return url.replace(/\/+$/, "") === MCP_URL ? "connected" : "other";
+	if (!entry) return "absent";
+	if (entry.command !== undefined) {
+		const script = entry.args?.[entry.args.length - 1];
+		if (script === undefined || pathKey(script) !== pathKey(launcherScript(hubHome()))) return "other";
+		const programGone = isAbsolute(entry.command) && !existsSync(entry.command);
+		return programGone || !existsSync(script) ? "stale" : "connected";
+	}
+	return entry.url !== undefined && entry.url.replace(/\/+$/, "") === MCP_URL ? "legacy" : "other";
 }
+
+/** What the service writes: its own program run as Node, and the launcher it keeps current. */
+export function currentLaunch(): Launch {
+	return { command: process.execPath, script: launcherScript(hubHome()) };
+}
+
+/** Whether the entry is Rojo-Hub's own, in any of the shapes it has had. */
+const ours = (state: AgentStatus["state"]): boolean => state === "connected" || state === "legacy" || state === "stale";
 
 /*
 	Runs an agent's CLI. npm installs them as .cmd shims on Windows, which only
 	a shell can start; every argument here is a constant.
 */
 export function runCli(cli: string, args: string[], timeout = 30000): Promise<void> {
+	// A shell joins the arguments with spaces, so one with a space in it (Code.exe under "Microsoft VS Code") is quoted.
+	const words = process.platform === "win32" ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
 	return new Promise((done, fail) => {
-		execFile(cli, args, { windowsHide: true, timeout, shell: process.platform === "win32", encoding: "utf8" }, (error, stdout, stderr) => {
+		execFile(cli, words, { windowsHide: true, timeout, shell: process.platform === "win32", encoding: "utf8" }, (error, stdout, stderr) => {
 			if (error) fail(new Error(`${cli} ${args.slice(0, 2).join(" ")}: ${(stderr || stdout || error.message).trim().split(/\r?\n/)[0]}`));
 			else done();
 		});
@@ -131,10 +164,17 @@ export class AgentRegistrar {
 	private installed = new Map<AgentId, boolean>();
 	private checkedAt = 0;
 
+	/** `run` and `launch` are replaced by tests, so no real agent CLI is ever run by them. */
+	constructor(
+		private readonly run: (cli: string, args: string[]) => Promise<void> = runCli,
+		private readonly launch: () => Launch = currentLaunch,
+		private readonly onPathCheck: (cli: string) => Promise<boolean> = onPath,
+	) {}
+
 	private async detect(): Promise<void> {
 		if (Date.now() - this.checkedAt < 60000) return;
 		this.checkedAt = Date.now();
-		const found = await Promise.all(AGENTS.map((agent) => onPath(agent.cli)));
+		const found = await Promise.all(AGENTS.map((agent) => this.onPathCheck(agent.cli)));
 		this.installed = new Map(AGENTS.map((agent, index) => [agent.id, found[index]]));
 	}
 
@@ -149,22 +189,41 @@ export class AgentRegistrar {
 		}));
 	}
 
+	/*
+		Wishes from the setting (true adds, false removes, a missing one leaves
+		the agent alone), and every old (legacy) or stale entry of Rojo-Hub's
+		rewritten to the current launcher, unless the wish is to remove it.
+	*/
 	apply(wishes: AgentWishes): Promise<AgentStatus[]> {
+		return this.queued(wishes);
+	}
+
+	/** The rewrite alone: at service start. Only entries that are Rojo-Hub's own and out of date are touched. */
+	reconcile(): Promise<AgentStatus[]> {
+		return this.queued({});
+	}
+
+	private queued(wishes: AgentWishes): Promise<AgentStatus[]> {
 		const work = async () => {
 			await this.detect();
 			for (const agent of AGENTS) {
 				const wish = wishes[agent.id];
-				if (wish === undefined) continue;
 				const state = agentState(agent);
+				const outdated = state === "legacy" || state === "stale";
+				if (wish === undefined && !outdated) continue;
 				if (!this.installed.get(agent.id)) {
 					// Its CLI is gone, so the entry cannot be taken out the documented way; say so instead of doing nothing.
-					if (!wish && state === "connected") this.errors.set(agent.id, `${agent.cli} is not on PATH, so Rojo-Hub cannot take its rojohub entry out. Remove it from ${agent.label}'s config by hand.`);
+					if (wish === false && ours(state)) this.errors.set(agent.id, `${agent.cli} is not on PATH, so Rojo-Hub cannot take its rojohub entry out. Remove it from ${agent.label}'s config by hand.`);
 					continue;
 				}
 				try {
-					if (wish && state === "absent") await runCli(agent.cli, agent.add);
-					else if (!wish && state === "connected") await runCli(agent.cli, agent.remove);
-					else continue;
+					if (wish === true && state === "absent") await this.run(agent.cli, agent.add(this.launch()));
+					else if (wish === false && ours(state)) await this.run(agent.cli, agent.remove);
+					else if (outdated) {
+						// Remove, then add: both CLIs refuse to add a name that exists.
+						await this.run(agent.cli, agent.remove);
+						await this.run(agent.cli, agent.add(this.launch()));
+					} else continue;
 					this.errors.delete(agent.id);
 				} catch (error) {
 					this.errors.set(agent.id, error instanceof Error ? error.message : String(error));
