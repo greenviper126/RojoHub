@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.1
+
+- Setup commands run only in worktrees of the project's own repo.
+- Changing yolo or setup commands through the service API needs the extension's settings token.
+- The record of what a running Rojo has read survives a service restart.
+- A race between setup and a switch is closed.
+- Setup's PATH and cmd.exe checks are tightened.
+- Settings an older extension leaves out are kept.
+
 ## 0.22.0
 
 - **Agents connect even when the service is down.** Agent entries now point at a stdio launcher that
