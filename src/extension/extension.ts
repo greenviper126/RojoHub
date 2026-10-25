@@ -47,6 +47,7 @@ let starting: Promise<void> | null = null;
 /** The service's state folder: from its /health once seen, else where it puts it by default. */
 let hubHome = expectedHome();
 let statusItem: vscode.StatusBarItem;
+let yoloItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
@@ -304,6 +305,7 @@ function render(): void {
 		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
 		// The service's copy of rojoHub.openPlaces decides; a service older than 0.20.0 cannot open places.
 		openPlaces: serviceHealth.running && lastOpenPlaces,
+		yolo: yoloSetting(),
 	});
 	updateStatus();
 }
@@ -821,6 +823,76 @@ async function addProject(): Promise<void> {
 }
 
 /*
+	Yolo mode (spec 012, design 4). The setting is the user's; the service is
+	told true only once the user accepted the warning. While a window's prompt is
+	unanswered it keeps a timestamp in globalState, so no other window pushes the
+	value early (the stamp expires, in case that window died).
+*/
+const YOLO_PROMPT = "rojoHub.yoloPrompt";
+const YOLO_PROMPT_MS = 10 * 60 * 1000;
+
+function yoloSetting(): boolean {
+	return vscode.workspace.getConfiguration("rojoHub").get<boolean>("yolo", false) === true;
+}
+
+function yoloPrompting(): boolean {
+	const since = extensionContext.globalState.get<number>(YOLO_PROMPT);
+	return typeof since === "number" && Date.now() - since < YOLO_PROMPT_MS;
+}
+
+function yoloForService(): boolean {
+	return yoloSetting() && !yoloPrompting();
+}
+
+async function turnYoloOff(): Promise<void> {
+	await vscode.workspace.getConfiguration("rojoHub").update("yolo", false, vscode.ConfigurationTarget.Global);
+}
+
+/** The red status bar item, in every window while the setting is on (even with the service stopped). */
+function updateYoloItem(): void {
+	if (!yoloSetting()) {
+		yoloItem.hide();
+		return;
+	}
+	yoloItem.text = "$(warning) ROJO-HUB YOLO";
+	yoloItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+	yoloItem.tooltip = "Rojo-Hub yolo mode is on: agents may open Studio places and stop projects Studio is using. Claims still hold. Click to turn it off.";
+	yoloItem.command = "rojoHub.yoloMenu";
+	yoloItem.show();
+}
+
+async function yoloMenu(): Promise<void> {
+	const off = "Turn yolo mode off";
+	const picked = await vscode.window.showWarningMessage("Rojo-Hub yolo mode is on.", { modal: true, detail: "Agents may open Studio places and stop projects Studio is using. Everything they do is logged." }, off, "Keep it on");
+	if (picked === off) await turnYoloOff();
+}
+
+/*
+	The setting changed to true. The focused window asks; the others stay quiet
+	(they neither prompt nor push). Cancel puts the setting back to false.
+*/
+async function confirmYolo(): Promise<void> {
+	if (!vscode.window.state.focused || yoloPrompting()) return;
+	await extensionContext.globalState.update(YOLO_PROMPT, Date.now());
+	try {
+		const turnOn = "Turn on";
+		const picked = await vscode.window.showWarningMessage(
+			"Turn on Rojo-Hub yolo mode?",
+			{
+				modal: true,
+				detail:
+					"Agents may open Studio places, and stop or remove projects that Studio places are synced to (Studio disconnects). stop_all works without force. Other agents' claims still hold, and every agent action is logged to audit.jsonl in Rojo-Hub's folder. It stays on until you turn it off.",
+			},
+			turnOn,
+		);
+		if (picked !== turnOn) await turnYoloOff();
+	} finally {
+		await extensionContext.globalState.update(YOLO_PROMPT, undefined);
+	}
+	await pushSettings();
+}
+
+/*
 	Sends the user-level port settings to the service. They are application
 	scoped, so every window sends the same values.
 */
@@ -834,6 +906,7 @@ async function pushSettings(): Promise<void> {
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
+			yolo: yoloForService(),
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
@@ -1196,6 +1269,9 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			return;
 		case "copyAgentSetup":
 			return copySetup(message.what);
+		case "yoloOff":
+			await turnYoloOff();
+			return;
 		case "agentNudge":
 			hideAgentNudge(hubHome, message.action);
 			return refresh();
@@ -1236,7 +1312,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	extensionContext = context;
 	panel = new HubPanel(context.extensionUri, onPanel);
 	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem);
+	yoloItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem, yoloItem);
+	updateYoloItem();
 
 	serviceScript = context.asAbsolutePath("dist/service.js");
 
@@ -1261,6 +1339,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			studioPlugin: null,
 			studioPlaces: [],
 			openPlaces: false,
+			yolo: false,
 		});
 		void vscode.window.showWarningMessage(message);
 		return;
@@ -1305,6 +1384,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.env.clipboard.writeText(String(slot.port));
 			void vscode.window.setStatusBarMessage(`Copied port ${slot.port}`, 2000);
 		},
+		"rojoHub.yoloMenu": () => yoloMenu(),
 		"rojoHub.refresh": async () => {
 			await run("Connecting to Rojo-Hub", async () => {
 				await ensureService(serviceScript);
@@ -1358,6 +1438,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (!event.affectsConfiguration("rojoHub")) return;
+			updateYoloItem();
+			if (event.affectsConfiguration("rojoHub.yolo") && yoloSetting()) {
+				void confirmYolo().then(refresh);
+				return;
+			}
 			void pushSettings()
 				.then(() => (event.affectsConfiguration("rojoHub.agents") ? pushAgentChanges() : undefined))
 				.then(refresh);

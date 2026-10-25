@@ -170,6 +170,11 @@
         "category": "Rojo-Hub"
       },
       {
+        "command": "rojoHub.yoloMenu",
+        "title": "Yolo Mode",
+        "category": "Rojo-Hub"
+      },
+      {
         "command": "rojoHub.collapseAll",
         "title": "Collapse All",
         "category": "Rojo-Hub",
@@ -412,6 +417,13 @@
           "scope": "application",
           "default": false,
           "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
+        },
+        "rojoHub.yolo": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "ignoreSync": true,
+          "markdownDescription": "**DANGEROUS:** lifts Rojo-Hub's guards for agents. They may open Studio places (as if `rojoHub.openPlaces` were on) and stop or remove projects that Studio places are synced to, and `stop_all` works without `force` (it still keeps projects other agents claimed). Claims still hold, and every agent action is logged to `audit.jsonl`. Turning it on from here asks you to confirm. Stays on until you turn it off."
         },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",

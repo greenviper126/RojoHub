@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 
 import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
+import { writeAudit } from "./audit";
 import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type Hub } from "./hub";
@@ -34,6 +36,9 @@ const MAX_WAIT_S = 600;
 /** The first protocol version with outputSchema and structuredContent. */
 const STRUCTURED_FROM = "2025-06-18";
 
+/** The first line of status while yolo is on (spec 012, design 4). */
+export const YOLO_LINE = "Yolo mode is ON: the user lifted Rojo-Hub's guards. You may open Studio places and stop or remove projects that Studio places are synced to; other agents' claims still hold. Everything you do is logged.";
+
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
 
 Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. To begin new work in a worktree of its own, use new_branch.
@@ -48,7 +53,9 @@ To get ready in one call, use ensure: it starts the project, serves your worktre
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
-Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.`;
+Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.
+
+Yolo mode: when the user turned on rojoHub.yolo, status and ensure say so (yolo: true in their data). Then you may open Studio places and stop or remove projects that Studio places are synced to, and stop_all works without force but keeps projects other agents claimed; their claims still hold. Everything you do is logged. Without it, the rules above apply.`;
 
 interface Tool {
 	name: string;
@@ -103,6 +110,7 @@ const STATUS_SCHEMA = shape({
 	groups: arrayOf(shape({ id: S, name: S, active: B, projectIds: arrayOf(S) })),
 	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S })),
 	yourProject: orNull("string"),
+	yolo: B,
 });
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
@@ -122,6 +130,7 @@ const ENSURE_SCHEMA = shape({
 	project: { anyOf: [{ type: "null" }, PROJECT_STATE_SCHEMA] },
 	placeIds: arrayOf(I),
 	failure: { anyOf: [{ type: "null" }, shape({ reason: { type: "string", enum: [...ENSURE_FAILURES] }, message: S })] },
+	yolo: B,
 });
 
 const pathProperty = { type: "string", description: "Your working directory (absolute), or any folder inside the worktree." };
@@ -202,8 +211,8 @@ export const TOOLS: Tool[] = [
 	{
 		name: "stop_all",
 		title: "Stop every project",
-		description: "Stops every serving project and marks every group stopped. Always needs force: only when the user asks.",
-		inputSchema: { type: "object", properties: { force: forceProperty }, required: ["force"] },
+		description: "Stops every serving project and marks every group stopped. Needs force: only when the user asks. With the user's yolo mode on (status says), it works without force but keeps projects other agents claimed.",
+		inputSchema: { type: "object", properties: { force: forceProperty }, required: [] },
 		annotations: { destructiveHint: true },
 	},
 	{
@@ -367,9 +376,23 @@ const REASONS: Record<string, string> = {
 	remembered: "synced here before",
 };
 
+/** Tools that change nothing; the others are written to the audit log while yolo is on. */
+const READ_ONLY_TOOLS = new Set(["status", "branches", "log", "project_files", "wait_for_studio"]);
+
+/** The arguments of a call for the audit log: short values only. */
+function summarize(args: Args): Record<string, unknown> {
+	const summary: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args)) {
+		summary[key] = typeof value === "string" ? (value.length > 200 ? `${value.slice(0, 200)}...` : value) : typeof value === "number" || typeof value === "boolean" || value === null ? value : "(" + typeof value + ")";
+	}
+	return summary;
+}
+
 export class Mcp {
 	/** Agents waiting for a project's claim to end, per project, in the order they asked. */
 	private readonly queues = new Map<string, symbol[]>();
+	/** Per call: whether yolo mode is what allowed it (for the audit log). */
+	private readonly lift = new AsyncLocalStorage<{ lifted: boolean }>();
 
 	constructor(
 		private readonly hub: Hub,
@@ -422,10 +445,29 @@ export class Mcp {
 		}
 	}
 
-	/** Runs a tool. Those without data answer plain text. */
+	/** Runs a tool. Those without data answer plain text. While yolo is on, a state-changing call is written to the audit log (spec 012). */
 	private async call(name: string, args: Args): Promise<Answer> {
-		const result = await this.run(name, args);
-		return typeof result === "string" ? { text: result } : result;
+		if (!this.hub.yoloOn || READ_ONLY_TOOLS.has(name)) {
+			const result = await this.run(name, args);
+			return typeof result === "string" ? { text: result } : result;
+		}
+		const context = { lifted: false };
+		let outcome = "ok";
+		try {
+			const result = await this.lift.run(context, () => this.run(name, args));
+			return typeof result === "string" ? { text: result } : result;
+		} catch (error) {
+			outcome = "refused or failed";
+			throw error;
+		} finally {
+			writeAudit(this.hub.home, { actor: "mcp", action: name, project: text(args.project) ?? text(args.path) ?? null, args: summarize(args), yolo: true, lifted: context.lifted, outcome });
+		}
+	}
+
+	/** Marks the running call as one that only yolo mode allowed. */
+	private lifted(): void {
+		const context = this.lift.getStore();
+		if (context) context.lifted = true;
 	}
 
 	private run(name: string, args: Args): Promise<string | Answer> {
@@ -558,6 +600,10 @@ export class Mcp {
 		if (claim && !mine) throw this.claimRefusal(slot, claim, `${doing} would pull Studio out from under that agent.`);
 		const synced = slot.state === "running" ? (slot.places ?? []) : [];
 		if (!mine && synced.length > 0) {
+			if (this.hub.yoloOn) {
+				this.lifted();
+				return;
+			}
 			throw new Refusal(`${slot.projectName} is synced to ${this.placeList(synced)} in Studio; ${doing.toLowerCase()} would disconnect it. Ask the user, or pass force: true if the user said to.`);
 		}
 	}
@@ -859,9 +905,14 @@ export class Mcp {
 	}
 
 	private async stopAll(args: Args): Promise<string> {
-		if (args.force !== true) throw new Refusal("stop_all stops every project, under every agent and the user. Pass force: true only if the user asked for it.");
-		const result = await this.groupsOrFail().stopAll();
-		return this.describeGroupResult({ group: { id: "", name: "", slotIds: [], groupIds: [], active: false, projectIds: [] }, started: [], stopped: result.stopped, kept: [], failed: result.failed }, "Stopped");
+		const yolo = args.force !== true && this.hub.yoloOn;
+		if (args.force !== true && !yolo) throw new Refusal("stop_all stops every project, under every agent and the user. Pass force: true only if the user asked for it.");
+		if (yolo) this.lifted();
+		const result = await this.groupsOrFail().stopAll(yolo ? (id) => this.hub.claimOf(id) !== null : undefined);
+		const text = this.describeGroupResult({ group: { id: "", name: "", slotIds: [], groupIds: [], active: false, projectIds: [] }, started: [], stopped: result.stopped, kept: [], failed: result.failed }, "Stopped");
+		if (result.kept.length === 0) return text;
+		const names = result.kept.map((id) => this.hub.list().find((slot) => slot.id === id)?.projectName ?? id);
+		return `${text}\nKept running because another agent claimed them (yolo mode does not override claims): ${names.join(", ")}.`;
 	}
 
 	private async addProject(args: Args): Promise<string> {
@@ -1077,6 +1128,7 @@ export class Mcp {
 					steps.push({ step: "open_place", outcome: "skipped", detail: "several places and none chosen" });
 					return fail("several_places", `${now.projectName} has several places and none was opened: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
 				} else {
+					if (!this.hub.openPlacesSwitchOn) this.lifted();
 					try {
 						const opened = await this.hub.openPlace(now.id, chosen.placeId);
 						steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
@@ -1124,7 +1176,7 @@ export class Mcp {
 		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
 		return {
 			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}`,
-			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), failure },
+			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), failure, yolo: this.hub.yoloOn === true },
 			...(failure ? { isError: true } : {}),
 		};
 	}
@@ -1133,6 +1185,7 @@ export class Mcp {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
 		if (!this.hub.openPlacesOn) throw new Refusal(`${OFF_MESSAGE} Ask the user to open the place in Studio instead.`);
+		if (!this.hub.openPlacesSwitchOn) this.lifted();
 		const listed = slot.listedPlaces ?? [];
 		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to open. Ask the user to open the place in Studio.`);
 		let placeId: number;
@@ -1240,8 +1293,12 @@ export class Mcp {
 			groups: groups.map((group) => ({ id: group.id, name: group.name, active: group.active, projectIds: [...group.projectIds] })),
 			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion })),
 			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
+			yolo: this.hub.yoloOn === true,
 		};
-		return { text: await this.statusText(slots, root, repo), data };
+		const body = await this.statusText(slots, root, repo);
+		return { text: this.hub.yoloOn ? `${YOLO_LINE}
+
+${body}` : body, data };
 	}
 
 	private async statusText(slots: SlotView[], root: string | null, repo: string | null): Promise<string> {

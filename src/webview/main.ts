@@ -790,6 +790,13 @@ function agentsBody(): string {
 	</div>`;
 }
 
+/* Yolo mode (spec 012): a red box above everything while rojoHub.yolo is on. */
+function yoloBanner(): string {
+	if (!state!.yolo) return "";
+	return `<div class="notice error yolo">${icon("warning")}<div class="grow"><strong>YOLO MODE IS ON.</strong> Agents may open Studio places and stop projects Studio is using. Claims still hold; everything they do is logged.
+		<div class="row">${button("yolo-off", "Turn off", { icon: "close", kind: "primary" })}</div></div></div>`;
+}
+
 /*
 	The notice above Projects: shown by the extension's say-so (state.agentNudge)
 	while Claude Code or Codex is installed but neither can use Rojo-Hub.
@@ -1060,6 +1067,7 @@ function render(): void {
 	morph(
 		app,
 		`
+		${yoloBanner()}
 		${banner}
 		${agentNudge()}
 		${studioPluginNotice()}
@@ -1694,6 +1702,8 @@ document.addEventListener("click", (event) => {
 		case "toggle-agents-manual":
 			ui.agentsManual = !ui.agentsManual;
 			return render();
+		case "yolo-off":
+			return send({ type: "yoloOff" });
 		case "nudge-setup":
 			ui.collapsed.agents = false;
 			persist();

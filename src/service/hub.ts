@@ -5,6 +5,7 @@ import type { PlaceOpened, PortMove, PortSettings, SlotView, StudioPluginStatus,
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, resolveBase, sameFolders, sameTarget } from "./git";
+import { writeAudit } from "./audit";
 import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
@@ -464,16 +465,29 @@ export class Hub {
 
 	/** rojoHub.openPlaces (spec 009), read from settings.json once and then kept with each change. */
 	private openPlacesSetting: boolean | null = null;
-	get openPlacesOn(): boolean {
+	get openPlacesSwitchOn(): boolean {
 		this.openPlacesSetting ??= loadPortSettings(this.home).openPlaces === true;
 		return this.openPlacesSetting;
+	}
+	/** Whether agents and the panel may open places: rojoHub.openPlaces, or yolo mode (spec 012). */
+	get openPlacesOn(): boolean {
+		return this.openPlacesSwitchOn || this.yoloOn;
+	}
+	/** rojoHub.yolo (spec 012, design 4), as the extension pushed it after the user accepted the warning. */
+	private yoloSetting: boolean | null = null;
+	get yoloOn(): boolean {
+		this.yoloSetting ??= loadPortSettings(this.home).yolo === true;
+		return this.yoloSetting;
 	}
 
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
+		const yoloWas = this.yoloOn;
 		savePortSettings(this.home, settings);
 		this.openPlacesSetting = settings.openPlaces === true;
+		if ((settings.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: settings.yolo === true ? "yolo_on" : "yolo_off" });
+		this.yoloSetting = settings.yolo === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
 		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);

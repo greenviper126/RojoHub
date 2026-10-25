@@ -706,6 +706,17 @@ code {
 	--tone: var(--bad);
 }
 
+/* Yolo mode is on (spec 012): louder than an ordinary error notice. */
+.notice.yolo {
+	margin-bottom: 8px;
+	border-color: var(--bad);
+	background: color-mix(in srgb, var(--bad) 24%, transparent);
+}
+
+.notice.yolo .row {
+	margin-top: 6px;
+}
+
 /* ---------- buttons and inputs ---------- */
 
 .btn {

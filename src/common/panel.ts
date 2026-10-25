@@ -57,6 +57,8 @@ export interface PanelState {
 	studioPlaces: StudioPlaceView[];
 	/** rojoHub.openPlaces (spec 009): cards list their places with Open, Close and Reopen only while it is on. */
 	openPlaces: boolean;
+	/** rojoHub.yolo (spec 012): the red banner above everything, with a Turn off button. */
+	yolo: boolean;
 }
 
 export type ToPanel =
@@ -115,6 +117,8 @@ export type FromPanel =
 	| { type: "copyAgentSetup"; what: "commands" | "prompt" }
 	/** The notice above Projects: Later hides it for a while, never for good. */
 	| { type: "agentNudge"; action: "later" | "never" }
+	/** The yolo banner's Turn off button. */
+	| { type: "yoloOff" }
 	/** Studio places (spec 007): the project a place syncs with; null goes back to its project files. */
 	| { type: "assignPlace"; key: string; slotId: string | null }
 	/** A project's place in Studio (spec 009). */
