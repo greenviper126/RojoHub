@@ -44,6 +44,8 @@ Rojo owns what it syncs: an edit made in Studio to a synced script or instance i
 
 Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
 
+To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio.
+
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
 Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.`;
@@ -62,6 +64,8 @@ interface Tool {
 export interface Answer {
 	text: string;
 	data?: Record<string, unknown>;
+	/** A failure the agent should read as one (spec 011: ensure's failures are answers, so the steps done are kept). */
+	isError?: boolean;
 }
 
 /* ---------- output schemas (spec 011, design 3): plain JSON Schema, extra fields allowed ---------- */
@@ -102,6 +106,24 @@ const STATUS_SCHEMA = shape({
 });
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
+export const ENSURE_STEPS = ["start", "serve", "open_place", "wait_for_studio"] as const;
+export const ENSURE_OUTCOMES = ["done", "already", "skipped", "failed"] as const;
+export const ENSURE_FAILURES = ["no_project", "start_failed", "claimed", "rojo_error", "open_places_off", "no_listed_places", "several_places", "open_failed", "studio_confirming", "timeout", "stopped"] as const;
+type EnsureFailure = (typeof ENSURE_FAILURES)[number];
+interface EnsureStep {
+	step: (typeof ENSURE_STEPS)[number];
+	outcome: (typeof ENSURE_OUTCOMES)[number];
+	detail: string;
+}
+/** project is null only for no_project: no step ran, so there is no project to describe. */
+const ENSURE_SCHEMA = shape({
+	ready: B,
+	steps: arrayOf(shape({ step: { type: "string", enum: [...ENSURE_STEPS] }, outcome: { type: "string", enum: [...ENSURE_OUTCOMES] }, detail: S })),
+	project: { anyOf: [{ type: "null" }, PROJECT_STATE_SCHEMA] },
+	placeIds: arrayOf(I),
+	failure: { anyOf: [{ type: "null" }, shape({ reason: { type: "string", enum: [...ENSURE_FAILURES] }, message: S })] },
+});
+
 const pathProperty = { type: "string", description: "Your working directory (absolute), or any folder inside the worktree." };
 const projectProperty = { type: "string", description: "The project's name or id, as status shows it. Only needed when a repo has more than one project, or without path." };
 const forceProperty = { type: "boolean", description: "Go ahead even though another agent or a synced Studio would be affected. Only when the user asks." };
@@ -135,6 +157,25 @@ export const TOOLS: Tool[] = [
 			"Switches a project to serve a branch (by name, e.g. main or origin/feature) or a worktree (by folder), live, and claims it. A branch checked out in a worktree is served from that worktree; any other branch from a read-only copy Rojo-Hub keeps.",
 		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, force: forceProperty }, ["target"]),
 		outputSchema: SWITCH_SCHEMA,
+	},
+	{
+		name: "ensure",
+		title: "Get ready for Studio",
+		description:
+			"Gets Studio showing your worktree in one call: starts the project if stopped, serves your worktree (claims it for 15 minutes), opens the place when none is open (if the user allowed rojoHub.openPlaces), waits for the sync. Done steps are skipped, so a second call only renews the claim. Says why it could not finish and what to do; ready: true means a place is synced.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				path: pathProperty,
+				project: projectProperty,
+				place: { type: "number", description: "Which place to open, when the project lists several (status lists them)." },
+				timeout: { type: "number", description: "Seconds to wait for Studio to sync (default 60, 5 to 300)." },
+				wait: waitProperty,
+				force: forceProperty,
+			},
+			required: ["path"],
+		},
+		outputSchema: ENSURE_SCHEMA,
 	},
 	{
 		name: "release",
@@ -367,7 +408,7 @@ export class Mcp {
 				const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Args;
 				try {
 					const answer = await this.call(name, args);
-					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}) });
+					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.isError ? { isError: true } : {}) });
 				} catch (error) {
 					const known = error instanceof Refusal || error instanceof Conflict || error instanceof NotFound;
 					const detail = error instanceof Error ? error.message : String(error);
@@ -393,6 +434,8 @@ export class Mcp {
 				return this.serveHere(args);
 			case "switch":
 				return this.switchTo(args);
+			case "ensure":
+				return this.ensure(args);
 			case "release":
 				return this.release(args);
 			case "start":
@@ -880,17 +923,173 @@ export class Mcp {
 	private async waitForStudio(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
-		const deadline = Date.now() + clamp(args.timeout, 30, 300) * 1000;
+		const waited = await this.awaitStudio(slot, clamp(args.timeout, 30, 300));
+		const now = waited.slot;
+		switch (waited.outcome) {
+			case "synced":
+				return this.health(now);
+			case "stopped":
+				return `${now.projectName} is not serving, so no Studio can sync to it. ${this.health(now)}`;
+			case "timeout":
+				return `No Studio place synced to ${now.projectName} in time. ${this.health(now)}`;
+			default:
+				return `A Studio place is waiting for the user to accept its first sync with ${now.projectName}. ${this.health(now)}`;
+		}
+	}
+
+	/*
+		The wait of wait_for_studio and ensure: until a place is synced, a place
+		waits for the user to accept the first sync, the project stopped, or the
+		time ran out.
+	*/
+	private async awaitStudio(slot: SlotView, seconds: number): Promise<{ outcome: "synced" | "stopped" | "timeout" | "confirming"; slot: SlotView }> {
+		const deadline = Date.now() + seconds * 1000;
 		for (;;) {
 			const now = this.hub.view(this.hub.registry.get(slot.id));
-			if (now.state === "running" && (now.places ?? []).length > 0) return this.health(now);
-			if (now.state === "stopped" || now.state === "error") return `${now.projectName} is not serving, so no Studio can sync to it. ${this.health(now)}`;
-			if (Date.now() >= deadline) return `No Studio place synced to ${now.projectName} in time. ${this.health(now)}`;
-			if (this.hub.studio.places().some((place) => place.projectId === now.id && place.confirming)) {
-				return `A Studio place is waiting for the user to accept its first sync with ${now.projectName}. ${this.health(now)}`;
-			}
+			if (now.state === "running" && (now.places ?? []).length > 0) return { outcome: "synced", slot: now };
+			if (now.state === "stopped" || now.state === "error") return { outcome: "stopped", slot: now };
+			if (Date.now() >= deadline) return { outcome: "timeout", slot: now };
+			if (this.hub.studio.places().some((place) => place.projectId === now.id && place.confirming)) return { outcome: "confirming", slot: now };
 			await sleep(500);
 		}
+	}
+
+	/*
+		Gets the caller ready for Studio in one call (spec 011, design 2). Each step
+		runs only when its condition holds, nothing is rolled back, and failures are
+		answers (isError, with data) so the steps done are kept.
+	*/
+	private async ensure(args: Args): Promise<Answer> {
+		const steps: EnsureStep[] = [];
+		const since = Date.now();
+		let slot: SlotView;
+		let root: string | null;
+		try {
+			if (!text(args.path)) throw new Refusal("path is required: your working directory.");
+			({ slot, root } = await this.pick(args));
+		} catch (error) {
+			if (!(error instanceof Refusal)) throw error;
+			return this.ensureAnswer(null, null, steps, { reason: "no_project", message: error.message }, since);
+		}
+		const fresh = () => this.hub.view(this.hub.registry.get(slot.id));
+		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since);
+		const placeCount = (view: SlotView) => (view.state === "running" ? (view.places ?? []).length : 0);
+
+		// 2. start
+		if (slot.state === "stopped" || slot.state === "error" || slot.state === "offline") {
+			try {
+				await this.hub.start(slot.id);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				steps.push({ step: "start", outcome: "failed", detail: message });
+				return fail("start_failed", `${slot.projectName} did not start: ${message.split("\n")[0]} Nothing was served. Fix that, then call ensure again.`);
+			}
+			const started = await this.settled(slot);
+			if (started.state === "error") {
+				const lines = this.problemLines(started).join(" ");
+				steps.push({ step: "start", outcome: "failed", detail: lines });
+				return fail("start_failed", `${started.projectName} is in error after starting: ${lines || "see log"} Nothing was served. Fix that, then call ensure again.`);
+			}
+			steps.push({ step: "start", outcome: "done", detail: `started ${started.projectName} on port ${started.port}` });
+			slot = started;
+		} else {
+			steps.push({ step: "start", outcome: "already", detail: `${slot.projectName} is ${slot.state}` });
+			if (slot.state === "starting") slot = await this.settled(slot);
+		}
+
+		// 3. claim and serve
+		const beforeKey = claimKey(slot.target);
+		let now: SlotView;
+		try {
+			now = await this.take(slot, { kind: "worktree", path: root! }, basename(root!), args);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!(error instanceof Refusal) && !(error instanceof Conflict) && !(error instanceof NotFound)) throw error;
+			steps.push({ step: "serve", outcome: "failed", detail: message });
+			return fail(error instanceof Refusal ? "claimed" : "rojo_error", `${message} ${error instanceof Refusal ? "The project was not switched." : "Nothing was switched."}`);
+		}
+		const switched = beforeKey !== claimKey(now.target);
+		now = await this.settled(now);
+		steps.push({ step: "serve", outcome: switched ? "done" : "already", detail: switched ? `${now.projectName} now serves ${root}` : `${now.projectName} already served ${root}; claim renewed` });
+		if (now.error || now.state === "error") {
+			const lines = this.problemLines(now).join(" ");
+			steps[steps.length - 1].detail += `; Rojo reports: ${lines}`;
+			return fail("rojo_error", `The switch was made, but Rojo reports: ${lines} Fix the files in your worktree (log shows more); do not restart the project.`);
+		}
+
+		// 4. open_place
+		const listed = now.listedPlaces ?? [];
+		const wanted = args.place === undefined || args.place === null || args.place === "" ? null : Number(args.place);
+		const connecting = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+		const hadPlace = placeCount(now) > 0;
+		if (hadPlace) {
+			steps.push({ step: "open_place", outcome: "already", detail: `${this.placeList(now.places ?? [])} synced` });
+		} else if (connecting.length > 0) {
+			steps.push({ step: "open_place", outcome: "skipped", detail: `${this.placeList(connecting)} already connecting` });
+		} else {
+			const chosen = wanted === null ? (listed.length === 1 ? listed[0] : null) : (listed.find((place) => place.placeId === wanted) ?? null);
+			const openOnes = wanted === null ? listed.filter((place) => place.open) : chosen?.open ? [chosen] : [];
+			if (listed.length === 0) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: "the project file names no places" });
+				return fail("no_listed_places", `${now.projectName}'s project file names no places (servePlaceIds, placeId), so none can be opened. Ask the user to open the place in Studio, then call wait_for_studio.`);
+			}
+			if (wanted !== null && !chosen) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: `place ${wanted} is not listed` });
+				return fail("no_listed_places", `${wanted} is not one of ${now.projectName}'s places: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+			}
+			if (openOnes.length > 0) {
+				steps.push({ step: "open_place", outcome: "already", detail: `${this.listedText(openOnes)} already open in Studio` });
+			} else if (!this.hub.openPlacesOn) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: "rojoHub.openPlaces is off" });
+				return fail("open_places_off", `${OFF_MESSAGE} The project is started and serves your worktree; ask the user to open one of its places in Studio (${this.listedText(listed)}), then call wait_for_studio.`);
+			} else if (!chosen) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: "several places and none chosen" });
+				return fail("several_places", `${now.projectName} has several places and none was opened: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+			} else {
+				try {
+					const opened = await this.hub.openPlace(now.id, chosen.placeId);
+					steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					steps.push({ step: "open_place", outcome: "failed", detail: message });
+					const open = listed.filter((place) => place.open);
+					return fail("open_failed", `Opening place ${chosen.placeId} failed: ${message.split("\n")[0]} Places open already: ${open.length ? this.listedText(open) : "none"}. Ask the user to open it in Studio.`);
+				}
+			}
+		}
+
+		// 5. wait_for_studio
+		if (hadPlace) {
+			steps.push({ step: "wait_for_studio", outcome: "already", detail: "a place is synced" });
+		} else {
+			const waited = await this.awaitStudio(now, Math.max(5, clamp(args.timeout, 60, 300)));
+			now = waited.slot;
+			if (waited.outcome === "synced") {
+				steps.push({ step: "wait_for_studio", outcome: "done", detail: `${this.placeList(now.places ?? [])} synced` });
+			} else {
+				const connectingNow = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+				const detail = waited.outcome === "stopped" ? "the project stopped" : waited.outcome === "confirming" ? "a place waits for the user to accept the first sync" : `nothing synced in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}`;
+				steps.push({ step: "wait_for_studio", outcome: "failed", detail });
+				if (waited.outcome === "stopped") return fail("stopped", `${now.projectName} was stopped while waiting, by someone else; the files were switched to your worktree. Start it again with ensure.`);
+				if (waited.outcome === "confirming") return fail("studio_confirming", `A Studio place is waiting for the user to accept its first sync with ${now.projectName} (Rojo asks once per place and project). Ask the user to accept it in Studio, then call wait_for_studio.`);
+				return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
+			}
+		}
+		return this.ensureAnswer(fresh(), root, steps, null, since);
+	}
+
+	/** The answer of ensure: the steps, then why it stopped or how Studio looks. ready: running, serving this worktree, a place synced. */
+	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number): Promise<Answer> {
+		const project = slot ? await this.projectState(slot, root) : null;
+		const places = slot && slot.state === "running" ? (slot.places ?? []) : [];
+		const ready = failure === null && slot !== null && slot.state === "running" && project?.yourWorktreeServed === true && places.length > 0;
+		const lines = steps.map((step) => `${step.step}: ${step.outcome}, ${step.detail}`);
+		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
+		return {
+			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}`,
+			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), failure },
+			...(failure ? { isError: true } : {}),
+		};
 	}
 
 	private async openPlace(args: Args): Promise<string> {

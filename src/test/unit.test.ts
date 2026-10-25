@@ -1092,7 +1092,7 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 
 test("structured answers: every outputSchema is well formed JSON Schema", () => {
 	const withSchema = TOOLS.filter((tool) => tool.outputSchema);
-	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["serve_here", "status", "switch"], "ensure joins them when it is built");
+	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["ensure", "serve_here", "status", "switch"]);
 	for (const tool of withSchema) wellFormed(tool.outputSchema as Schema, tool.name);
 	assert.deepEqual(check({ a: 1 }, { type: "object", required: ["b"], properties: { a: { type: "string" } } }), ["$.b: missing", "$.a: integer is not string"], "the checker itself finds both kinds of mistake");
 	assert.deepEqual(check(null, { type: ["string", "null"] }), []);
@@ -1171,4 +1171,254 @@ test("revParse: a worktree's HEAD, a branch ref, and null on failure", async () 
 	assert.equal(await revParse(repo, "refs/heads/missing"), null, "an unknown ref");
 	assert.equal(await revParse(join(repo, "nowhere"), "HEAD"), null, "a folder that is not there");
 	assert.equal(await revParse(mkdtempSync(join(tmpdir(), "rojo-hub-nogit-")), "HEAD"), null, "not a repo");
+});
+
+/*
+	ensure (spec 011, design 2) against a hub stub whose project can be stopped,
+	whose places come and go, and which counts what was started and opened.
+*/
+type ListedStub = { placeId: number; placeName: string | null; open: boolean; busy?: null; error?: null };
+function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[]; openPlacesOn?: boolean; claim?: { key: string; label: string; until: number } | null } = {}) {
+	const slot: Record<string, any> = {
+		id: "game",
+		projectName: "Game",
+		repoPath: repo,
+		projectFile: "default.project.json",
+		projectFiles: ["default.project.json"],
+		port: 34900,
+		portSource: "hash",
+		state: over.state ?? "stopped",
+		connections: 0,
+		target: { kind: "branch", ref: "refs/heads/side" },
+		targetLabel: "side",
+		branch: "side",
+		mode: "native",
+		warnings: [],
+		error: null,
+		sessionId: null,
+		logFile: "",
+		targetsAt: 0,
+		sourcemap: { state: "off", detail: "off" },
+		claim: null,
+		places: [],
+		listedPlaces: over.listed ?? [{ placeId: 111, placeName: "Lobby", open: false, busy: null, error: null }],
+	};
+	let held = over.claim ?? null;
+	const open: Record<string, any>[] = [];
+	const calls = { start: 0, openPlace: [] as number[], switch: 0 };
+	const behave: { start: () => void; openPlace: (placeId: number) => void } = {
+		start: () => void (slot.state = "running"),
+		openPlace: (placeId) => void setTimeout(() => void (slot.places = [{ placeId, placeName: "Lobby", pluginVersion: "0.21.0" }]), 100),
+	};
+	const hub = {
+		list: () => [slot],
+		claimOf: () => held,
+		lapsedClaim: () => null,
+		setClaim: (_id: string, next: typeof held) => void (held = next),
+		view: () => slot,
+		registry: { get: () => slot, slots: [slot] },
+		studio: { places: () => open, unappliedOn: () => [] },
+		openPlacesOn: over.openPlacesOn ?? true,
+		crashedAt: () => 0,
+		start: async () => {
+			calls.start++;
+			behave.start();
+			return slot;
+		},
+		switch: async (_id: string, target: object) => {
+			calls.switch++;
+			slot.target = target;
+			return slot;
+		},
+		openPlace: async (_id: string, placeId: number) => {
+			calls.openPlace.push(placeId);
+			behave.openPlace(placeId);
+			return { placeId, placeName: "Lobby", outcome: "opened" };
+		},
+	};
+	return { hub, slot, open, calls, behave };
+}
+
+type EnsureResult = { content: { text: string }[]; structuredContent: any; isError?: boolean };
+const ensureCall = async (stub: ReturnType<typeof ensureStub>, args: object, protocol: string | undefined = "2025-06-18") =>
+	((await new Mcp(stub.hub as never).handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ensure", arguments: args } }, protocol)) as { result: EnsureResult }).result;
+const stepsOf = (result: EnsureResult) => result.structuredContent.steps.map((step: any) => `${step.step}:${step.outcome}`);
+
+test("ensure: stopped project, unserved worktree, closed place: does everything, a second call finds it all done", async () => {
+	const repo = tempRepo();
+	const stub = ensureStub(repo);
+	const { hub, slot, calls } = stub;
+	const mcp = new Mcp(hub as never);
+	const schema = TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema;
+
+	const first = await ensureCall(stub, { path: repo });
+	assert.ok(!first.isError, first.content[0].text);
+	assert.deepEqual(check(first.structuredContent, schema), []);
+	assert.equal(first.structuredContent.ready, true);
+	assert.deepEqual(first.structuredContent.placeIds, [111]);
+	assert.deepEqual(stepsOf(first), ["start:done", "serve:done", "open_place:done", "wait_for_studio:done"]);
+	assert.equal(first.structuredContent.failure, null);
+	assert.equal(first.structuredContent.project.yourWorktreeServed, true);
+	assert.match(first.content[0].text, /^Ready\./);
+	assert.equal(calls.start, 1);
+	assert.equal(calls.switch, 1);
+	assert.deepEqual(calls.openPlace, [111]);
+
+	const second = await ensureCall(stub, { path: repo });
+	assert.ok(!second.isError, second.content[0].text);
+	assert.deepEqual(stepsOf(second), ["start:already", "serve:already", "open_place:already", "wait_for_studio:already"]);
+	assert.equal(second.structuredContent.ready, true);
+	assert.deepEqual([calls.start, calls.switch, calls.openPlace.length], [1, 1, 1], "nothing was repeated");
+	assert.equal(slot.state, "running");
+
+	const plain = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ensure", arguments: { path: repo } } })) as { result: Record<string, unknown> };
+	assert.deepEqual(Object.keys(plain.result), ["content"], "a client without the header gets text only");
+});
+
+test("ensure: the failure table, each reason with its steps, as isError answers carrying data", async () => {
+	const repo = tempRepo();
+	const schema = TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema;
+	const run = async (stub: ReturnType<typeof ensureStub>, args: object = {}) => {
+		const result = await ensureCall(stub, { path: repo, ...args });
+		const data = result.structuredContent;
+		assert.ok(result.isError, "a failure is an error result");
+		assert.deepEqual(check(data, schema), [], data.failure?.reason);
+		assert.equal(data.ready, false);
+		assert.ok(data.failure.message.length > 0);
+		return { data, outcomes: stepsOf(result), reason: data.failure.reason as string };
+	};
+
+	// no_project: a repo nobody registered, and no path
+	const stranger = ensureStub(repo);
+	stranger.hub.list = () => [];
+	let result = await run(stranger);
+	assert.equal(result.reason, "no_project");
+	assert.deepEqual(result.outcomes, []);
+	assert.equal(result.data.project, null);
+	assert.equal((await run(ensureStub(repo), { path: "" })).reason, "no_project");
+
+	// start_failed: start throws
+	const broken = ensureStub(repo);
+	broken.behave.start = () => {
+		throw new Error("rojo is not installed");
+	};
+	result = await run(broken);
+	assert.equal(result.reason, "start_failed");
+	assert.deepEqual(result.outcomes, ["start:failed"]);
+	assert.match(result.data.failure.message, /Nothing was served/);
+	assert.equal(broken.calls.switch, 0);
+
+	// start_failed: error after settling
+	const errored = ensureStub(repo);
+	errored.behave.start = () => {
+		errored.slot.state = "error";
+		errored.slot.error = "bad project file";
+	};
+	result = await run(errored);
+	assert.equal(result.reason, "start_failed");
+	assert.match(result.data.failure.message, /bad project file/);
+	assert.equal(errored.calls.switch, 0);
+
+	// claimed: another worktree holds it; the start step stays done
+	const claimed = ensureStub(repo, { claim: { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 } });
+	result = await run(claimed);
+	assert.equal(result.reason, "claimed");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:failed"]);
+	assert.match(result.data.failure.message, /Other/);
+	assert.equal(claimed.calls.switch, 0, "not switched");
+	assert.equal(result.data.project.rojo.state, "running", "the start was not rolled back");
+
+	// rojo_error: after the switch Rojo reports an error
+	const rojoError = ensureStub(repo);
+	rojoError.hub.switch = async (_id: string, target: object) => {
+		rojoError.slot.target = target;
+		rojoError.slot.error = "Invalid project file";
+		return rojoError.slot;
+	};
+	result = await run(rojoError);
+	assert.equal(result.reason, "rojo_error");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done"]);
+	assert.match(result.data.failure.message, /Invalid project file/);
+
+	// open_places_off: returns at once, never opens
+	const off = ensureStub(repo, { openPlacesOn: false });
+	result = await run(off);
+	assert.equal(result.reason, "open_places_off");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done", "open_place:skipped"]);
+	assert.deepEqual(off.calls.openPlace, []);
+	assert.match(result.data.failure.message, /Lobby/);
+
+	// no_listed_places
+	result = await run(ensureStub(repo, { listed: [] }));
+	assert.equal(result.reason, "no_listed_places");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done", "open_place:skipped"]);
+	const notListed = ensureStub(repo);
+	assert.equal((await run(notListed, { place: 999 })).reason, "no_listed_places", "a place that is not listed");
+	assert.deepEqual(notListed.calls.openPlace, []);
+
+	// several_places: opens none
+	const several = ensureStub(repo, {
+		listed: [
+			{ placeId: 111, placeName: "Lobby", open: false },
+			{ placeId: 222, placeName: "Match", open: false },
+		],
+	});
+	result = await run(several);
+	assert.equal(result.reason, "several_places");
+	assert.deepEqual(several.calls.openPlace, []);
+	assert.match(result.data.failure.message, /Lobby.*Match/);
+
+	// open_failed
+	const noOpen = ensureStub(repo);
+	noOpen.hub.openPlace = async () => {
+		throw new Error("Studio would not launch");
+	};
+	result = await run(noOpen);
+	assert.equal(result.reason, "open_failed");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done", "open_place:failed"]);
+	assert.match(result.data.failure.message, /Studio would not launch/);
+
+	// studio_confirming: a place that connected waits for the user
+	const confirming = ensureStub(repo);
+	confirming.behave.openPlace = () => {
+		confirming.open.push({ key: "k", placeId: 111, placeName: "Lobby", unsaved: false, pluginVersion: "0.21.0", status: "ok", message: "", projectId: "game", reason: null, assigned: null, syncedWith: null, confirming: true });
+	};
+	result = await run(confirming);
+	assert.equal(result.reason, "studio_confirming");
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done", "open_place:done", "wait_for_studio:failed"]);
+	assert.equal(result.data.project.connecting[0].confirming, true);
+
+	// stopped: someone stops the project during the wait
+	const stopped = ensureStub(repo);
+	stopped.behave.openPlace = () => void setTimeout(() => void (stopped.slot.state = "stopped"), 100);
+	result = await run(stopped);
+	assert.equal(result.reason, "stopped");
+	assert.match(result.data.failure.message, /files were switched/);
+
+	// timeout: the place opens and connects but never syncs (the minimum wait is 5 s)
+	const slow = ensureStub(repo);
+	slow.behave.openPlace = () => {
+		slow.open.push({ key: "k", placeId: 111, placeName: "Lobby", unsaved: false, pluginVersion: "0.21.0", status: "ok", message: "", projectId: "game", reason: null, assigned: null, syncedWith: null, confirming: false });
+	};
+	result = await run(slow, { timeout: 1 });
+	assert.equal(result.reason, "timeout");
+	assert.match(result.data.failure.message, /Lobby/);
+	assert.deepEqual(result.outcomes, ["start:done", "serve:done", "open_place:done", "wait_for_studio:failed"]);
+});
+
+test("ensure: openPlaces off with a place already synced or open needs no opening", async () => {
+	const repo = tempRepo();
+	const synced = ensureStub(repo, { state: "running", openPlacesOn: false });
+	synced.slot.places = [{ placeId: 111, placeName: "Lobby", pluginVersion: "0.21.0" }];
+	const result = await ensureCall(synced, { path: repo });
+	assert.ok(!result.isError);
+	assert.deepEqual(stepsOf(result), ["start:already", "serve:done", "open_place:already", "wait_for_studio:already"]);
+	assert.deepEqual(synced.calls.openPlace, []);
+
+	const opened = ensureStub(repo, { state: "running", openPlacesOn: false, listed: [{ placeId: 111, placeName: "Lobby", open: true }] });
+	setTimeout(() => void (opened.slot.places = [{ placeId: 111, placeName: "Lobby", pluginVersion: "0.21.0" }]), 2500);
+	const waited = await ensureCall(opened, { path: repo });
+	assert.ok(!waited.isError, JSON.stringify(waited.structuredContent.failure));
+	assert.deepEqual(stepsOf(waited), ["start:already", "serve:done", "open_place:already", "wait_for_studio:done"]);
+	assert.deepEqual(opened.calls.openPlace, []);
 });
