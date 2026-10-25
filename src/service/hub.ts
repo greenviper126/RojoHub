@@ -78,6 +78,8 @@ interface Runtime {
 	crashedAt: number;
 	/** pathKeys of the worktrees this slot's rojo has been pointed at since it started: it has read them (spec 012). Emptied when it stops. */
 	served: Set<string>;
+	/** An adopted rojo whose served history was not saved (an older service ran it): any worktree may have been read. Until it stops. */
+	servedUnknown: boolean;
 }
 
 /** A worktree's setup commands failed (spec 012): the worktree is kept, nothing is switched. */
@@ -202,6 +204,29 @@ export class Hub {
 	private borrowedFile(id: string): string {
 		return join(this.slotDir(id), "borrowed.project.json");
 	}
+	/** Worktrees the slot's running rojo has read, kept so a restarted service that adopts the rojo still knows (rojo-rbx/rojo#1305). */
+	private servedFile(id: string): string {
+		return join(this.slotDir(id), "served.json");
+	}
+	private saveServed(id: string, runtime: Runtime): void {
+		try {
+			if (runtime.served.size === 0) rmSync(this.servedFile(id), { force: true });
+			else {
+				mkdirSync(this.slotDir(id), { recursive: true });
+				writeFileSync(this.servedFile(id), JSON.stringify([...runtime.served]));
+			}
+		} catch {
+			// Best effort: the history is also kept in memory.
+		}
+	}
+	private loadServed(id: string): Set<string> | null {
+		try {
+			const list = JSON.parse(readFileSync(this.servedFile(id), "utf8")) as unknown;
+			return Array.isArray(list) ? new Set(list.filter((entry): entry is string => typeof entry === "string")) : null;
+		} catch {
+			return null;
+		}
+	}
 	private logFile(id: string): string {
 		return join(this.slotDir(id), "rojo.log");
 	}
@@ -240,6 +265,7 @@ export class Hub {
 				crashedAt: 0,
 				rojoVersion: null,
 				served: new Set(),
+				servedUnknown: false,
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -289,6 +315,11 @@ export class Hub {
 						runtime.state = "running";
 						runtime.sessionId = info.sessionId;
 						runtime.rojoVersion = info.serverVersion || null;
+						// What the adopted rojo has read: the saved history, else unknown (setup is refused for this project until it stops).
+						const history = this.loadServed(slot.id);
+						runtime.served = history ?? new Set();
+						runtime.servedUnknown = history === null;
+						if (slot.target.kind === "worktree") runtime.served.add(pathKey(slot.target.path));
 						runtime.log.poll();
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
@@ -552,6 +583,9 @@ export class Hub {
 	*/
 	async setupRefusal(slot: SlotRecord, worktree: string): Promise<string | null> {
 		if (pathKey(worktree) === pathKey(slot.repoPath) || !(await this.isLinkedWorktree(worktree))) return `${worktree} is the main checkout, not a linked worktree; setup never runs there (other worktrees borrow its Packages).`;
+		if (pathKey(await primaryCheckout(worktree)) !== pathKey(slot.repoPath)) return `${worktree} is not a worktree of ${slot.projectName}'s repo (${slot.repoPath}); setup never runs in another repo's folder.`;
+		const owner = this.runtime(slot.id);
+		if (owner.servedUnknown && (owner.state === "running" || owner.state === "starting")) return `${slot.projectName}'s Rojo was adopted from an older service, so which worktrees it has read is unknown; stop the project to install, or install by hand.`;
 		if (this.worktreeRead(worktree)) return "the worktree is being served (or was, since Rojo started); stop the project to install, or install by hand.";
 		return null;
 	}
@@ -570,11 +604,13 @@ export class Hub {
 		let started: { job: SetupJob; joined: boolean };
 		if (running) started = { job: running, joined: true };
 		else {
-			const refusal = await this.setupRefusal(slot, worktree);
-			if (refusal) throw new Conflict(`Setup was not run: ${refusal}`);
+			// The job is reserved before the first await, so a switch that arrives while git is being asked sees setup running.
 			const commands = (configured as { commands: SetupCommand[] }).commands;
-			started = this.setupJobs.start(worktree, options.actor, options.branch, commands.length, (job) =>
-				runSetup({
+			let refused: string | null = null;
+			started = this.setupJobs.start(worktree, options.actor, options.branch, commands.length, async (job) => {
+				refused = await this.setupRefusal(slot, worktree);
+				if (refused) throw new Conflict(`Setup was not run: ${refused}`);
+				return runSetup({
 					worktree,
 					branch: options.branch,
 					commands,
@@ -582,8 +618,11 @@ export class Hub {
 					actor: options.actor,
 					project: slot.projectName,
 					onStep: (step, of, text) => Object.assign(job, { step, of, text }),
-				}),
-			);
+				});
+			});
+			started.job.promise.catch(() => {
+				if (refused) this.setupJobs.drop(worktree, started.job);
+			});
 		}
 		if (options.waitMs === undefined) return { ...started, outcome: await started.job.promise };
 		const timer = new Promise<null>((done) => setTimeout(() => done(null), options.waitMs).unref());
@@ -595,10 +634,12 @@ export class Hub {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
 		const yoloWas = this.yoloOn;
 		savePortSettings(this.home, settings);
-		this.setupParsed = parseSetupCommands(settings.setupCommands);
+		// Fields left out of the push keep their saved value.
+		const saved = loadPortSettings(this.home);
+		this.setupParsed = parseSetupCommands(saved.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
-		if ((settings.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: settings.yolo === true ? "yolo_on" : "yolo_off" });
-		this.yoloSetting = settings.yolo === true;
+		if ((saved.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: saved.yolo === true ? "yolo_on" : "yolo_off" });
+		this.yoloSetting = saved.yolo === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
 		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
@@ -1167,6 +1208,7 @@ export class Hub {
 		}
 		slot.target = target;
 		if (target.kind === "worktree" && (runtime.state === "running" || runtime.state === "starting")) runtime.served.add(pathKey(target.path));
+		if (target.kind === "worktree") this.saveServed(slot.id, runtime);
 		this.registry.save();
 		runtime.mode = plan.mode;
 		runtime.warnings = plan.warnings;
@@ -1213,6 +1255,8 @@ export class Hub {
 			// A new rojo has read only what it starts on.
 			const starting = slot.target;
 			runtime.served = new Set(starting.kind === "worktree" ? [pathKey(starting.path)] : []);
+			runtime.servedUnknown = false;
+			this.saveServed(slot.id, runtime);
 			await stopRojo(this.slotFile(slot.id));
 			await this.waitForPortFree(slot.port);
 			await this.collectViews(slot);
@@ -1254,6 +1298,8 @@ export class Hub {
 		runtime.sessionId = null;
 		runtime.error = null;
 		runtime.served.clear();
+		runtime.servedUnknown = false;
+		this.saveServed(slot.id, runtime);
 		await this.stopProcess(slot);
 		await this.syncSourcemap(slot);
 		await this.waitForPortFree(slot.port).catch(() => undefined);

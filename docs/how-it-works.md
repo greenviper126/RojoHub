@@ -637,7 +637,7 @@ agents' `new_branch`, and for `ensure` in a worktree not yet served ([Agents](#1
   chose. The setting is application-scoped and not synced, so only you set it: neither a repo, a
   workspace nor an agent can. `npm ci` runs the repo's install scripts; prefer `--ignore-scripts`.
 - **No shell.** Each entry is one program and its arguments (`spawn`, no shell). `.cmd` and `.bat`
-  files (`npm.cmd`) run through `cmd.exe`, so arguments containing `& | < > ^ % " ` ` or a newline are
+  files (`npm.cmd`) run through `cmd.exe`, so arguments containing `& | < > ^ % ! " ` ` or a newline are
   refused when the setting is read. The key is the repo's path, matched without regard to case,
   slash style, a trailing slash or `\\?\`.
 - **Environment.** Rokit's `bin` folder is put first on `PATH`. The branch name reaches commands only
@@ -1019,7 +1019,7 @@ debugging.
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | Display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo?, setupCommands? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo?, setupCommands? }` | Settings from the extension. `yolo` and `setupCommands` are applied only with header `X-Rojo-Hub-Token` (the `settings-token` file in the state folder); without it they are ignored and the answer lists them in `ignored`. A missing `yolo` or `setupCommands` keeps its saved value; any other missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
@@ -1046,6 +1046,8 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, port, target, whether to serve), groups (members, nested groups, running), display order, Studio place assignments (`placeChoices`), each place's last project (`placeSynced`), accepted first syncs (`placeAccepted`) |
 | `registry.json.bak` | The previous save, for recovery |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
+| `settings-token` | A random secret the service makes once. `PUT /settings` applies `yolo` and `setupCommands` only with it in header `X-Rojo-Hub-Token`; the extension reads it from here. It keeps out other programs and sandboxed agents that can only reach 127.0.0.1; a process running as you that can read this folder can read it too |
+| `slots/<id>/served.json` | The worktrees the slot's running rojo has read, so a restarted service that adopts the rojo still refuses setup in them; removed when the rojo stops |
 | `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `yolo`, `setupCommands` |
 | `audit.jsonl` | One JSON line per setup command run (time, who asked, command, exit code, output tail), per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |

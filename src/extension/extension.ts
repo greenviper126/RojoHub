@@ -921,7 +921,10 @@ async function pushSettings(): Promise<void> {
 			// Only the user's own (global) value, never a workspace one: a repo cannot give itself commands to run (spec 012).
 			setupCommands: config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {},
 		})
-		.then((answer) => reportSetupProblems(answer?.setupProblems ?? []))
+		.then((answer) => {
+			reportSetupProblems(answer?.setupProblems ?? []);
+			if (answer?.ignored?.length) void vscode.window.showWarningMessage(`Rojo-Hub: the service ignored ${answer.ignored.join(" and ")} (it did not accept the settings token in the hub home's settings-token file).`);
+		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
 

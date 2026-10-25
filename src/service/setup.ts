@@ -29,7 +29,7 @@ export const TAIL_BYTES = 4096;
 /** What an audit line keeps of a command's output. */
 export const AUDIT_TAIL_BYTES = 2048;
 /** Characters that cmd.exe would act on in the arguments of a .cmd or .bat file. */
-const CMD_METACHARACTERS = /[&|<>^%"`\r\n]/;
+const CMD_METACHARACTERS = /[&|<>^%!"`\r\n]/;
 
 export interface SetupCommand {
 	command: string;
@@ -125,7 +125,7 @@ export function parseSetupCommands(value: unknown, resolver: (command: string) =
 				const file = isCmdFile(entry.command) ? entry.command : process.platform === "win32" ? resolver(entry.command) : null;
 				if (file && isCmdFile(file)) {
 					const bad = args.find((arg) => CMD_METACHARACTERS.test(arg));
-					if (bad !== undefined) return void problems.push(`${where}: ${entry.command} is run through cmd.exe, so an argument may not contain & | < > ^ % " \` or a line break (found in ${JSON.stringify(bad)}).`);
+					if (bad !== undefined) return void problems.push(`${where}: ${entry.command} is run through cmd.exe, so an argument may not contain & | < > ^ % ! " \` or a line break (found in ${JSON.stringify(bad)}).`);
 				}
 				commands.push({ command: entry.command, args, ...(entry.cwd !== undefined ? { cwd: entry.cwd as string } : {}), timeoutSeconds });
 			});
@@ -207,13 +207,29 @@ export interface RunOptions {
 	totalLimitMs?: number;
 }
 
+/** A copy of `env` with `folder` first on the path, replacing the existing path variable whatever its case (Windows says `Path`). */
+export function withPathFirst(env: NodeJS.ProcessEnv, folder: string): NodeJS.ProcessEnv {
+	const result: NodeJS.ProcessEnv = {};
+	let key = "PATH";
+	let current = "";
+	for (const [name, value] of Object.entries(env)) {
+		if (name.toUpperCase() !== "PATH") result[name] = value;
+		else if (current === "") {
+			key = name;
+			current = value ?? "";
+		}
+	}
+	result[key] = current ? `${folder}${delimiter}${current}` : folder;
+	return result;
+}
+
 /*
 	Runs the commands in order, in the worktree, stopping at the first failure.
 	Each command writes an audit line whatever the outcome.
 */
 export async function runSetup(options: RunOptions): Promise<SetupOutcome> {
 	const { worktree, commands } = options;
-	const baseEnv = options.env ?? { ...process.env, PATH: `${rokitBin()}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}` };
+	const baseEnv = options.env ?? withPathFirst(process.env, rokitBin());
 	const env: NodeJS.ProcessEnv = { ...baseEnv, ROJO_HUB_SETUP: "1", ROJO_HUB_WORKTREE: worktree, ...(options.branch ? { ROJO_HUB_BRANCH: options.branch } : {}) };
 	const steps: StepResult[] = [];
 	const started = Date.now();
@@ -263,6 +279,9 @@ function runOne(command: SetupCommand, cwd: string, env: NodeJS.ProcessEnv, time
 		let child;
 		try {
 			if (isCmdFile(file)) {
+				// Checked again with the final PATH: the command may resolve to a script the parse-time check did not see.
+				const bad = command.args.find((arg) => CMD_METACHARACTERS.test(arg));
+				if (bad !== undefined) return finish({ reason: "spawn", error: `${file} is run through cmd.exe, so an argument may not contain & | < > ^ % ! " \` or a line break (found in ${JSON.stringify(bad)})`, tail: "" });
 				if (file.includes("%")) return finish({ reason: "spawn", error: `${file} contains %, which cmd.exe would expand` });
 				const line = [file, ...command.args].map((part) => (/[\s]|^$/.test(part) ? `"${part}"` : part));
 				line[0] = `"${file}"`;
@@ -346,6 +365,11 @@ export class SetupJobs {
 			for (const [other, entry] of this.jobs) if (entry.state !== "running" && this.jobs.size > 20) this.jobs.delete(other);
 		}
 		return { job, joined: false };
+	}
+
+	/** Forgets a job that never ran (refused), so it does not show as a failed setup. */
+	drop(worktree: string, job: SetupJob): void {
+		if (this.jobs.get(pathKey(worktree)) === job) this.jobs.delete(pathKey(worktree));
 	}
 
 	running(worktree: string): SetupJob | null {

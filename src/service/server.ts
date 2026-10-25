@@ -6,6 +6,7 @@ import { AGENTS, AgentRegistrar } from "./agentConfig";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
 import { Mcp } from "./mcp";
+import { settingsToken, tokenMatches } from "./ports";
 import { Conflict, NotFound } from "./registry";
 import { acceptWebSocket } from "./websocket";
 
@@ -35,7 +36,7 @@ import { acceptWebSocket } from "./websocket";
 	GET    /order                                    the panel's display order
 	PUT    /order                 { projects?, groups? }   (never changes ports)
 	POST   /stop-all                                 stop every serving project, mark every group stopped
-	PUT    /settings              { portRange?, excludedPorts?, sourcemaps? }
+	PUT    /settings              { portRange?, excludedPorts?, sourcemaps?, ... }   yolo and setupCommands only with header X-Rojo-Hub-Token (<hub home>/settings-token); else ignored, and named in `ignored`
 	POST   /shutdown              { stopServing? }
 	GET    /agents                                   Claude Code's and Codex's MCP registration (spec 004)
 	PUT    /agents                { claudeCode?, codex? }   true adds Rojo-Hub to that agent's config, false takes it out
@@ -102,6 +103,7 @@ const subscribers = new Set<ServerResponse>();
 export const eventSubscribers = (): number => subscribers.size;
 
 export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void, agents: AgentRegistrar = new AgentRegistrar()) {
+	settingsToken(hub.home); // created now, so the extension can read it before its first PUT /settings
 	const groups = new Groups(hub);
 	const mcp = new Mcp(hub, groups);
 
@@ -202,6 +204,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
 				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];
+				// yolo and setupCommands run programs: only a caller that can read the hub home's token may change them.
+				const trusted = tokenMatches(hub.home, request.headers["x-rojo-hub-token"]);
+				const ignored = trusted ? [] : ["yolo", "setupCommands"].filter((name) => input[name] !== undefined);
 				hub.setPortSettings({
 					portRange: typeof input.portRange === "string" ? input.portRange : "",
 					excludedPorts,
@@ -209,10 +214,10 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
-					yolo: input.yolo === true,
-					setupCommands: input.setupCommands,
+					yolo: trusted && input.yolo !== undefined ? input.yolo === true : undefined,
+					setupCommands: trusted ? input.setupCommands : undefined,
 				});
-				return send(response, 200, { ok: true, setupProblems: hub.setupProblems() });
+				return send(response, 200, { ok: true, setupProblems: hub.setupProblems(), ...(ignored.length > 0 ? { ignored } : {}) });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {
 				const input = await body(request);

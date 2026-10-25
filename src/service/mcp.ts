@@ -1050,6 +1050,8 @@ export class Mcp {
 		try {
 			if (!text(args.path)) throw new Refusal("path is required: your working directory.");
 			({ slot, root } = await this.pick(args));
+			// A path in another repo must never be set up or served under this project (setup commands run there).
+			if (root && text(args.project) && pathKey(await primaryCheckout(root)) !== pathKey(slot.repoPath)) throw new Refusal(`${root} is not a worktree of ${slot.projectName}'s repo (${slot.repoPath}).`);
 		} catch (error) {
 			if (!(error instanceof Refusal)) throw error;
 			return this.ensureAnswer(null, null, steps, { reason: "no_project", message: error.message }, since);

@@ -21,7 +21,7 @@ import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
-import { assignPorts, parsePortSettings, preferredPort, savePortSettings, type PortRequest } from "../service/ports";
+import { assignPorts, loadPortSettings, parsePortSettings, preferredPort, savePortSettings, settingsToken, tokenMatches, type PortRequest } from "../service/ports";
 import { Hub } from "../service/hub";
 import { Groups } from "../service/groups";
 import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../service/audit";
@@ -1678,6 +1678,22 @@ test("handoff: serve_here with then_return records what was served; release swit
 	const released = await call("release", { path: tree });
 	assert.deepEqual(handBacks, ["main"]);
 	assert.match(released.result.content[0].text, /switched back to main/);
+});
+
+test("settings token: made once and kept, matched exactly; omitted yolo and setupCommands keep their saved value", () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-token-"));
+	const token = settingsToken(home);
+	assert.match(token, /^[0-9a-f]{64}$/);
+	assert.equal(settingsToken(home), token, "kept");
+	assert.equal(tokenMatches(home, token), true);
+	for (const wrong of [undefined, "", "0".repeat(64), token.slice(1), token + "0", 5]) assert.equal(tokenMatches(home, wrong), false);
+	savePortSettings(home, { yolo: true, setupCommands: { "C:\Repo": [] } });
+	savePortSettings(home, { sourcemaps: false });
+	assert.equal(loadPortSettings(home).yolo, true);
+	assert.deepEqual(loadPortSettings(home).setupCommands, { "C:\Repo": [] });
+	savePortSettings(home, { yolo: false, setupCommands: {} });
+	assert.equal(loadPortSettings(home).yolo, false);
+	assert.deepEqual(loadPortSettings(home).setupCommands, {});
 });
 
 /* ---------- yolo mode (spec 012, design 4) ---------- */

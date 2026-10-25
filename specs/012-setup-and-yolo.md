@@ -1,6 +1,6 @@
 # 012 — Setup commands for new worktrees, install checks in `ensure`, and yolo mode
 
-Status: **designs 1-3 built (setup commands, install checks, the item 14 docs); design 4 (yolo) not yet** (review group D of `specs/feedback-2026-10-24.md`, items 8, 10 (install checks), 14
+Status: **all four designs built (setup commands, install checks, the item 14 docs, yolo)** (review group D of `specs/feedback-2026-10-24.md`, items 8, 10 (install checks), 14
 (decided: not built) and 22; `specs/feedback-2026-10-24-review.md` sections 3, 3b and 4). Asked for by
 Viper's agents in the 2026-10-24 feedback session. Builds on 008 (agent control), 009 (open places,
 the pattern for an off-by-default application setting) and 011 (`ensure`). Version bump on release:
@@ -246,6 +246,27 @@ mention the field. Tool descriptions stay as they are (an agent's tool list is f
 `openPlaces` alone would have refused). Turning yolo on or off writes an entry too.
 
 **Individual toggles stay.** `rojoHub.openPlaces` still works alone; yolo is the shortcut.
+
+### Review hardening (after the first build)
+
+- **Settings token.** `yolo` and `setupCommands` make the service run programs or lift guards, so `PUT /settings`
+  applies them only when the request carries header `X-Rojo-Hub-Token` equal to the contents of
+  `<hub home>/settings-token` (32 random bytes as hex, made by the service on start, kept, compared with
+  `crypto.timingSafeEqual`). The extension reads that file and sends it. Without a valid token the other
+  fields apply as before, `yolo` and `setupCommands` are ignored (and the saved values kept), and the answer
+  says `ignored: ["yolo","setupCommands"]`. A push that leaves either field out keeps the saved value.
+  **Limit, honestly:** a process running as the same Windows user that can read the hub home can read the
+  token too. This stops other programs and sandboxed agents that only have network access to 127.0.0.1,
+  not a hostile program with the user's file access.
+- **Foreign repo.** Setup never runs in a worktree of another repo than the project's (`setupRefusal` checks the
+  primary checkout), and `ensure` with `project` and a `path` elsewhere answers `no_project`.
+- **Served history survives a restart.** The worktrees a slot's rojo has read are kept in
+  `slots/<id>/served.json` (cleared when the rojo stops) and restored when a restarted service adopts the rojo. If
+  the file is missing on adoption (an older service ran it) the history is unknown, and setup is refused for that
+  project until its rojo stops (the simple safe option).
+- **No race.** `setupWorktree` reserves the setup job before it awaits git, so a switch in that window is refused.
+- **Environment.** The setup `PATH` replaces the existing path variable whatever its case; the cmd.exe metacharacter
+  check (now also `!`) is repeated after the command is resolved with the final `PATH`.
 
 ## Acceptance criteria
 

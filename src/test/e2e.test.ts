@@ -39,7 +39,7 @@ function write(file: string, text: string): void {
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
 	const response = await fetch(api + path, {
 		method,
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...(path === "/settings" && existsSyncFile(join(home, "settings-token")) ? { "x-rojo-hub-token": readFileSync(join(home, "settings-token"), "utf8").trim() } : {}) },
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
 	const payload = (await response.json()) as T & { error?: string };
@@ -701,7 +701,7 @@ fetch(${JSON.stringify(api + "/slots")}).then((r)=>r.json()).then((slots)=>{
 		assert.ok(!stepsOf(again).includes("setup:done"), "a second ensure runs nothing");
 		assert.equal((await view()).sessionId, before.sessionId, "rojo was never restarted");
 	} finally {
-		await call("PUT", "/settings", {});
+		await call("PUT", "/settings", { setupCommands: {} });
 		await call("DELETE", `/slots/${slot.id}`);
 	}
 });
@@ -713,6 +713,34 @@ function existsSyncFile(file: string): boolean {
 		return false;
 	}
 }
+
+test("settings token: yolo and setupCommands are applied only with the hub home's settings-token; other fields and omitted ones are kept", async () => {
+	const token = readFileSync(join(home, "settings-token"), "utf8").trim();
+	assert.match(token, /^[0-9a-f]{64}$/, "the service made the token on start");
+	const put = async (headers: Record<string, string>, body: unknown) =>
+		(await fetch(api + "/settings", { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then((response) => response.json())) as { ok: boolean; ignored?: string[] };
+	const saved = () => JSON.parse(readFileSync(join(home, "settings.json"), "utf8"));
+	try {
+		const none = await put({}, { yolo: true, setupCommands: { x: [] }, sourcemaps: true });
+		assert.deepEqual(none.ignored, ["yolo", "setupCommands"]);
+		assert.equal(saved().yolo, false);
+		assert.deepEqual(saved().setupCommands, {});
+		const wrong = await put({ "x-rojo-hub-token": "0".repeat(64) }, { yolo: true });
+		assert.deepEqual(wrong.ignored, ["yolo"]);
+		assert.equal(saved().yolo, false);
+		const good = await put({ "x-rojo-hub-token": token }, { yolo: true, setupCommands: { x: [] } });
+		assert.equal(good.ignored, undefined);
+		assert.equal(saved().yolo, true);
+		assert.deepEqual(saved().setupCommands, { x: [] });
+		await put({}, { sourcemaps: true });
+		assert.equal(saved().yolo, true, "a push without the token or the fields keeps what was saved");
+		await put({ "x-rojo-hub-token": token }, { sourcemaps: true });
+		assert.equal(saved().yolo, true, "a push that omits yolo keeps it");
+		assert.deepEqual(saved().setupCommands, { x: [] }, "and setupCommands");
+	} finally {
+		await put({ "x-rojo-hub-token": token }, { yolo: false, setupCommands: {} });
+	}
+});
 
 test("project files: added by default or the only one, changed live with a restart, refused on a clash", async () => {
 	const tree = (label: string) => ({ $className: "DataModel", ServerScriptService: { $className: "ServerScriptService", Code: { $path: label } } });

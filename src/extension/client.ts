@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -16,10 +17,19 @@ import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type
 
 const base = `http://127.0.0.1:${SERVICE_PORT}`;
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** The service's per-install secret for PUT /settings (the service creates it on start); empty when unreadable. */
+function settingsToken(): string {
+	try {
+		return readFileSync(join(expectedHome(), "settings-token"), "utf8").trim();
+	} catch {
+		return "";
+	}
+}
+
+async function call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
 	const response = await fetch(base + path, {
 		method,
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...headers },
 		body: body === undefined ? undefined : JSON.stringify(body),
 		signal: AbortSignal.timeout(method === "GET" ? 5000 : 120000),
 	});
@@ -152,7 +162,7 @@ export const client = {
 	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
 	/** Setup commands under way or finished, per worktree (spec 012). */
 	setupJobs: () => call<{ path: string; state: "running" | "ok" | "failed"; step: number; of: number; text: string }[]>("GET", "/setup"),
-	putSettings: (settings: PortSettings) => call<{ ok: true; setupProblems?: string[] }>("PUT", "/settings", settings),
+	putSettings: (settings: PortSettings) => call<{ ok: true; setupProblems?: string[]; ignored?: string[] }>("PUT", "/settings", settings, { "x-rojo-hub-token": settingsToken() }),
 	agents: () => call<AgentStatus[]>("GET", "/agents"),
 	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
 	/** Assigns a project to an open Studio place (spec 007); null: back to its project files. */

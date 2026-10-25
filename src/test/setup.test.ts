@@ -10,7 +10,7 @@ import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../serv
 import { Hub, SetupFailed } from "../service/hub";
 import { savePortSettings } from "../service/ports";
 import { Conflict } from "../service/registry";
-import { commandText, installChecks, normaliseRepoKey, parseSetupCommands, resolveCommand, runSetup, SetupJobs, tailOf, type SetupCommand } from "../service/setup";
+import { commandText, installChecks, normaliseRepoKey, parseSetupCommands, resolveCommand, runSetup, SetupJobs, tailOf, withPathFirst, type SetupCommand } from "../service/setup";
 
 /*
 	Setup commands (spec 012, designs 1 to 3), against temp git repos and node
@@ -78,7 +78,7 @@ test("setupCommands: every invalid shape is rejected with a message naming the e
 
 test("setupCommands: a .cmd or .bat command refuses cmd.exe metacharacters in its arguments", () => {
 	const resolver = (command: string) => (command === "npm" ? "C:\\Program Files\\nodejs\\npm.cmd" : command === "wally" ? "C:\\x\\wally.exe" : null);
-	for (const arg of ["a&b", "a|b", "a<b", "a>b", "a^b", "%PATH%", 'say "hi"', "`x`", "a\nb"]) {
+	for (const arg of ["a&b", "a|b", "a<b", "a>b", "a^b", "%PATH%", "!X!", 'say "hi"', "`x`", "a\nb"]) {
 		const parsed = parseSetupCommands({ "C:\\Repo": [{ command: "npm", args: ["ci", arg] }] }, resolver);
 		assert.equal(parsed.entries.size, 0, `${JSON.stringify(arg)} is refused for npm.cmd`);
 		assert.match([...parsed.problems.values()].flat().join(), /cmd\.exe/);
@@ -478,6 +478,82 @@ test("hub.setupWorktree: concurrent requests run the commands once; the main che
 		runtime.state = "running";
 		await hub.switch(id, { kind: "worktree", path: worktree });
 		await assert.rejects(hub.setupWorktree(id, worktree, { actor: "mcp", branch: null }), /being served/);
+	} finally {
+		await hub.shutdown(false);
+	}
+});
+
+test("withPathFirst: replaces the path variable whatever its case, leaving exactly one", () => {
+	const env = withPathFirst({ Path: "C:\a", Other: "x" }, "C:\rokit");
+	assert.deepEqual(Object.keys(env).filter((name) => name.toUpperCase() === "PATH"), ["Path"]);
+	assert.equal(env.Path, `C:\rokit${delimiter}C:\a`);
+	assert.equal(env.Other, "x");
+	assert.equal(withPathFirst({}, "C:\rokit").PATH, "C:\rokit");
+});
+
+test("runSetup: a .cmd the parse-time check never saw is re-checked after resolution", { skip: !windows }, async () => {
+	const dir = temp("recheck");
+	const tool = script(dir, "t.cmd", "@echo hi\r\n");
+	const outcome = await runSetup({ worktree: dir, commands: [{ command: tool, args: ["a!b"], timeoutSeconds: 20 }], home: temp("recheck-home"), actor: "mcp", branch: null, project: "P", env: { ...process.env } });
+	assert.equal(outcome.ok, false);
+	assert.match(outcome.failed!.error ?? "", /cmd\.exe/);
+});
+
+test("hub.setupWorktree: a worktree of another repo is refused, whoever asks", async () => {
+	const dir = temp("scripts");
+	const mark = script(dir, "mark.cjs", `require("fs").writeFileSync("ran.txt","x");`);
+	const { hub, id, slot } = await hubWithRepo([node(mark)]);
+	try {
+		const foreign = repoWithProject();
+		const foreignTree = join(temp("wt"), "foreign");
+		execFileSync("git", ["worktree", "add", "-q", "-b", "foreign", foreignTree], { cwd: foreign });
+		assert.match((await hub.setupRefusal(slot, foreignTree)) ?? "", /not a worktree of/);
+		await assert.rejects(hub.setupWorktree(id, foreignTree, { actor: "mcp", branch: null }), /not a worktree of/);
+		assert.equal(existsSync(join(foreignTree, "ran.txt")), false, "nothing ran in the other repo");
+		assert.equal(hub.setupJobs.running(foreignTree), null);
+		assert.equal(hub.setupJobs.get(foreignTree), null, "a refused job is forgotten");
+	} finally {
+		await hub.shutdown(false);
+	}
+});
+
+test("hub.setupWorktree: the job is reserved before git is asked, so a switch in that window is refused", async () => {
+	const dir = temp("scripts");
+	const slow = script(dir, "slow.cjs", `setTimeout(()=>{},500);`);
+	const { hub, repo, id } = await hubWithRepo([node(slow)]);
+	try {
+		const worktree = join(temp("wt"), "race");
+		execFileSync("git", ["worktree", "add", "-q", "-b", "race", worktree], { cwd: repo });
+		const pending = hub.setupWorktree(id, worktree, { actor: "mcp", branch: null });
+		assert.ok(hub.setupJobs.running(worktree), "running before any await returned");
+		await assert.rejects(hub.switch(id, { kind: "worktree", path: worktree }), /Setup is still running/);
+		assert.equal((await pending)!.outcome!.ok, true);
+	} finally {
+		await hub.shutdown(false);
+	}
+});
+
+test("hub: what a running rojo has read is kept in served.json, restored, and unknown history refuses setup until it stops", async () => {
+	const { hub, repo, id, slot, home } = await hubWithRepo(null);
+	try {
+		const worktree = join(temp("wt"), "kept");
+		execFileSync("git", ["worktree", "add", "-q", "-b", "kept", worktree], { cwd: repo });
+		const fresh = join(temp("wt"), "fresh");
+		execFileSync("git", ["worktree", "add", "-q", "-b", "fresh", fresh], { cwd: repo });
+		const inner = hub as unknown as { runtime(id: string): { state: string; served: Set<string>; servedUnknown: boolean }; loadServed(id: string): Set<string> | null; stopLocked(slot: unknown): Promise<void> };
+		const runtime = inner.runtime(id);
+		runtime.state = "running";
+		await hub.switch(id, { kind: "worktree", path: worktree });
+		assert.ok(existsSync(join(home, "slots", id, "served.json")));
+		assert.ok(inner.loadServed(id)!.has(pathOf(worktree)), "a restarted service would read it back");
+		// adoption without a saved history
+		runtime.servedUnknown = true;
+		assert.match((await hub.setupRefusal(slot, fresh)) ?? "", /adopted from an older service/);
+		await inner.stopLocked(slot);
+		assert.equal(runtime.servedUnknown, false);
+		assert.equal(existsSync(join(home, "slots", id, "served.json")), false, "cleared when rojo stops");
+		assert.equal(inner.loadServed(id), null);
+		assert.equal(await hub.setupRefusal(slot, fresh), null);
 	} finally {
 		await hub.shutdown(false);
 	}
