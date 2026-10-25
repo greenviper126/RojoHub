@@ -206,6 +206,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
+					yolo: input.yolo === true,
 				});
 				return send(response, 200, { ok: true });
 			}

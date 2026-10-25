@@ -21,8 +21,10 @@ import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
-import { assignPorts, parsePortSettings, preferredPort, type PortRequest } from "../service/ports";
+import { assignPorts, parsePortSettings, preferredPort, savePortSettings, type PortRequest } from "../service/ports";
 import { Hub } from "../service/hub";
+import { Groups } from "../service/groups";
+import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../service/audit";
 import { SourcemapWatcher } from "../service/sourcemap";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
@@ -1421,4 +1423,162 @@ test("ensure: openPlaces off with a place already synced or open needs no openin
 	assert.ok(!waited.isError, JSON.stringify(waited.structuredContent.failure));
 	assert.deepEqual(stepsOf(waited), ["start:already", "serve:done", "open_place:already", "wait_for_studio:done"]);
 	assert.deepEqual(opened.calls.openPlace, []);
+});
+
+/* ---------- yolo mode (spec 012, design 4) ---------- */
+
+const yoloHome = () => mkdtempSync(join(tmpdir(), "rojo-hub-yolo-"));
+const auditLines = (home: string) =>
+	readFileSync(join(home, AUDIT_FILE), "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as Record<string, any>);
+
+test("yolo: openPlacesOn is openPlaces or yolo, and yolo is kept in settings.json", () => {
+	const cases: [boolean, boolean, boolean][] = [
+		[false, false, false],
+		[true, false, true],
+		[false, true, true],
+		[true, true, true],
+	];
+	for (const [openPlaces, yolo, effective] of cases) {
+		const home = yoloHome();
+		savePortSettings(home, { openPlaces, yolo });
+		const hub = new Hub(home);
+		assert.equal(hub.openPlacesOn, effective, `openPlaces ${openPlaces}, yolo ${yolo}`);
+		assert.equal(hub.openPlacesSwitchOn, openPlaces);
+		assert.equal(hub.yoloOn, yolo);
+	}
+	assert.equal(new Hub(yoloHome()).yoloOn, false, "off by default");
+});
+
+function yoloStub(repo: string, over: { yolo: boolean; claim?: { key: string; label: string; until: number } | null; openPlaces?: boolean }) {
+	const { hub, slot } = stubHub(repo, over.claim ?? null);
+	const home = yoloHome();
+	const stopped: string[] = [];
+	const full = {
+		...hub,
+		home,
+		yoloOn: over.yolo,
+		openPlacesSwitchOn: over.openPlaces === true,
+		openPlacesOn: over.yolo || over.openPlaces === true,
+		stop: async (id: string) => void stopped.push(id),
+		remove: async (id: string) => void stopped.push(`remove ${id}`),
+		openPlace: async (_id: string, placeId: number) => ({ placeId, placeName: "Lobby", outcome: "opened" }),
+	};
+	return { hub: full, slot, home, stopped };
+}
+const callTool = async (mcp: Mcp, name: string, args: object) =>
+	((await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, "2025-06-18")) as { result: { content: { text: string }[]; structuredContent?: any; isError?: boolean } }).result;
+
+test("yolo: stop is refused for a synced place without it, goes through with it, and a claim still refuses", async () => {
+	const repo = tempRepo();
+	const off = yoloStub(repo, { yolo: false });
+	const refused = await callTool(new Mcp(off.hub as never), "stop", { path: repo });
+	assert.equal(refused.isError, true);
+	assert.match(refused.content[0].text, /synced to/);
+	assert.deepEqual(off.stopped, []);
+
+	const on = yoloStub(repo, { yolo: true });
+	const stopped = await callTool(new Mcp(on.hub as never), "stop", { path: repo });
+	assert.ok(!stopped.isError, stopped.content[0].text);
+	assert.deepEqual(on.stopped, ["game"]);
+	const removed = await callTool(new Mcp(on.hub as never), "remove_project", { path: repo });
+	assert.ok(!removed.isError, removed.content[0].text);
+
+	const claimed = yoloStub(repo, { yolo: true, claim: { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 } });
+	const held = await callTool(new Mcp(claimed.hub as never), "stop", { path: repo });
+	assert.equal(held.isError, true, "claims hold under yolo");
+	assert.match(held.content[0].text, /claimed by an agent/);
+	assert.deepEqual(claimed.stopped, []);
+});
+
+test("yolo: stop_all needs force without it, and with it skips claimed projects and names them", async () => {
+	const fake = (claimed: string[]) => {
+		const stopped: string[] = [];
+		const slots = ["a", "b", "c"].map((id) => ({ id, projectName: id.toUpperCase() }));
+		const hub = {
+			registry: { slots, groups: [], save: () => undefined, get: (id: string) => slots.find((slot) => slot.id === id) },
+			view: () => ({ state: "running" }),
+			stop: async (id: string) => void stopped.push(id),
+			claimOf: (id: string) => (claimed.includes(id) ? { key: "worktree:x", label: "x", until: Date.now() + 60_000 } : null),
+			list: () => slots,
+			home: yoloHome(),
+			yoloOn: false,
+		};
+		return { hub, stopped };
+	};
+	const off = fake(["b"]);
+	const refused = await callTool(new Mcp(off.hub as never, new Groups(off.hub as never)), "stop_all", {});
+	assert.equal(refused.isError, true);
+	assert.deepEqual(off.stopped, []);
+
+	const on = fake(["b"]);
+	on.hub.yoloOn = true;
+	const answer = await callTool(new Mcp(on.hub as never, new Groups(on.hub as never)), "stop_all", {});
+	assert.ok(!answer.isError, answer.content[0].text);
+	assert.deepEqual(on.stopped.sort(), ["a", "c"]);
+	assert.match(answer.content[0].text, /Kept running because another agent claimed them.*: B\./);
+
+	const forced = fake(["b"]);
+	forced.hub.yoloOn = true;
+	await callTool(new Mcp(forced.hub as never, new Groups(forced.hub as never)), "stop_all", { force: true });
+	assert.deepEqual(forced.stopped.sort(), ["a", "b", "c"], "force is as before");
+});
+
+test("yolo: status says so first and carries yolo in its data; ensure carries it too", async () => {
+	const repo = tempRepo();
+	const schema = TOOLS.find((tool) => tool.name === "status")!.outputSchema as Schema;
+	for (const yolo of [false, true]) {
+		const { hub } = yoloStub(repo, { yolo });
+		const status = await callTool(new Mcp(hub as never), "status", { path: repo });
+		assert.equal(status.structuredContent.yolo, yolo);
+		assert.deepEqual(check(status.structuredContent, schema), []);
+		assert.equal(status.content[0].text.startsWith("Yolo mode is ON:"), yolo);
+	}
+	const stub = ensureStub(repo);
+	(stub.hub as any).yoloOn = true;
+	const ensured = await ensureCall(stub, { path: repo });
+	assert.equal(ensured.structuredContent.yolo, true);
+	assert.deepEqual(check(ensured.structuredContent, TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema), []);
+});
+
+test("yolo: state-changing calls are audited with lifted, reads and calls without yolo are not", async () => {
+	const repo = tempRepo();
+	const on = yoloStub(repo, { yolo: true });
+	const mcp = new Mcp(on.hub as never);
+	await callTool(mcp, "status", { path: repo });
+	await callTool(mcp, "stop", { path: repo });
+	await callTool(mcp, "open_place", { path: repo });
+	const lines = auditLines(on.home);
+	assert.deepEqual(lines.map((line) => line.action), ["stop", "open_place"], "status is a read");
+	assert.ok(lines.every((line) => line.actor === "mcp" && line.yolo === true && typeof line.time === "string"));
+	assert.equal(lines[0].lifted, true, "the synced place would have refused it");
+	assert.equal(lines[1].lifted, true, "openPlaces alone is off");
+
+	const withSwitch = yoloStub(repo, { yolo: true, openPlaces: true });
+	await callTool(new Mcp(withSwitch.hub as never), "open_place", { path: repo });
+	assert.equal(auditLines(withSwitch.home)[0].lifted, false, "openPlaces alone would have allowed it");
+
+	const claimed = yoloStub(repo, { yolo: true, claim: { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 } });
+	await callTool(new Mcp(claimed.hub as never), "stop", { path: repo });
+	const refused = auditLines(claimed.home)[0];
+	assert.equal(refused.lifted, false);
+	assert.equal(refused.outcome, "refused or failed");
+
+	const off = yoloStub(repo, { yolo: false });
+	await callTool(new Mcp(off.hub as never), "stop", { path: repo });
+	assert.throws(() => readFileSync(join(off.home, AUDIT_FILE)), "nothing is audited while yolo is off");
+});
+
+test("audit log: appends lines, rotates at 1 MB, and never throws", () => {
+	const home = yoloHome();
+	writeAudit(home, { action: "one" });
+	writeAudit(home, { action: "two" });
+	assert.deepEqual(auditLines(home).map((line) => line.action), ["one", "two"]);
+	writeFileSync(join(home, AUDIT_FILE), "x".repeat(AUDIT_MAX_BYTES));
+	writeAudit(home, { action: "three" });
+	assert.equal(readFileSync(join(home, AUDIT_OLD_FILE), "utf8").length, AUDIT_MAX_BYTES);
+	assert.deepEqual(auditLines(home).map((line) => line.action), ["three"]);
+	assert.doesNotThrow(() => writeAudit(join(home, "missing", "folder"), { action: "lost" }));
 });

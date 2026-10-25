@@ -306,6 +306,8 @@ export interface PortSettings {
 	studioAutoConnect?: "listed" | "remembered";
 	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
 	openPlaces?: boolean;
+	/** rojoHub.yolo (spec 012, design 4): the user lifted the guards. Only pushed once the user accepted the warning; missing means off. */
+	yolo?: boolean;
 }
 
 /*
