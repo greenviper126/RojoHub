@@ -245,6 +245,10 @@ export interface BranchResult {
 	branch: string;
 	/** "orca" when Orca made the worktree, "git" for a git worktree beside the repo. */
 	via: "orca" | "git";
+	/** The start point actually used: the base, or its remote ref when the local base was behind. */
+	from: string;
+	/** Fetch or divergence notes for the answer. */
+	notes: string[];
 }
 
 export interface TargetOption {

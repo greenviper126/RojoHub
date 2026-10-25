@@ -563,7 +563,7 @@ minute old. The picker opens drawn, and a newer list updates in place, keeping w
 
 **Fetch** (⟳ in the search box) runs `git fetch --all --prune`. It never asks for a password (git's
 prompt and Git Credential Manager's window are both off); a failure (offline, no access) shows in the
-picker. Rojo-Hub never fetches by itself.
+picker. Rojo-Hub never fetches by itself, except for the one remote a new branch's base tracks (below).
 
 **New branch.** The picker's last row is *New branch…*, or *New branch "‹typed›"* when the search
 text is not an existing branch. Its form has the name and **From** (current target, then local, then
@@ -572,6 +572,15 @@ remote branches). *Create* makes the branch in its own folder and switches to it
 - repo in **Orca**: an Orca worktree (`orca worktree create`, setup skipped); Orca names the branch
   `<your git user>/<name>`;
 - otherwise: a git worktree in `<repo>-worktrees/<name>` beside the repo.
+
+**A stale base.** Before a git worktree is made from a local branch (not HEAD or a commit), Rojo-Hub
+fetches just the remote that branch tracks (`origin` when it tracks none), waiting 10 seconds at
+most. If the local branch is strictly behind its remote branch, the new branch starts from the
+remote's commit (the answer says `from origin/main`); if the two have diverged it starts from the
+local branch and the answer warns; if the local branch is ahead or equal, it is used as is. A failed
+fetch (offline, no remote) is not an error: the branch starts from the local one and the answer says
+"could not fetch, used local ‹base›". Only refs are updated, nothing is checked out. In an Orca repo
+the base is passed to Orca as given, with no fetch.
 
 An invalid name, an existing branch or a missing base is pointed out before anything is made. Done,
 a message offers *Open in New Window*.

@@ -317,6 +317,47 @@ export async function branchExists(repo: string, name: string): Promise<boolean>
 	);
 }
 
+export interface ResolvedBase {
+	/** Where the new branch starts: `base` itself, or the remote ref when the local branch is strictly behind it. */
+	ref: string;
+	/** What the answer should say about it: a fetch that failed, or a base that has diverged. */
+	notes: string[];
+}
+
+/*
+	The start point for a new branch off `base`. A local branch such as main is
+	often stale, so the remote it tracks (origin when it tracks none) is fetched
+	first, briefly, and the remote ref is used when the local branch is strictly
+	behind it. A diverged base stays local with a warning, an ahead or equal one
+	is used as is, and a failed fetch (offline, no remote) carries on quietly.
+	HEAD, a commit or a remote ref is taken as given. Fetching only updates refs;
+	nothing is checked out.
+*/
+export async function resolveBase(repo: string, base: string): Promise<ResolvedBase> {
+	const yes = () => true;
+	const no = () => false;
+	const local = `refs/heads/${base}`;
+	if (!(await git(repo, ["show-ref", "--verify", "--quiet", local]).then(yes, no))) return { ref: base, notes: [] };
+	const remote = (await git(repo, ["config", "--get", `branch.${base}.remote`]).catch(() => "")).trim() || "origin";
+	// The upstream's own ref when it has one (it may be named differently), else <remote>/<base>.
+	const upstream = (await git(repo, ["rev-parse", "--symbolic-full-name", `${local}@{upstream}`]).catch(() => "")).trim();
+	const tracking = upstream.startsWith("refs/remotes/") ? upstream : `refs/remotes/${remote}/${base}`;
+	const short = tracking.replace(/^refs\/remotes\//, "");
+	const notes: string[] = [];
+	try {
+		await git(repo, ["fetch", "--quiet", remote], { timeout: 10000 });
+	} catch {
+		notes.push(`could not fetch, used local ${base}`);
+	}
+	if (!(await git(repo, ["show-ref", "--verify", "--quiet", tracking]).then(yes, no))) return { ref: base, notes };
+	const [here, there] = (await Promise.all([git(repo, ["rev-parse", local]), git(repo, ["rev-parse", tracking])])).map((out) => out.trim());
+	if (here === there) return { ref: base, notes };
+	const ancestor = (a: string, b: string) => git(repo, ["merge-base", "--is-ancestor", a, b]).then(yes, no);
+	if (await ancestor(local, tracking)) return { ref: short, notes };
+	if (!(await ancestor(tracking, local))) notes.push(`local ${base} and ${short} have diverged; started from local ${base}`);
+	return { ref: base, notes };
+}
+
 /*
 	The HEAD file of the worktree at `path`: .git/HEAD in the primary
 	checkout, .git/worktrees/<name>/HEAD in a linked worktree, whose .git is a
