@@ -419,6 +419,18 @@ async function tool(name: string, args: Record<string, unknown>): Promise<{ text
 	return { text: payload.result.content[0].text, isError: payload.result.isError === true };
 }
 
+/** Like tool, as a client of protocol 2025-06-18: also the structuredContent (spec 011). */
+async function structured(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+	const response = await fetch(api + "/mcp", {
+		method: "POST",
+		headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+	});
+	const payload = (await response.json()) as { result: { structuredContent?: Record<string, any> } };
+	assert.ok(payload.result.structuredContent, `${name} gave structuredContent`);
+	return payload.result.structuredContent;
+}
+
 test("agents over MCP: serve_here switches live and claims, other worktrees wait, a user switch clears the claim", async () => {
 	const dir = await makeRepo("Agenty");
 	const alpha = join(root, "Agenty-alpha");
@@ -446,6 +458,21 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.match(refused.text, /claimed by an agent working in Agenty-alpha/);
 	assert.match((await tool("status", { path: beta })).text, /NOT being served/);
 	assert.match((await tool("status", { path: alpha })).text, /your worktree is the one being served/);
+
+	// structured status of a served worktree (spec 011): path, branch, commit, claim
+	const data = await structured("status", { path: alpha });
+	const state = (data.projects as Record<string, any>[]).find((entry) => entry.id === slot.id)!;
+	assert.equal(state.served.kind, "worktree");
+	assert.equal(pathKey(state.served.path), pathKey(alpha));
+	assert.equal(state.served.branch, "alpha");
+	assert.equal(state.served.commit, gitIn(alpha, "rev-parse", "HEAD").trim(), "the served worktree's HEAD");
+	assert.equal(state.claim.holder, "Agenty-alpha");
+	assert.equal(state.claim.yours, true);
+	assert.ok(state.claim.secondsLeft > 0 && Date.parse(state.claim.until) > Date.now());
+	assert.equal(state.rojo.state, "running");
+	assert.equal(state.yourWorktreeServed, true);
+	assert.equal(data.yourProject, slot.id);
+	assert.equal((await structured("status", { path: beta })).projects.find((entry: Record<string, any>) => entry.id === slot.id).claim.yours, false);
 
 	const forced = await tool("serve_here", { path: beta, force: true });
 	assert.ok(!forced.isError, forced.text);

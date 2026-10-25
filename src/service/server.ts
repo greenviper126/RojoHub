@@ -139,7 +139,8 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					response.writeHead(405, { allow: "POST" });
 					return response.end();
 				}
-				const answer = await mcp.handle(await body(request).catch(() => null));
+				const protocol = request.headers["mcp-protocol-version"];
+				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined);
 				if (!answer) {
 					response.writeHead(202);
 					return response.end();

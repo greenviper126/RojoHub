@@ -16,7 +16,7 @@ import { hideAgentNudge, showAgentNudge } from "../extension/nudge";
 import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
-import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead } from "../service/git";
+import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead, revParse } from "../service/git";
 import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
@@ -1000,4 +1000,175 @@ test("SourcemapWatcher pauses after repeated crashes, then retries, and stays st
 	const stoppedAt = watcher.status.detail;
 	await sleep(700);
 	assert.equal(watcher.status.detail, stoppedAt, "no restart after stop");
+});
+
+/* ---------- structured answers (spec 011, design 3) ---------- */
+
+type Schema = { type?: string | string[]; enum?: unknown[]; properties?: Record<string, Schema>; required?: string[]; items?: Schema; anyOf?: Schema[] };
+
+/** A tiny JSON Schema checker: type (also as an array, for nullable), required, enum, properties, items, anyOf. Returns the problems found. */
+function check(value: unknown, schema: Schema, at = "$"): string[] {
+	if (schema.anyOf) return schema.anyOf.some((option) => check(value, option, at).length === 0) ? [] : [`${at}: matches none of anyOf`];
+	const kind = value === null ? "null" : Array.isArray(value) ? "array" : Number.isInteger(value) ? "integer" : typeof value;
+	const allowed = schema.type === undefined ? null : Array.isArray(schema.type) ? schema.type : [schema.type];
+	if (allowed && !allowed.some((type) => type === kind || (type === "number" && kind === "integer"))) return [`${at}: ${kind} is not ${allowed.join("|")}`];
+	if (schema.enum && !schema.enum.includes(value)) return [`${at}: ${String(value)} is not one of ${schema.enum.join(", ")}`];
+	const problems: string[] = [];
+	if (kind === "object") {
+		const object = value as Record<string, unknown>;
+		for (const key of schema.required ?? []) if (!(key in object)) problems.push(`${at}.${key}: missing`);
+		for (const [key, sub] of Object.entries(schema.properties ?? {})) if (key in object) problems.push(...check(object[key], sub, `${at}.${key}`));
+	}
+	if (kind === "array" && schema.items) (value as unknown[]).forEach((entry, index) => problems.push(...check(entry, schema.items!, `${at}[${index}]`)));
+	return problems;
+}
+
+/** A schema is itself well formed: legal types, non-empty enums, required names declared. */
+function wellFormed(schema: Schema, at: string): void {
+	const legal = ["object", "array", "string", "integer", "number", "boolean", "null"];
+	for (const type of schema.type === undefined ? [] : Array.isArray(schema.type) ? schema.type : [schema.type]) assert.ok(legal.includes(type), `${at}: type ${type}`);
+	if (schema.enum) assert.ok(schema.enum.length > 0, `${at}: enum`);
+	for (const key of schema.required ?? []) assert.ok(key in (schema.properties ?? {}), `${at} requires ${key}, which it declares`);
+	for (const [key, sub] of Object.entries(schema.properties ?? {})) wellFormed(sub, `${at}.${key}`);
+	if (schema.items) wellFormed(schema.items, `${at}[]`);
+	for (const option of schema.anyOf ?? []) wellFormed(option, `${at}|`);
+}
+
+function tempRepo(): string {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-struct-"));
+	const run = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir, stdio: "pipe" });
+	run("init", "-q", "-b", "main");
+	writeFileSync(join(dir, "default.project.json"), "{}");
+	run("add", ".");
+	run("commit", "-q", "-m", "one");
+	run("branch", "side");
+	return dir;
+}
+
+/** A hub with one running project serving `repo`, enough for status, serve_here and switch to answer. */
+function stubHub(repo: string, claim: { key: string; label: string; until: number } | null) {
+	const slot = {
+		id: "game",
+		projectName: "Game",
+		repoPath: repo,
+		projectFile: "default.project.json",
+		projectFiles: ["default.project.json"],
+		port: 34900,
+		portSource: "hash",
+		state: "running",
+		connections: 1,
+		target: { kind: "worktree", path: repo },
+		targetLabel: "main",
+		branch: "main",
+		mode: "native",
+		warnings: ["a warning"],
+		error: null,
+		sessionId: "session",
+		logFile: "",
+		targetsAt: 0,
+		sourcemap: { state: "watching", detail: "kept current" },
+		claim: null,
+		places: [{ placeId: 111, placeName: "Lobby", pluginVersion: "0.21.0" }],
+		listedPlaces: [{ placeId: 111, placeName: "Lobby", open: true, busy: null, error: null }],
+	};
+	const open = [
+		{ key: "111", placeId: 111, placeName: "Lobby", unsaved: false, pluginVersion: "0.21.0", status: "ok", message: "", projectId: "game", reason: "servePlaceIds", assigned: null, syncedWith: "Game", confirming: false },
+		{ key: "studio:1", placeId: 0, placeName: "Untitled", unsaved: true, pluginVersion: "0.21.0", status: "ok", message: "no project", projectId: "game", reason: null, assigned: null, syncedWith: null, confirming: true },
+	];
+	let held = claim;
+	const hub = {
+		list: () => [slot],
+		claimOf: () => held,
+		setClaim: (_id: string, next: typeof claim) => void (held = next),
+		view: () => slot,
+		registry: { get: () => slot, slots: [slot] },
+		studio: { places: () => open, unappliedOn: () => [{ placeId: 111, placeName: "Lobby", total: 2, items: ["a", "b"] }] },
+		openPlacesOn: false,
+		crashedAt: () => 0,
+		switch: async () => slot,
+	};
+	return { hub, slot };
+}
+
+test("structured answers: every outputSchema is well formed JSON Schema", () => {
+	const withSchema = TOOLS.filter((tool) => tool.outputSchema);
+	assert.deepEqual(withSchema.map((tool) => tool.name).sort(), ["serve_here", "status", "switch"], "ensure joins them when it is built");
+	for (const tool of withSchema) wellFormed(tool.outputSchema as Schema, tool.name);
+	assert.deepEqual(check({ a: 1 }, { type: "object", required: ["b"], properties: { a: { type: "string" } } }), ["$.b: missing", "$.a: integer is not string"], "the checker itself finds both kinds of mistake");
+	assert.deepEqual(check(null, { type: ["string", "null"] }), []);
+	assert.equal(check("x", { type: "string", enum: ["y"] }).length, 1);
+});
+
+test("structured answers: status, serve_here and switch answers match their schemas; the text is the same with or without", async () => {
+	const repo = tempRepo();
+	const { hub } = stubHub(repo, { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 });
+	const mcp = new Mcp(hub as never);
+	type Result = { result: { content: { type: string; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean } };
+	const call = (name: string, args: object, protocol?: string) => mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, protocol) as Promise<Result>;
+	const schemaOf = (name: string) => TOOLS.find((tool) => tool.name === name)!.outputSchema as Schema;
+
+	const status = await call("status", { path: repo }, "2025-06-18");
+	const data = status.result.structuredContent!;
+	assert.ok(data, "a 2025-06-18 client gets structuredContent");
+	assert.deepEqual(check(data, schemaOf("status")), []);
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const project = (data.projects as any[])[0];
+	assert.equal(project.served.path, repo);
+	assert.equal(project.served.branch, "main");
+	assert.match(project.served.commit, /^[0-9a-f]{40}$/);
+	assert.equal(project.claim.holder, "Other");
+	assert.equal(project.claim.yours, false);
+	assert.ok(project.claim.secondsLeft > 100 && project.claim.secondsLeft <= 120);
+	assert.deepEqual(project.places.map((place: { placeId: number }) => place.placeId), [111]);
+	assert.deepEqual(project.connecting, [{ placeId: 0, name: "Untitled", confirming: true }]);
+	assert.equal(project.yourWorktreeServed, true);
+	assert.equal(data.yourProject, "game");
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	assert.equal(((await call("status", {}, "2025-06-18")).result.structuredContent!.projects as any[])[0].yourWorktreeServed, null, "null without a path");
+
+	const plain = await call("status", { path: repo });
+	assert.equal(plain.result.structuredContent, undefined, "no header: no structuredContent");
+	assert.equal(Object.keys(plain.result).join(), "content", "no header: exactly the old shape");
+	assert.equal(plain.result.content[0].text, status.result.content[0].text, "the text is the same");
+	assert.equal((await call("status", { path: repo }, "2025-03-26")).result.structuredContent, undefined, "an older protocol gets none");
+
+	const served = await call("serve_here", { path: repo, force: true }, "2025-11-25");
+	assert.ok(!served.result.isError, served.result.content[0].text);
+	const switched = served.result.structuredContent!;
+	assert.deepEqual(check(switched, schemaOf("serve_here")), []);
+	assert.equal(switched.switched, false, "it already served this worktree");
+	assert.deepEqual(switched.problems, ["a warning"]);
+	assert.deepEqual(switched.unapplied, [{ placeId: 111, placeName: "Lobby", total: 2, items: ["a", "b"] }]);
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	assert.equal((switched.project as any).claim.yours, true, "serve_here took the claim");
+	assert.match(served.result.content[0].text, /now serves/);
+
+	const named = await call("switch", { target: repo, project: "Game", force: true }, "2025-06-18");
+	assert.ok(!named.result.isError, named.result.content[0].text);
+	assert.deepEqual(check(named.result.structuredContent, schemaOf("switch")), []);
+
+	const empty = (await new Mcp({ ...hub, list: () => [] } as never).handle({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "status", arguments: {} } }, "2025-06-18")) as { result: { structuredContent: { projects: unknown[] } } };
+	assert.deepEqual(empty.result.structuredContent.projects, []);
+});
+
+test("structured answers: tools/list carries outputSchema only for 2025-06-18 or later", async () => {
+	const mcp = new Mcp(null as never);
+	const list = async (protocol?: string) => ((await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }, protocol)) as { result: { tools: { name: string; outputSchema?: unknown }[] } }).result.tools;
+	assert.ok((await list("2025-06-18")).find((tool) => tool.name === "status")!.outputSchema);
+	assert.ok((await list("2026-01-01")).find((tool) => tool.name === "status")!.outputSchema);
+	for (const protocol of [undefined, "2025-03-26", "2024-11-05", "garbage"]) {
+		const tools = await list(protocol);
+		assert.ok(tools.every((tool) => !("outputSchema" in tool)), `${String(protocol)}: none`);
+		assert.equal(JSON.stringify(tools), JSON.stringify(TOOLS.map(({ outputSchema: _unused, ...tool }) => tool)), `${String(protocol)}: the old shape, byte for byte`);
+	}
+});
+
+test("revParse: a worktree's HEAD, a branch ref, and null on failure", async () => {
+	const repo = tempRepo();
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+	assert.equal(await revParse(repo, "HEAD"), head);
+	assert.equal(await revParse(repo, "refs/heads/side"), head);
+	assert.equal(await revParse(repo, "refs/heads/missing"), null, "an unknown ref");
+	assert.equal(await revParse(join(repo, "nowhere"), "HEAD"), null, "a folder that is not there");
+	assert.equal(await revParse(mkdtempSync(join(tmpdir(), "rojo-hub-nogit-")), "HEAD"), null, "not a repo");
 });

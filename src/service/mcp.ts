@@ -3,7 +3,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 
 import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
-import { git, pathKey, primaryCheckout } from "./git";
+import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type Hub } from "./hub";
 import { OFF_MESSAGE } from "./places";
@@ -31,6 +31,8 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
 const MAX_WAIT_S = 600;
+/** The first protocol version with outputSchema and structuredContent. */
+const STRUCTURED_FROM = "2025-06-18";
 
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
 
@@ -51,8 +53,54 @@ interface Tool {
 	title: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	/** JSON Schema of `structuredContent` (spec 011); only sent to clients of protocol 2025-06-18 or later. */
+	outputSchema?: Record<string, unknown>;
 	annotations?: Record<string, boolean>;
 }
+
+/** What a tool answers: the text every client gets, and the same facts as data for clients that read `structuredContent`. */
+export interface Answer {
+	text: string;
+	data?: Record<string, unknown>;
+}
+
+/* ---------- output schemas (spec 011, design 3): plain JSON Schema, extra fields allowed ---------- */
+
+const S = { type: "string" };
+const I = { type: "integer" };
+const B = { type: "boolean" };
+const orNull = (type: string) => ({ type: [type, "null"] });
+const arrayOf = (items: Record<string, unknown>) => ({ type: "array", items });
+const shape = (properties: Record<string, unknown>, required: string[] = Object.keys(properties)) => ({ type: "object", properties, required });
+
+/** One project, as `status`, `serve_here`, `switch` (and later `ensure`) describe it. */
+export const PROJECT_STATE_SCHEMA = shape({
+	id: S,
+	name: S,
+	port: I,
+	repoPath: S,
+	projectFile: S,
+	rojo: shape({ state: { type: "string", enum: ["running", "starting", "stopped", "error"] }, error: orNull("string"), sessionId: orNull("string"), connections: I }),
+	served: shape({ kind: { type: "string", enum: ["worktree", "branch"] }, label: S, path: orNull("string"), branch: orNull("string"), commit: orNull("string") }),
+	claim: {
+		anyOf: [{ type: "null" }, shape({ holder: S, until: S, secondsLeft: I, yours: orNull("boolean") })],
+	},
+	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, reason: orNull("string"), saved: B })),
+	connecting: arrayOf(shape({ placeId: I, name: S, confirming: B })),
+	listedPlaces: arrayOf(shape({ placeId: I, name: orNull("string"), open: B })),
+	sourcemap: shape({ state: { type: "string", enum: ["watching", "off", "error"] }, detail: S }),
+	warnings: arrayOf(S),
+	yourWorktreeServed: orNull("boolean"),
+});
+
+const UNAPPLIED_SCHEMA = arrayOf(shape({ placeId: I, placeName: S, total: I, items: arrayOf(S) }));
+const STATUS_SCHEMA = shape({
+	projects: arrayOf(PROJECT_STATE_SCHEMA),
+	groups: arrayOf(shape({ id: S, name: S, active: B, projectIds: arrayOf(S) })),
+	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S })),
+	yourProject: orNull("string"),
+});
+const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
 const pathProperty = { type: "string", description: "Your working directory (absolute), or any folder inside the worktree." };
 const projectProperty = { type: "string", description: "The project's name or id, as status shows it. Only needed when a repo has more than one project, or without path." };
@@ -69,6 +117,7 @@ export const TOOLS: Tool[] = [
 		description:
 			"Lists the projects: port, whether Rojo is serving, the Studio places synced to each (name, place ID, and why), what worktree or branch each serves, who claimed it, warnings; then the groups and every open Studio place. With path, also says whether your worktree is the one being served.",
 		inputSchema: { type: "object", properties: { path: pathProperty } },
+		outputSchema: STATUS_SCHEMA,
 		annotations: { readOnlyHint: true },
 	},
 	{
@@ -77,6 +126,7 @@ export const TOOLS: Tool[] = [
 		description:
 			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 15 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
 		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, force: forceProperty }, required: ["path"] },
+		outputSchema: SWITCH_SCHEMA,
 	},
 	{
 		name: "switch",
@@ -84,6 +134,7 @@ export const TOOLS: Tool[] = [
 		description:
 			"Switches a project to serve a branch (by name, e.g. main or origin/feature) or a worktree (by folder), live, and claims it. A branch checked out in a worktree is served from that worktree; any other branch from a read-only copy Rojo-Hub keeps.",
 		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, force: forceProperty }, ["target"]),
+		outputSchema: SWITCH_SCHEMA,
 	},
 	{
 		name: "release",
@@ -286,7 +337,9 @@ export class Mcp {
 		Handles one JSON-RPC message: the response to send, or null for a
 		notification (which gets 202 and no body).
 	*/
-	async handle(message: unknown): Promise<object | null> {
+	async handle(message: unknown, protocol?: string): Promise<object | null> {
+		// Only a client that sent MCP-Protocol-Version 2025-06-18 or later understands outputSchema and structuredContent.
+		const structured = typeof protocol === "string" && /^\d{4}-\d{2}-\d{2}$/.test(protocol.trim()) && protocol.trim() >= STRUCTURED_FROM;
 		if (!message || typeof message !== "object" || Array.isArray(message)) {
 			return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Expected one JSON-RPC request object" } };
 		}
@@ -307,13 +360,14 @@ export class Mcp {
 			case "ping":
 				return reply({});
 			case "tools/list":
-				return reply({ tools: TOOLS });
+				return reply({ tools: structured ? TOOLS : TOOLS.map(({ outputSchema: _outputSchema, ...tool }) => tool) });
 			case "tools/call": {
 				const name = params?.name;
 				if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) return fail(-32602, `Unknown tool: ${String(name)}`);
 				const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Args;
 				try {
-					return reply({ content: [{ type: "text", text: await this.call(name, args) }] });
+					const answer = await this.call(name, args);
+					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}) });
 				} catch (error) {
 					const known = error instanceof Refusal || error instanceof Conflict || error instanceof NotFound;
 					const detail = error instanceof Error ? error.message : String(error);
@@ -325,7 +379,13 @@ export class Mcp {
 		}
 	}
 
-	private call(name: string, args: Args): Promise<string> {
+	/** Runs a tool. Those without data answer plain text. */
+	private async call(name: string, args: Args): Promise<Answer> {
+		const result = await this.run(name, args);
+		return typeof result === "string" ? { text: result } : result;
+	}
+
+	private run(name: string, args: Args): Promise<string | Answer> {
 		switch (name) {
 			case "status":
 				return this.status(args);
@@ -544,6 +604,76 @@ export class Mcp {
 		return "\nRojo crashed meanwhile and Rojo-Hub restarted it. That is a new Rojo session: Studio reconnects through the plugin. Call wait_for_studio before checking Studio.";
 	}
 
+	/* ---------- the same facts as data (spec 011, design 3) ---------- */
+
+	/*
+		One project as PROJECT_STATE_SCHEMA says. `root` is the caller's worktree
+		(null without a path): it decides claim.yours and yourWorktreeServed. The
+		served commit is read here, so build several at once with Promise.all.
+	*/
+	async projectState(slot: SlotView, root: string | null): Promise<Record<string, unknown>> {
+		const claim = this.hub.claimOf(slot.id);
+		const open = this.hub.studio.places();
+		const onWorktree = slot.target.kind === "worktree" ? slot.target.path : null;
+		const commit = slot.target.kind === "worktree" ? await revParse(slot.target.path, "HEAD") : await revParse(slot.repoPath, slot.target.ref);
+		const mine = root !== null && onWorktree !== null && pathKey(onWorktree) === pathKey(root);
+		return {
+			id: slot.id,
+			name: slot.projectName,
+			port: slot.port,
+			repoPath: slot.repoPath,
+			projectFile: slot.projectFile,
+			rojo: {
+				state: slot.state === "offline" ? "stopped" : slot.state,
+				error: slot.error,
+				sessionId: slot.sessionId,
+				connections: slot.connections,
+			},
+			served: { kind: slot.target.kind, label: slot.targetLabel, path: onWorktree, branch: slot.branch, commit },
+			claim: claim
+				? {
+						holder: claim.label,
+						until: new Date(claim.until).toISOString(),
+						secondsLeft: Math.max(0, Math.round((claim.until - Date.now()) / 1000)),
+						yours: root === null ? null : claim.key === claimKey({ kind: "worktree", path: root }),
+					}
+				: null,
+			places: (slot.state === "running" ? (slot.places ?? []) : []).map((place) => ({
+				placeId: place.placeId,
+				name: place.placeName,
+				pluginVersion: place.pluginVersion,
+				reason: open.find((entry) => entry.placeId === place.placeId && entry.syncedWith === slot.projectName)?.reason ?? null,
+				saved: place.placeId > 0,
+			})),
+			connecting: open
+				.filter((place) => place.projectId === slot.id && place.syncedWith !== slot.projectName)
+				.map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, confirming: place.confirming })),
+			listedPlaces: (slot.listedPlaces ?? []).map((place) => ({ placeId: place.placeId, name: place.placeName, open: place.open })),
+			sourcemap: { state: slot.sourcemap.state, detail: slot.sourcemap.detail },
+			warnings: [...slot.warnings],
+			yourWorktreeServed: root === null ? null : mine,
+		};
+	}
+
+	/** Rojo's error lines and the card's warnings, for `problems`. */
+	private problemLines(slot: SlotView): string[] {
+		return [...(slot.error ? slot.error.split("\n").slice(0, 6).filter((line) => line.trim() !== "") : []), ...slot.warnings];
+	}
+
+	private unappliedData(slot: SlotView, since: number): { placeId: number; placeName: string; total: number; items: string[] }[] {
+		return this.hub.studio.unappliedOn(slot.port, since).map((report) => ({ placeId: report.placeId, placeName: report.placeName, total: report.total, items: [...report.items] }));
+	}
+
+	/** The `data` of serve_here and switch. */
+	private async switchData(before: SlotView, now: SlotView, root: string | null, since: number): Promise<Record<string, unknown>> {
+		return {
+			project: await this.projectState(now, root),
+			switched: claimKey(before.target) !== claimKey(now.target),
+			problems: this.problemLines(now),
+			unapplied: this.unappliedData(now, since),
+		};
+	}
+
 	/** `Lobby (place 111), Match (place 222)` */
 	private placeList(places: Pick<StudioPlace, "placeName" | "placeId">[]): string {
 		return places.map((place) => `${place.placeName} (${place.placeId ? `place ${place.placeId}` : "not saved to Roblox"})`).join(", ");
@@ -586,16 +716,19 @@ export class Mcp {
 
 	/* ---------- tools ---------- */
 
-	private async serveHere(args: Args): Promise<string> {
+	private async serveHere(args: Args): Promise<Answer> {
 		const { slot, root } = await this.pick(args);
 		if (!root) throw new Refusal("path is required: your working directory.");
 		const since = Date.now();
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
+		return {
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`,
+			data: await this.switchData(slot, now, root, since),
+		};
 	}
 
-	private async switchTo(args: Args): Promise<string> {
+	private async switchTo(args: Args): Promise<Answer> {
 		const { slot, root } = await this.pick(args);
 		const wanted = text(args.target);
 		if (!wanted) throw new Refusal("target is required: a branch name or a worktree folder.");
@@ -620,7 +753,10 @@ export class Mcp {
 		const switched = await this.take(slot, target, label, args);
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
+		return {
+			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`,
+			data: await this.switchData(slot, now, root, since),
+		};
 	}
 
 	private async release(args: Args): Promise<string> {
@@ -856,12 +992,24 @@ export class Mcp {
 		return `Wrote ${written.path}.`;
 	}
 
-	private async status(args: Args): Promise<string> {
+	private async status(args: Args): Promise<Answer> {
 		const slots = this.hub.list();
-		if (slots.length === 0) return "Rojo-Hub has no projects. Add one with add_project (path: a folder in the repo).";
 		const path = text(args.path);
 		const root = path ? await worktreeRoot(path).catch(() => null) : null;
 		const repo = root ? pathKey(await primaryCheckout(root).catch(() => root)) : null;
+		const mineOf = (slot: SlotView) => (repo !== null && pathKey(slot.repoPath) === repo ? root : null);
+		const groups = this.groups?.list() ?? [];
+		const data = {
+			projects: await Promise.all(slots.map((slot) => this.projectState(slot, mineOf(slot)))),
+			groups: groups.map((group) => ({ id: group.id, name: group.name, active: group.active, projectIds: [...group.projectIds] })),
+			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion })),
+			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
+		};
+		return { text: await this.statusText(slots, root, repo), data };
+	}
+
+	private async statusText(slots: SlotView[], root: string | null, repo: string | null): Promise<string> {
+		if (slots.length === 0) return "Rojo-Hub has no projects. Add one with add_project (path: a folder in the repo).";
 		const lines: string[] = [];
 		for (const slot of slots) {
 			const claim = this.hub.claimOf(slot.id);

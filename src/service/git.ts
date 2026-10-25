@@ -110,6 +110,16 @@ export async function primaryCheckout(path: string): Promise<string> {
 	return resolve(dirname(common));
 }
 
+/** The full commit hash `rev` names in `cwd`, or null when git cannot say within 2 s (not a repo, unknown ref, slow disk). */
+export async function revParse(cwd: string, rev: string): Promise<string | null> {
+	try {
+		const hash = (await git(cwd, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { timeout: 2000 })).trim();
+		return /^[0-9a-f]{40,64}$/.test(hash) ? hash : null;
+	} catch {
+		return null;
+	}
+}
+
 export interface Worktree {
 	path: string;
 	head: string | null;
