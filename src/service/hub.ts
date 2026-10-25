@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { PlaceOpened, PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
-import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
+import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, resolveBase, sameFolders, sameTarget } from "./git";
 import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
 import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
@@ -854,7 +854,7 @@ export class Hub {
 		a git worktree beside the repo (<repo>-worktrees/<name>). Never a
 		checkout in a folder rojo is serving (see prepareTree).
 	*/
-	async createBranch(id: string, name: string, base: string): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git" }> {
+	async createBranch(id: string, name: string, base: string): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git"; from: string; notes: string[] }> {
 		const slot = this.registry.get(id);
 		const clean = await checkBranchName(slot.repoPath, name.trim());
 		if (await branchExists(slot.repoPath, clean)) throw new Conflict(`A branch named ${clean} already exists; pick it under Local branches.`);
@@ -866,21 +866,25 @@ export class Hub {
 		let path: string;
 		let branch = clean;
 		let via: "orca" | "git";
+		let from = base;
+		let notes: string[] = [];
 		if (await inOrca(slot.repoPath)) {
+			// Orca gets `base` as given: it does its own start-point handling and takes only a branch name.
 			const made = await orcaCreateWorktree(slot.repoPath, clean, base);
 			path = made.path;
 			branch = made.branch ?? clean;
 			via = "orca";
 		} else {
+			({ ref: from, notes } = await resolveBase(slot.repoPath, base));
 			const parent = join(dirname(slot.repoPath), `${basename(slot.repoPath)}-worktrees`);
 			path = join(parent, clean.replace(/[\\/]+/g, "-"));
 			if (existsSync(path)) throw new Conflict(`${path} already exists`);
 			mkdirSync(parent, { recursive: true });
-			await git(slot.repoPath, ["worktree", "add", "-b", clean, path, base]);
+			await git(slot.repoPath, ["worktree", "add", "-b", clean, path, from]);
 			via = "git";
 		}
 		void this.targetCache.refresh(slot.repoPath).catch(() => undefined);
-		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via };
+		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via, from, notes };
 	}
 
 	/** Writes the served worktree's sourcemap.json once, on request, even where the watcher would not. */

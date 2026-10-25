@@ -729,7 +729,8 @@ export class Mcp {
 		const made = await this.hub.createBranch(slot.id, name, base);
 		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: Date.now() + CLAIM_MS });
 		const now = await this.settled(made.slot);
-		return `Made branch ${made.branch} from ${base} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}`;
+		const notes = made.notes.length ? ` (${made.notes.join("; ")})` : "";
+		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}`;
 	}
 
 	private async log(args: Args): Promise<string> {

@@ -526,6 +526,40 @@ test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, bran
 	assert.match(now.claim?.label ?? "", /agent-work/);
 	await tool("release", { project: name, force: true });
 
+	// a base is fetched first: behind its remote it starts from the remote's commit, diverged or ahead it stays local
+	assert.match(made, /could not fetch, used local main/, "no remote: carries on and says so");
+	const bare = join(root, "origin.git");
+	gitIn(root, "init", "-q", "--bare", "-b", "main", bare);
+	gitIn(dir, "remote", "add", "origin", bare);
+	gitIn(dir, "push", "-q", "-u", "origin", "main");
+	const clone = join(root, "origin-clone");
+	gitIn(root, "clone", "-q", bare, clone);
+	write(join(clone, "src", "Remote.server.luau"), 'print("remote")\n');
+	gitIn(clone, "add", "-A");
+	gitIn(clone, "commit", "-q", "-m", "remote ahead");
+	gitIn(clone, "push", "-q", "origin", "main");
+	const remoteTip = gitIn(clone, "rev-parse", "HEAD").trim();
+	const behind = await ok("new_branch", { path: dir, name: "from-remote", base: "main" });
+	assert.match(behind, /Made branch from-remote from origin\/main/);
+	assert.equal(gitIn(dir, "rev-parse", "from-remote").trim(), remoteTip, "started from the remote commit");
+	await tool("release", { project: name, force: true });
+	// local main now diverges from the remote's
+	write(join(dir, "src", "Local.server.luau"), 'print("local")\n');
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", "local only");
+	const localTip = gitIn(dir, "rev-parse", "main").trim();
+	const diverged = await ok("new_branch", { path: dir, name: "from-diverged", base: "main" });
+	assert.match(diverged, /Made branch from-diverged from main \(.*diverged/);
+	assert.equal(gitIn(dir, "rev-parse", "from-diverged").trim(), localTip);
+	await tool("release", { project: name, force: true });
+	// merged in, local main is ahead of the remote and is used as it is
+	gitIn(dir, "merge", "-q", "--no-edit", "origin/main");
+	const aheadTip = gitIn(dir, "rev-parse", "main").trim();
+	const ahead = await ok("new_branch", { path: dir, name: "from-ahead", base: "main" });
+	assert.match(ahead, /Made branch from-ahead from main in /);
+	assert.equal(gitIn(dir, "rev-parse", "from-ahead").trim(), aheadTip);
+	await tool("release", { project: name, force: true });
+
 	assert.match(await ok("remove_project", { path: dir }), /Removed .* files are untouched/);
 	assert.equal(await view(), undefined);
 });
