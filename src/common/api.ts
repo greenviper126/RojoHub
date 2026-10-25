@@ -249,6 +249,10 @@ export interface BranchResult {
 	from: string;
 	/** Fetch or divergence notes for the answer. */
 	notes: string[];
+	/** False when the worktree's setup commands are still running (the MCP call waits only so long): nothing was switched (spec 012). */
+	switched: boolean;
+	/** One line per setup command that ran, or the note that setup is still running. */
+	setupNotes: string[];
 }
 
 export interface TargetOption {
@@ -306,6 +310,8 @@ export interface PortSettings {
 	studioAutoConnect?: "listed" | "remembered";
 	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
 	openPlaces?: boolean;
+	/** rojoHub.setupCommands: repo path -> commands run in a new worktree before it is first served (spec 012); the service validates it. */
+	setupCommands?: unknown;
 }
 
 /*

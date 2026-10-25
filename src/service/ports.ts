@@ -90,6 +90,7 @@ export function savePortSettings(home: string, settings: PortSettings): void {
 		studioPlugin: settings.studioPlugin !== false,
 		studioAutoConnect: settings.studioAutoConnect === "listed" ? "listed" : "remembered",
 		openPlaces: settings.openPlaces === true,
+		setupCommands: settings.setupCommands !== null && typeof settings.setupCommands === "object" ? settings.setupCommands : {},
 	};
 	const temporary = settingsFile(home) + ".tmp";
 	writeFileSync(temporary, JSON.stringify(clean, null, "\t") + "\n");

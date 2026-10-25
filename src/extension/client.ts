@@ -150,7 +150,9 @@ export const client = {
 	order: () => call<DisplayOrder>("GET", "/order"),
 	putOrder: (order: Partial<DisplayOrder>) => call<DisplayOrder>("PUT", "/order", order),
 	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
-	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
+	/** Setup commands under way or finished, per worktree (spec 012). */
+	setupJobs: () => call<{ path: string; state: "running" | "ok" | "failed"; step: number; of: number; text: string }[]>("GET", "/setup"),
+	putSettings: (settings: PortSettings) => call<{ ok: true; setupProblems?: string[] }>("PUT", "/settings", settings),
 	agents: () => call<AgentStatus[]>("GET", "/agents"),
 	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
 	/** Assigns a project to an open Studio place (spec 007); null: back to its project files. */

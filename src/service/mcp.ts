@@ -7,7 +7,10 @@ import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type Hub } from "./hub";
 import { OFF_MESSAGE } from "./places";
+import { loadPortSettings } from "./ports";
 import { Conflict, NotFound } from "./registry";
+import { describeFailure, describeSteps, installChecks, type CheckResult } from "./setup";
+import { resolveRojo } from "./tools";
 
 /*
 	Rojo-Hub for agents (specs 004 and 008): the Model Context Protocol over
@@ -31,6 +34,8 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
 const MAX_WAIT_S = 600;
+/** How long new_branch waits for setup commands: below Codex's 60 s tool timeout (spec 012). */
+const SETUP_WAIT_MS = 40000;
 /** The first protocol version with outputSchema and structuredContent. */
 const STRUCTURED_FROM = "2025-06-18";
 
@@ -44,7 +49,7 @@ Rojo owns what it syncs: an edit made in Studio to a synced script or instance i
 
 Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
 
-To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio.
+To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm, a checkout) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
@@ -103,12 +108,13 @@ const STATUS_SCHEMA = shape({
 	groups: arrayOf(shape({ id: S, name: S, active: B, projectIds: arrayOf(S) })),
 	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S })),
 	yourProject: orNull("string"),
+	setup: arrayOf(shape({ path: S, state: { type: "string", enum: ["running", "ok", "failed"] }, step: I, of: I })),
 });
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
-export const ENSURE_STEPS = ["start", "serve", "open_place", "wait_for_studio"] as const;
+export const ENSURE_STEPS = ["start", "setup", "serve", "open_place", "wait_for_studio"] as const;
 export const ENSURE_OUTCOMES = ["done", "already", "skipped", "failed"] as const;
-export const ENSURE_FAILURES = ["no_project", "start_failed", "claimed", "rojo_error", "open_places_off", "no_listed_places", "several_places", "open_failed", "studio_confirming", "timeout", "stopped"] as const;
+export const ENSURE_FAILURES = ["no_project", "start_failed", "setup_failed", "setup_running", "claimed", "rojo_error", "open_places_off", "no_listed_places", "several_places", "open_failed", "studio_confirming", "timeout", "stopped"] as const;
 type EnsureFailure = (typeof ENSURE_FAILURES)[number];
 interface EnsureStep {
 	step: (typeof ENSURE_STEPS)[number];
@@ -121,6 +127,8 @@ const ENSURE_SCHEMA = shape({
 	steps: arrayOf(shape({ step: { type: "string", enum: [...ENSURE_STEPS] }, outcome: { type: "string", enum: [...ENSURE_OUTCOMES] }, detail: S })),
 	project: { anyOf: [{ type: "null" }, PROJECT_STATE_SCHEMA] },
 	placeIds: arrayOf(I),
+	checks: arrayOf(shape({ name: { type: "string", enum: ["rojo", "packages", "node_modules", "sourcemap"] }, ok: B, detail: S })),
+	warnings: arrayOf(S),
 	failure: { anyOf: [{ type: "null" }, shape({ reason: { type: "string", enum: [...ENSURE_FAILURES] }, message: S })] },
 });
 
@@ -241,7 +249,7 @@ export const TOOLS: Tool[] = [
 		name: "new_branch",
 		title: "New branch in its own worktree",
 		description:
-			"Makes a new branch in a worktree of its own (through Orca when Orca manages the repo), switches the project to it and claims it for that worktree. Returns the worktree's folder: work there.",
+			"Makes a new branch in a worktree of its own (through Orca when Orca manages the repo), runs the repo's setup commands there if the user configured any (rojoHub.setupCommands), then switches the project to it and claims it for that worktree. If setup is still running after 40 seconds, or failed, it says so and nothing is switched. Returns the worktree's folder: work there.",
 		inputSchema: project({ name: { type: "string", description: "The new branch's name." }, base: { type: "string", description: "Branch to start from (default: the branch the project serves)." }, wait: waitProperty, force: forceProperty }, ["name"]),
 	},
 	{
@@ -905,11 +913,16 @@ export class Mcp {
 		await this.waitTurn(slot, mine, clamp(args.wait, 0, MAX_WAIT_S), force);
 		const claim = this.hub.claimOf(slot.id);
 		if (claim && claim.key !== mine && !force) throw this.claimRefusal(slot, claim, "A new branch switches the project, which would change what Studio shows under that agent.");
-		const made = await this.hub.createBranch(slot.id, name, base);
+		const made = await this.hub.createBranch(slot.id, name, base, { actor: "mcp", setupWaitMs: SETUP_WAIT_MS });
+		const setupText = made.setupNotes.length ? `\n${made.setupNotes.join("\n")}` : "";
+		// Setup still running: the worktree exists but nothing is switched or claimed until ensure has waited for it (spec 012).
+		if (!made.switched) {
+			return `Made branch ${made.branch} from ${made.from} in ${made.path}, but its setup commands are still running in the background; nothing was switched and you hold nothing yet.${setupText}\nCall ensure with path ${made.path} to wait for the setup and serve the worktree.`;
+		}
 		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: Date.now() + CLAIM_MS });
 		const now = await this.settled(made.slot);
 		const notes = made.notes.length ? ` (${made.notes.join("; ")})` : "";
-		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}`;
+		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}${setupText}`;
 	}
 
 	private async log(args: Args): Promise<string> {
@@ -972,7 +985,8 @@ export class Mcp {
 			return this.ensureAnswer(null, null, steps, { reason: "no_project", message: error.message }, since);
 		}
 		const fresh = () => this.hub.view(this.hub.registry.get(slot.id));
-		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since);
+		let checks: CheckResult[] = [];
+		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since, checks);
 		const raw = args.place === undefined || args.place === null || args.place === "" ? null : typeof args.place === "string" ? args.place.trim() : args.place;
 		const wantedPlace = raw === null ? null : typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
 		if (wantedPlace !== null && (!Number.isSafeInteger(wantedPlace) || wantedPlace <= 0)) return fail("no_listed_places", `place must be a positive integer place ID (a number or digits), not ${JSON.stringify(args.place)}. Call ensure again with place as one of the project's places.`);
@@ -980,7 +994,7 @@ export class Mcp {
 
 		// An error nothing above turned into an answer still keeps the steps done.
 		let stage: EnsureStep["step"] = "start";
-		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", serve: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
+		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", setup: "setup_failed", serve: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
 		try {
 			// 2. start
 			stage = "start";
@@ -1003,6 +1017,37 @@ export class Mcp {
 			} else {
 				steps.push({ step: "start", outcome: "already", detail: `${slot.projectName} is ${slot.state}` });
 				if (slot.state === "starting") slot = await this.settled(slot);
+			}
+
+			// 2b. install checks, and setup when this worktree needs it and no Rojo has read it (spec 012). Before the claim, so a long install does not hold it.
+			stage = "setup";
+			checks = this.checks(slot, root!);
+			const notOk = () => checks.filter((check) => (check.name === "packages" || check.name === "node_modules") && !check.ok);
+			const configured = this.hub.setupFor(slot.repoPath);
+			const running = this.hub.setupJobs.running(root!);
+			if (running || (configured && notOk().length > 0)) {
+				const why = running ? null : await this.hub.setupRefusal(this.hub.registry.get(slot.id), root!);
+				if (configured && "problem" in configured) {
+					steps.push({ step: "setup", outcome: "skipped", detail: configured.problem });
+				} else if (why) {
+					steps.push({ step: "setup", outcome: "skipped", detail: why });
+				} else {
+					const ran = await this.hub.setupWorktree(slot.id, root!, { actor: "mcp", branch: null, waitMs: Math.max(5, clamp(args.timeout, 60, 300)) * 1000 });
+					if (ran && !ran.outcome) {
+						steps.push({ step: "setup", outcome: "failed", detail: `still running (command ${ran.job.step} of ${ran.job.of}: ${ran.job.text})` });
+						return fail("setup_running", `Setup is still running in ${root} (command ${ran.job.step} of ${ran.job.of}: ${ran.job.text}). Call ensure again to keep waiting; nothing was served.`);
+					}
+					if (ran?.outcome && !ran.outcome.ok) {
+						steps.push({ step: "setup", outcome: "failed", detail: `${ran.outcome.failed!.text} (step ${ran.outcome.failed!.index} of ${ran.outcome.failed!.of})` });
+						return fail("setup_failed", describeFailure(ran.outcome));
+					}
+					if (ran?.outcome) {
+						steps.push({ step: "setup", outcome: "done", detail: `${ran.joined ? "joined the running setup; " : ""}${ran.outcome.steps.length} command(s) ran in ${root}` });
+						const lines = describeSteps(ran.outcome);
+						if (lines) steps[steps.length - 1].detail += `\n${lines}`;
+						checks = this.checks(this.hub.view(this.hub.registry.get(slot.id)), root!);
+					}
+				}
 			}
 
 			// 3. claim and serve
@@ -1086,7 +1131,7 @@ export class Mcp {
 					return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
 				}
 			}
-			return this.ensureAnswer(fresh(), root, steps, null, since);
+			return this.ensureAnswer(fresh(), root, steps, null, since, checks);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			steps.push({ step: stage, outcome: "failed", detail: message });
@@ -1094,16 +1139,30 @@ export class Mcp {
 		}
 	}
 
+	/** The install checks (spec 012, design 2) of a worktree, for the project as it is now. Reads files only. */
+	private checks(slot: SlotView, root: string): CheckResult[] {
+		const serving = slot.target.kind === "worktree" && pathKey(slot.target.path) === pathKey(root);
+		return installChecks(root, {
+			rojo: resolveRojo(slot.repoPath),
+			borrowed: serving && slot.mode === "borrowed",
+			sourcemapsOn: loadPortSettings(this.hub.home).sourcemaps !== false,
+			sourcemap: slot.sourcemap,
+			servedTree: slot.target.kind === "worktree" ? slot.target.path : null,
+			serving,
+		});
+	}
+
 	/** The answer of ensure: the steps, then why it stopped or how Studio looks. ready: running, serving this worktree, a place synced. */
-	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number): Promise<Answer> {
+	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number, checks: CheckResult[] = []): Promise<Answer> {
+		const warnings = checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`);
 		const project = slot ? await this.projectState(slot, root) : null;
 		const places = slot && slot.state === "running" ? (slot.places ?? []) : [];
 		const ready = failure === null && slot !== null && slot.state === "running" && project?.yourWorktreeServed === true && places.length > 0;
 		const lines = steps.map((step) => `${step.step}: ${step.outcome}, ${step.detail}`);
 		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
 		return {
-			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}`,
-			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), failure },
+			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}${warnings.map((warning) => `\nwarning: ${warning}`).join("")}`,
+			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), checks, warnings, failure },
 			...(failure ? { isError: true } : {}),
 		};
 	}
@@ -1219,6 +1278,7 @@ export class Mcp {
 			groups: groups.map((group) => ({ id: group.id, name: group.name, active: group.active, projectIds: [...group.projectIds] })),
 			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion })),
 			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
+			setup: this.hub.setupJobs.all().map((job) => ({ path: job.path, state: job.state, step: job.step, of: job.of })),
 		};
 		return { text: await this.statusText(slots, root, repo), data };
 	}
@@ -1246,6 +1306,11 @@ export class Mcp {
 			lines.push("", "Groups:");
 			const name = (id: string) => slots.find((slot) => slot.id === id)?.projectName ?? id;
 			for (const group of groups) lines.push(`  ${group.name} (id ${group.id})${group.active ? ", running" : ""}: ${group.projectIds.map(name).join(", ") || "no projects"}`);
+		}
+		const setups = this.hub.setupJobs.all().filter((job) => job.state !== "ok");
+		if (setups.length > 0) {
+			lines.push("", "Setup commands (spec 012):");
+			for (const job of setups) lines.push(`  ${job.path}: ${job.state === "running" ? `running, command ${job.step} of ${job.of} (${job.text}); ensure from that worktree waits for it` : "failed; fix the cause and call ensure from that worktree"}`);
 		}
 		const places = this.hub.studio.places();
 		if (places.length > 0) {
