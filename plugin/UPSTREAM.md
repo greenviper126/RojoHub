@@ -58,13 +58,16 @@ keeps its own licence in its folder. Everything is credited in the repository's
   - spec 010: the session's *Disconnected* status asks `hub:holdLoss` first and shows nothing while
     the link waits for the restarted project; *Connecting* and *Connected* show no page change or
     notification while it resumes (`hub:isResuming`);
-  - the Connected page gets `hubBranch` (`hub:branchText()`, the branch being served; spec 014).
+  - the Connected page gets `hubBranch` (`hub:branchText()`, the branch being served; spec 014) and
+    `hubNote` (`hub:updateNote()`, "Rojo-Hub plugin X; Y is installed. Reopen this place to update."
+    when the service is newer than the plugin, 0.22.6).
 - `src/App/StatusPages/NotConnected.lua`: renders `RojoHub.ConnectButton` (only while the service
   answers *connect*) and `RojoHub.StatusLine` under the buttons.
 - `src/App/StatusPages/Connected.lua`: the changes viewer follows the current session, since a
   quietly resumed restart keeps the page (spec 010); the connection details render
-  `RojoHub.BranchLine` between the project name and the address when `hubBranch` is set, and grow
-  from 70 to 94 px to fit it.
+  `RojoHub.BranchLine` between the project name and the address when `hubBranch` is set, and the
+  update line (`hubNote`) under the address, and grow from 70 px by 24 and 22 to fit them. The Not
+  Connected page needs no hook for the update line: `RojoHub.StatusLine` adds it.
 - `src/App/StatusPages/Settings/init.lua`: a *Rojo-Hub Auto Connect* row (`hubAutoConnect`).
 - `src/Reconciler/reify.lua`: creates instances through `RojoHub.Adopt`, which adopts an existing
   instance where one cannot be created (`StarterCharacterScripts` added by a switch), and leaves an

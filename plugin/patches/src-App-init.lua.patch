@@ -211,11 +211,12 @@
  							self.confirmationBindable:Fire("Abort")
  						end,
  						onAccept = function()
-@@ -939,6 +1004,7 @@ function App:render()
+@@ -939,6 +1004,8 @@ function App:render()
  					Connected = createPageElement(AppStatus.Connected, {
  						projectName = self.state.projectName,
  						address = self.state.address,
 +						hubBranch = if self.hub then self.hub:branchText() else nil, -- Rojo-Hub
++						hubNote = if self.hub then self.hub:updateNote() else nil, -- Rojo-Hub
  						patchTree = self.state.patchTree,
  						patchData = self.state.patchData,
  						serveSession = self.serveSession,

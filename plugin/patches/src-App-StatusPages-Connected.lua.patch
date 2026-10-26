@@ -23,11 +23,11 @@
  		return e(BorderedContainer, {
  			transparency = props.transparency,
 -			size = UDim2.new(1, 0, 0, 70),
-+			size = UDim2.new(1, 0, 0, if props.hubBranch then 94 else 70), -- Rojo-Hub: room for the branch line
++			size = UDim2.new(1, 0, 0, 70 + (if props.hubBranch then 24 else 0) + (if props.hubNote then 22 else 0)), -- Rojo-Hub: room for the branch and update lines
  			layoutOrder = props.layoutOrder,
  		}, {
  			TextContainer = e("Frame", {
-@@ -229,6 +233,11 @@ local function ConnectionDetails(props)
+@@ -229,6 +233,16 @@ local function ConnectionDetails(props)
  					BackgroundTransparency = 1,
  				}),
  
@@ -36,10 +36,15 @@
 +					then e(HubBranchLine, { text = props.hubBranch, transparency = props.transparency, layoutOrder = 2 })
 +					else nil,
 +
++				-- Rojo-Hub: this plugin is older than the Rojo-Hub installed (reopen the place)
++				HubNote = if props.hubNote
++					then e(HubBranchLine, { text = props.hubNote, transparency = props.transparency, layoutOrder = 4 })
++					else nil,
++
  				Address = e("TextLabel", {
  					Text = props.address,
  					FontFace = theme.Font.Code,
-@@ -239,7 +248,7 @@ local function ConnectionDetails(props)
+@@ -239,7 +253,7 @@ local function ConnectionDetails(props)
  
  					Size = UDim2.new(1, 0, 0, theme.TextSize.Medium),
  
@@ -48,11 +53,12 @@
  					BackgroundTransparency = 1,
  				}),
  
-@@ -436,6 +445,7 @@ function ConnectedPage:render()
+@@ -436,6 +450,8 @@ function ConnectedPage:render()
  			ConnectionDetails = e(ConnectionDetails, {
  				projectName = self.state.projectName,
  				address = self.state.address,
 +				hubBranch = self.props.hubBranch, -- Rojo-Hub
++				hubNote = self.props.hubNote, -- Rojo-Hub
  				transparency = self.props.transparency,
  				layoutOrder = 2,
  
