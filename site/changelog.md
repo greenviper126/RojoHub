@@ -2,6 +2,13 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.7
+
+- **Fixed: Rojo's window in Studio did not open with the 0.22.6 plugin.** The plugin's page asked the
+  Rojo-Hub part for its "reopen this place to update" line through a method that was never added, so
+  drawing the page failed. Syncing went on underneath, but the toolbar button showed nothing. The
+  update line works from this plugin on.
+
 ## 0.22.6
 
 **Chats opened before an update keep the old Rojo-Hub connection** until they reconnect (`/mcp`, then

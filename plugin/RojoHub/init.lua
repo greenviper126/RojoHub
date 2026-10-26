@@ -36,6 +36,7 @@ local Settings = require(Plugin.Settings)
 local ServeSession = require(Plugin.ServeSession)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local HubVersion = require(script.Version)
+local UpdateNote = require(script.UpdateNote)
 
 local SERVICE_URL = "ws://127.0.0.1:34870/studio"
 -- Must match STUDIO_PROTOCOL in Rojo-Hub's src/common/api.ts.
@@ -336,6 +337,11 @@ function Hub:branchText()
 		return string.format("%s (%s)", branch, label)
 	end
 	return branch or label
+end
+
+-- "Reopen this place to update" when the service is newer than this plugin; else nil.
+function Hub:updateNote()
+	return UpdateNote(self.match)
 end
 
 -- Tells the service what this place is synced to, when that changed.

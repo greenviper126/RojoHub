@@ -852,6 +852,17 @@ test("the Studio plugin says the same version as the service", () => {
 	assert.equal(Number(/local PROTOCOL = (\d+)/.exec(hub)?.[1]), STUDIO_PROTOCOL, "the plugin's protocol matches STUDIO_PROTOCOL");
 });
 
+test("every Hub method the plugin's patches call exists in plugin/RojoHub/init.lua", () => {
+	// 0.22.6 shipped a hook calling hub:updateNote() with no such method: Rojo's window never drew.
+	const root = resolve(__dirname, "..", "..", "plugin");
+	const hub = readFileSync(resolve(root, "RojoHub", "init.lua"), "utf8");
+	const defined = new Set([...hub.matchAll(/^function Hub[:.](\w+)\(/gm)].map((m) => m[1]));
+	for (const file of readdirSync(resolve(root, "patches"))) {
+		const added = readFileSync(resolve(root, "patches", file), "utf8").split(/\r?\n/).filter((line) => line.startsWith("+")).join("\n");
+		for (const [, name] of added.matchAll(/\bhub[:.](\w+)\(/g)) assert.ok(defined.has(name), `${file} calls hub:${name}(), which init.lua does not define`);
+	}
+});
+
 test("plugin/upstream is Rojo's plugin unedited, and every patch in plugin/patches applies to it", () => {
 	execFileSync(process.execPath, ["tools/plugin.mjs", "check"], { cwd: resolve(__dirname, "..", ".."), stdio: "pipe" });
 });
