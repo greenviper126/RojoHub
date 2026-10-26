@@ -223,6 +223,8 @@ class Fake {
 	seen: Seen[] = [];
 	/** What to do with a tools/call: answer, or drop the connection after reading it. */
 	onCall: "answer" | "reset" | "http500" = "answer";
+	/** Whether /mcp answers carry x-rojo-hub-version (an older service sends none). */
+	sendHeader = true;
 	private server: Server | null = null;
 
 	constructor(
@@ -243,8 +245,9 @@ class Fake {
 				for await (const chunk of request) chunks.push(chunk as Buffer);
 				const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Seen["body"];
 				this.seen.push({ body, protocol: header(request, "mcp-protocol-version") });
+				const versioned: Record<string, string> = this.sendHeader ? { "x-rojo-hub-version": this.version } : {};
 				if (body.id === undefined) {
-					response.writeHead(202);
+					response.writeHead(202, versioned);
 					return response.end();
 				}
 				if (body.method === "tools/call" && this.onCall === "reset") return request.socket.destroy();
@@ -258,7 +261,7 @@ class Fake {
 						: body.method === "tools/list"
 							? { tools: [{ name: `status-${this.version}`, inputSchema: { type: "object" } }] }
 							: { content: [{ type: "text", text: `ok ${body.params?.name}` }] };
-				response.writeHead(200, { "content-type": "application/json" });
+				response.writeHead(200, { "content-type": "application/json", ...versioned });
 				response.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
 			});
 			this.server.listen(this.port, "127.0.0.1", () => done());
@@ -493,6 +496,46 @@ test("launcher proxy: tools/list_changed after the service is replaced by anothe
 		await send(call(3));
 		assert.equal(textOf(out[2]), "ok status");
 		assert.deepEqual(out[3], { jsonrpc: "2.0", method: "notifications/tools/list_changed" }, "sent after the answer");
+	} finally {
+		await fake.close();
+	}
+});
+
+test("launcher proxy: a new service version in the answer header is announced without any call failing", async () => {
+	const { fake, out, send } = await rig({ startService: (f) => f.listen() });
+	await fake.listen();
+	try {
+		await send(initialize);
+		await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+		await send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+		const before = out.length;
+		await send(call(3));
+		assert.equal(out.length, before + 1, "the same version announces nothing");
+		fake.version = "0.23.0"; // a new service took the port; the connection never failed
+		await send(call(4));
+		assert.equal(textOf(out[before + 1]), "ok status");
+		assert.deepEqual(out[before + 2], { jsonrpc: "2.0", method: "notifications/tools/list_changed" }, "sent after the answer");
+		await send(call(5));
+		assert.equal(out.length, before + 4, "and only once");
+	} finally {
+		await fake.close();
+	}
+});
+
+test("launcher proxy: an older service without the header is checked through /health", async () => {
+	const { fake, out, send } = await rig({ startService: (f) => f.listen() });
+	await fake.listen();
+	fake.sendHeader = false;
+	try {
+		await send(initialize);
+		await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+		await send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+		const before = out.length;
+		await send(call(3));
+		assert.equal(out.length, before + 1);
+		fake.version = "0.23.0";
+		await send(call(4));
+		assert.deepEqual(out[before + 2], { jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 	} finally {
 		await fake.close();
 	}

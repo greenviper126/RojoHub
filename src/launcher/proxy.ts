@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { dirname } from "node:path";
 
 import type { Health } from "../common/api";
@@ -259,14 +259,14 @@ export class Proxy {
 		cannot be told from a call that died halfway. A refused connection is
 		the one failure that proves the request never reached the service.
 	*/
-	private send(method: string, path: string, body: string | null, headers: Record<string, string>, timeout: number): Promise<{ status: number; text: string } | "refused" | "reset"> {
+	private send(method: string, path: string, body: string | null, headers: Record<string, string>, timeout: number): Promise<{ status: number; text: string; headers: IncomingHttpHeaders } | "refused" | "reset"> {
 		return new Promise((done) => {
 			const request = httpRequest(
 				{ host: "127.0.0.1", port: this.options.port, method, path, headers, agent: false, signal: AbortSignal.timeout(timeout) },
 				(response) => {
 					const chunks: Buffer[] = [];
 					response.on("data", (chunk: Buffer) => chunks.push(chunk));
-					response.on("end", () => done({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+					response.on("end", () => done({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8"), headers: response.headers }));
 					response.on("error", () => done("reset"));
 					response.on("close", () => done("reset")); // after "end" this is a no-op
 				},
@@ -284,12 +284,32 @@ export class Proxy {
 		headers["content-length"] = String(Buffer.byteLength(body));
 		const answer = await this.send("POST", "/mcp", body, headers, 30 * 60_000); // above the longest tool (ensure can wait 600 s, run 300 s and start)
 		if (typeof answer === "string") return { kind: answer };
+		await this.noteService(answer.headers["x-rojo-hub-version"]);
 		if (answer.status >= 500) return { kind: "http", status: answer.status, text: answer.text };
 		if (answer.status === 202 || answer.text === "") return { kind: "ok", status: answer.status, body: null };
 		try {
 			return { kind: "ok", status: answer.status, body: JSON.parse(answer.text) as Json };
 		} catch {
 			return { kind: "http", status: answer.status, text: answer.text };
+		}
+	}
+
+	/*
+		Compares the service that just answered with the one the agent was told
+		about, so a new service that took over the port between two calls is
+		noticed even though no call failed. An older service sends no header;
+		/health tells then. Nothing runs on a timer: this is only ever called with
+		an answer.
+	*/
+	private async noteService(version: string | string[] | undefined): Promise<void> {
+		if (!this.initialized || this.told === undefined) return;
+		if (typeof version !== "string") {
+			await this.health();
+			return;
+		}
+		if (version !== this.told) {
+			this.told = version;
+			this.notifyAfter = true;
 		}
 	}
 

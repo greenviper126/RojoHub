@@ -76,8 +76,8 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 	return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-function send(response: ServerResponse, status: number, payload: unknown): void {
-	response.writeHead(status, { "content-type": "application/json" });
+function send(response: ServerResponse, status: number, payload: unknown, extra: Record<string, string> = {}): void {
+	response.writeHead(status, { "content-type": "application/json", ...extra });
 	response.end(JSON.stringify(payload));
 }
 
@@ -145,11 +145,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				}
 				const protocol = request.headers["mcp-protocol-version"];
 				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined);
+				// Every answer names the service, so a launcher notices a replacement between two calls and tells its agent the tools may have changed.
 				if (!answer) {
-					response.writeHead(202);
+					response.writeHead(202, { "x-rojo-hub-version": SERVICE_VERSION });
 					return response.end();
 				}
-				return send(response, 200, answer);
+				return send(response, 200, answer, { "x-rojo-hub-version": SERVICE_VERSION });
 			}
 			if (url.pathname === "/agents") {
 				if (method === "GET") return send(response, 200, await agents.status());
