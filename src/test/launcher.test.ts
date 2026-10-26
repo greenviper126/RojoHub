@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { AGENT_CLIS, commandLine, setupCommands, setupPrompt } from "../common/agents";
-import { MCP_URL } from "../common/api";
+import { MCP_URL, SERVICE_VERSION } from "../common/api";
 import { findService, hintFile, installLauncher, launcherScript, launcherVersion, writeHint } from "../common/launcher";
 import { LineBuffer, Proxy } from "../launcher/proxy";
 import { AGENTS, AgentRegistrar, agentState } from "../service/agentConfig";
@@ -218,6 +218,7 @@ interface Seen {
 	elicit: string | undefined;
 	path: string;
 	answeredIn: string | undefined;
+	launcher: string | undefined;
 }
 
 class Fake {
@@ -249,7 +250,7 @@ class Fake {
 				const chunks: Buffer[] = [];
 				for await (const chunk of request) chunks.push(chunk as Buffer);
 				const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Seen["body"];
-				this.seen.push({ body, protocol: header(request, "mcp-protocol-version"), elicit: header(request, "x-rojo-hub-elicit"), path: request.url ?? "", answeredIn: header(request, "x-rojo-hub-answered-in") });
+				this.seen.push({ body, protocol: header(request, "mcp-protocol-version"), elicit: header(request, "x-rojo-hub-elicit"), path: request.url ?? "", answeredIn: header(request, "x-rojo-hub-answered-in"), launcher: header(request, "x-rojo-hub-launcher") });
 				if (request.url?.startsWith("/studio/requests/")) {
 					response.writeHead(this.answerStatus, { "content-type": "application/json" });
 					return response.end(this.answerStatus === 200 ? "[]" : JSON.stringify({ error: "That request was already answered, or it ended." }));
@@ -674,6 +675,7 @@ test("launcher proxy: a client that does not declare elicitation gets no header 
 		await send(placeCall(2));
 		await send({ ...call(3, "status") });
 		assert.ok(fake.seen.filter((entry) => entry.body.method === "tools/call").every((entry) => entry.elicit === undefined), "no x-rojo-hub-elicit");
+		assert.ok(fake.seen.filter((entry) => entry.path === "/mcp").every((entry) => entry.launcher === SERVICE_VERSION), "every /mcp POST names the launcher's version");
 		assert.deepEqual(asked, []);
 		assert.equal(resultOf(out.find((message) => message.id === 2)!).content[0].text, "ok request_place");
 		// declaring only url elicitation is not form elicitation either

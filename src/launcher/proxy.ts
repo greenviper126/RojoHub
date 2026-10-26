@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { dirname } from "node:path";
 
-import type { Health } from "../common/api";
+import { SERVICE_VERSION, type Health } from "../common/api";
 import { pathKey } from "../common/paths";
 
 /*
@@ -52,6 +52,8 @@ export interface ProxyOptions {
 	holdMs?: number;
 	/** How often /health is asked while the service starts. */
 	pollMs?: number;
+	/** This launcher's version, sent on every call (default: the bundle's own; tests set it). */
+	version?: string;
 	/** How long the user may take to answer an elicitation (default 10 minutes). */
 	elicitMs?: number;
 	/** Called with each JSON-RPC message for the agent. */
@@ -375,6 +377,8 @@ export class Proxy {
 		if (this.elicits && message.method === "tools/call" && (message.params as { name?: unknown } | undefined)?.name === "request_place") headers["x-rojo-hub-elicit"] = "1";
 		const body = JSON.stringify(message);
 		headers["content-length"] = String(Buffer.byteLength(body));
+		// Which launcher this is, so the service can tell a chat that still runs an older one (it keeps its code until the chat reconnects).
+		headers["x-rojo-hub-launcher"] = this.options.version ?? SERVICE_VERSION;
 		const answer = await this.send("POST", "/mcp", body, headers, 30 * 60_000); // above the longest tool (ensure can wait 600 s, run 300 s and start)
 		if (typeof answer === "string") return { kind: answer };
 		await this.noteService(answer.headers["x-rojo-hub-version"]);
