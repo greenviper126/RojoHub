@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.4
+
+- **The MCP launcher notices a new service.** Every answer from the service names its version, so an
+  agent chat is told to read the tool list again (`notifications/tools/list_changed`) as soon as a
+  new service took over, not only when a call failed.
+- **Agents are told not to check out in a served folder.** The instructions, the checkout note and
+  `serve_here` from the main checkout say to use `new_branch` instead. The checkout note now stays
+  when the same folder is served again.
+- **"Already open" says what it saw.** When only a Studio process names the place, not its plugin,
+  agents are told it may still be loading or closing, to `wait_for_studio`, and to open again once
+  that Studio has exited. The service log records the plugin disconnects and these refused opens.
+
 ## 0.22.3
 
 - **A `version` tool for agents.** It says which Rojo-Hub service, Studio plugin and MCP launcher are
