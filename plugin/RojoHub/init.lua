@@ -311,6 +311,33 @@ function Hub:currentSession()
 	}
 end
 
+--[[
+	The branch line for the Connected page, or nil: the branch Rojo-Hub is serving,
+	with the worktree's name when that differs from it ("feat/theme-ui (my-wt)"),
+	or just the worktree's name when no branch is known (a detached head). Only
+	while the service's answer is about the project this place is synced with, so
+	a stale answer never names the wrong branch. A live switch sends a new answer,
+	which redraws the page.
+]]
+function Hub:branchText()
+	local match = self.match
+	local target = match and match.status == "connect" and match.target
+	local session = target and self:currentSession()
+	if not session or session.port ~= target.port then
+		return nil
+	end
+	local branch = if type(target.branch) == "string" and target.branch ~= "" then target.branch else nil
+	local label = if type(target.targetLabel) == "string" and target.targetLabel ~= "" then target.targetLabel else nil
+	if label and string.find(label, [=[^%a:[\/]]=]) then
+		-- The service falls back to the folder's path: only its last part is worth showing.
+		label = string.match(label, [=[([^\/]+)[\/]*$]=])
+	end
+	if branch and label and label ~= branch then
+		return string.format("%s (%s)", branch, label)
+	end
+	return branch or label
+end
+
 -- Tells the service what this place is synced to, when that changed.
 function Hub:report()
 	local connected = self:currentSession()
@@ -377,6 +404,10 @@ function Hub:evaluate()
 		self:handOverIfAsked(match.target)
 		return
 	end
+	if match.target.handoff ~= nil then
+		-- Nothing to take over: the normal rules below connect. Not a handoff to act on later.
+		self.handoffSeen = match.target.handoff
+	end
 	local page = app.state.appStatus
 	if page == "Settings" or page == "Confirming" then
 		return
@@ -403,37 +434,6 @@ function Hub:evaluate()
 	self:connect(target)
 end
 
--- Connects to the service's port, never through Rojo's address boxes: those are the user's (spec 007).
-	if match.target.handoff ~= nil then
-		-- Nothing to take over: the normal rules below connect. Not a handoff to act on later.
-		self.handoffSeen = match.target.handoff
-	end
-function Hub:connect(target)
-	Log.info("Rojo-Hub: connecting to {} on port {}", target.projectName, target.port)
-	self.app:startSession({ host = "localhost", port = tostring(target.port) })
-end
-
---[[
-	The Connect to <project> button: connecting by hand, so a session the user
-	ended or declined is connected again.
-]]
-function Hub:connectNow()
-	local match = self.match
-	if match == nil or match.status ~= "connect" or match.target == nil or self.app.serveSession ~= nil then
-		return
-	end
-	local target = match.target
-	self.declined = nil
-	self.holdOffUntil = 0
-	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = SESSION_TRIES }
-	self:connect(target)
-end
-
---[[
-	The user ended a session (Disconnect) or declined its first sync (Abort):
-	that session is not connected again by itself. A new session (the project
-	restarted) or connecting by hand lifts it.
-]]
 --[[
 	A handoff (spec 014): the service sends `target.handoff`, a number that is new
 	each time the user moves this place to a project (Move, the panel, request_place).
@@ -475,6 +475,33 @@ function Hub:handOverIfAsked(target)
 	self:connect(target)
 end
 
+-- Connects to the service's port, never through Rojo's address boxes: those are the user's (spec 007).
+function Hub:connect(target)
+	Log.info("Rojo-Hub: connecting to {} on port {}", target.projectName, target.port)
+	self.app:startSession({ host = "localhost", port = tostring(target.port) })
+end
+
+--[[
+	The Connect to <project> button: connecting by hand, so a session the user
+	ended or declined is connected again.
+]]
+function Hub:connectNow()
+	local match = self.match
+	if match == nil or match.status ~= "connect" or match.target == nil or self.app.serveSession ~= nil then
+		return
+	end
+	local target = match.target
+	self.declined = nil
+	self.holdOffUntil = 0
+	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = SESSION_TRIES }
+	self:connect(target)
+end
+
+--[[
+	The user ended a session (Disconnect) or declined its first sync (Abort):
+	that session is not connected again by itself. A new session (the project
+	restarted) or connecting by hand lifts it.
+]]
 function Hub:decline(sessionId)
 	self.declined = sessionId or (self.match and self.match.target and self.match.target.sessionId)
 	self.resuming = nil
