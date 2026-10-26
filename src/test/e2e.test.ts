@@ -1061,3 +1061,25 @@ test("place requests: a free place is assigned at once; a held one is a request 
 		await call("DELETE", `/slots/${b.id}`);
 	}
 });
+
+test("agents over MCP: a checkout in a served folder is still reported when the same folder is served again", async () => {
+	const dir = await makeRepo("Checkouty");
+	const alpha = join(root, "Checkouty-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	const first = await tool("serve_here", { path: alpha });
+	assert.ok(!first.isError, first.text);
+	assert.doesNotMatch(first.text, /was checked out in/);
+
+	gitIn(alpha, "checkout", "-q", "-b", "swapped-under");
+	await until("the checkout note", async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.warnings.some((warning) => /swapped-under was checked out in Checkouty-alpha/.test(warning)));
+
+	// The same folder again is not a switch, so the note stays and the agent is told what to do instead.
+	const again = await tool("serve_here", { path: alpha });
+	assert.ok(!again.isError, again.text);
+	assert.match(again.text, /swapped-under was checked out in Checkouty-alpha while it was being served/);
+	assert.match(again.text, /never check out in a served folder; use new_branch/);
+
+	await call("DELETE", `/slots/${slot.id}`);
+});

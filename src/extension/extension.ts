@@ -1409,7 +1409,7 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			await act(`place:${message.id}:${message.placeId}`, async () => {
 				if (message.action === "open") {
 					const opened = await client.openPlace(message.id, message.placeId);
-					if (opened.outcome === "already-open") void vscode.window.showInformationMessage(`Rojo-Hub: ${opened.placeName ?? name} is already open in Studio.`);
+					if (opened.outcome === "already-open") void vscode.window.showInformationMessage(`Rojo-Hub: ${opened.placeName ?? name} is already open in Studio${opened.evidence === "process" ? " (its plugin has not connected yet)" : ""}.`);
 					else void vscode.window.setStatusBarMessage(`$(device-desktop) Rojo-Hub is opening ${opened.placeName ?? name} in Studio`, 5000);
 				} else if (message.action === "close") {
 					await client.closePlace(message.id, message.placeId);

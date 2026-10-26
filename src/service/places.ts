@@ -226,11 +226,12 @@ export class Places {
 		return found.universeId;
 	}
 
-	/** Whether the place is open: its plugin reports it, or a Studio's command line names it (M5). */
-	private async openNow(placeId: number): Promise<"plugin" | "process" | null> {
-		if (this.reportedName(placeId) !== null) return "plugin";
+	/** Whether the place is open, and what says so: its plugin reports it, or a Studio's command line names it (M5). */
+	private async openNow(placeId: number): Promise<{ evidence: "plugin" } | { evidence: "process"; pids: number[] } | null> {
+		if (this.reportedName(placeId) !== null) return { evidence: "plugin" };
 		const processes = await this.system.processes().catch(() => []);
-		return processes.some((entry) => entry.placeId === placeId) ? "process" : null;
+		const pids = processes.filter((entry) => entry.placeId === placeId).map((entry) => entry.pid);
+		return pids.length > 0 ? { evidence: "process", pids } : null;
 	}
 
 	/** Opens a place in Studio unless it is open already. `gameId`: the project file's, when it sets one. */
@@ -238,7 +239,11 @@ export class Places {
 		this.check();
 		return this.serial(placeId, async () => {
 			this.errors.delete(placeId);
-			if (await this.openNow(placeId)) return { placeId, placeName: this.name(placeId), outcome: "already-open" as const };
+			const open = await this.openNow(placeId);
+			if (open) {
+				if (open.evidence === "process") this.log(`places: ${this.label(placeId)} looks open (Studio pid ${open.pids.join(", ")}, plugin not connected); not opened`);
+				return { placeId, placeName: this.name(placeId), outcome: "already-open" as const, ...open };
+			}
 			try {
 				const universeId = await this.universe(placeId, gameId);
 				this.system.launch(placeLink(placeId, universeId));

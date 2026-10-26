@@ -1,7 +1,7 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.22.3,
+underneath, and the known limits. It is the source for user documentation. Version 0.22.4,
 2026-10-25. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
@@ -597,7 +597,12 @@ get `open_place`. Off, the card shows none of it and the API and `open_place` sa
 - **An open place is never opened again** (Studio would open a second copy). A place counts as open
   when its plugin reports it, or a running Studio's command line names it (covering the seconds before
   the plugin connects). Two simultaneous opens open it once. A place opened another way (Studio's
-  start page) with its plugin off is not seen.
+  start page) with its plugin off is not seen. The answer says which evidence was used (`evidence`:
+  `plugin` or `process`, with the Studio `pids` for a process). For a process alone, agents are told
+  the place looks open but its plugin has not connected (loading, or closing), that nothing was opened,
+  and to call `wait_for_studio`, or `open_place` again once that Studio has exited; `service.log` has
+  `places: ‹place› looks open (Studio pid N, plugin not connected); not opened`. The panel's message
+  says the plugin has not connected yet.
 - **The universe ID** is the project file's `gameId`, else looked up once from Roblox
   (`apis.roblox.com`, no sign-in) and kept in `universes.json` with the place's name. A failed lookup
   (no internet) says which place and why; try again.
@@ -725,7 +730,12 @@ a window on that folder, or luau-lsp is open (so a windowless Orca agent gets it
 served worktree (terminal, Source Control, Orca) sends Studio that branch, and the card says *‹branch›
 was checked out in ‹folder› while it was being served*. If it removed a folder, Rojo 7.7 crashes
 ([Known limits](#15-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
-card says the checkout caused it and Studio needs reconnecting.
+card says the checkout caused it and Studio needs reconnecting. The note also tells agents never to
+check out in a served folder (use `new_branch`) and users to pick the branch in the picker; it stays
+when `serve_here` serves the same folder again, and goes when the project serves something else. The
+MCP instructions say the same (no `git checkout`, `switch`, `reset --hard`, `rebase` or `stash` in a
+served folder, often the repo's main checkout), and `serve_here` from the main checkout adds a line
+to use `new_branch` for other work.
 
 ### What happens on a switch
 
@@ -841,6 +851,10 @@ stdin/stdout and forwards each message to the service's `/mcp`:
 - **While it starts.** `initialize` and `tools/list` are always answered (live, else from
   `launcher\cache.json`, else a placeholder `rojohub_starting` tool) and the agent gets
   `notifications/tools/list_changed` once the real list is there or the service's version changed.
+  Every `/mcp` answer carries `x-rojo-hub-version`; the launcher compares it with the version it told
+  the agent, so a new service that took over the port between two calls is noticed on the next answer,
+  and `list_changed` follows that answer (a service without the header is checked through `/health`
+  instead). No timers.
   A `tools/call` is held up to 20 s, then returns an error result saying to call again in a few seconds.
 - **A restart mid-session** (idle exit, an update). A refused connection never reached the service,
   so the launcher starts it again and sends the request once more. A connection that dies after the
@@ -1044,7 +1058,7 @@ debugging.
 | `POST /slots/:id/branch` | `{ name, base }` | New branch in its own worktree (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` into `output`, an absolute `.rbxl`/`.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
-| `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open" }`. 409 while `openPlaces` is off, or for an unlisted place |
+| `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open", evidence?: "plugin" \| "process", pids? }`. 409 while `openPlaces` is off, or for an unlisted place |
 | `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when its window is unknown) |
 | `POST /slots/:id/places/:placeId/reopen` | | Close, then open once that Studio exited; answers once the close was asked |
 | `POST /slots/:id/places/open-all` | | Open each place not open: one result (or `{ placeId, error }`) each |
@@ -1095,7 +1109,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
 | `agent-notice.json` | Until when the agent notice stays hidden |
 | `launcher\rojohub-mcp.cjs` | The stdio launcher agents run ([Agents](#10-agents)), copied by every service start; `service.json` is the hint to the newest service script, `cache.json` what the service last said (`instructions`, tool list, version). Deleted on uninstall |
-| `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and every change of what it is told to sync with |
+| `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and disconnect, opens refused because a Studio process names the place, and every change of what it is told to sync with |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
 | `slots\<id>\borrowed.project.json` | The borrowed-mode copy |
 | `slots\<id>\rojo.log` | Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |

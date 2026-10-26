@@ -7,7 +7,7 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.22.3";
+export const SERVICE_VERSION = "0.22.4";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -88,6 +88,10 @@ export interface PlaceOpened {
 	placeId: number;
 	placeName: string | null;
 	outcome: "opened" | "already-open";
+	/** For already-open: what said so. A plugin is connected; a process only means a Studio's command line names the place (it may be loading, closing or on its start page). */
+	evidence?: "plugin" | "process";
+	/** For process evidence: the Studio process IDs. */
+	pids?: number[];
 }
 
 /*

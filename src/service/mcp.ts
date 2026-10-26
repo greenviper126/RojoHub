@@ -52,7 +52,7 @@ export const YOLO_LINE = "Yolo mode is ON: the user lifted Rojo-Hub's guards. Yo
 
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
 
-Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. To begin new work in a worktree of its own, use new_branch.
+Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. Never run git checkout, switch, reset --hard, rebase or stash in a folder Rojo-Hub serves (status shows it; it is often the repo's main checkout): Studio and every other agent get that branch at once, and a checkout that removes a folder crashes Rojo (rojo#1305). For other work, use new_branch, then serve_here from that worktree.
 
 Which Studio to look at: serve_here, status and wait_for_studio name the Studio places synced to the project, with their place IDs. Several Studio windows may be open for different projects; use the one whose place ID is listed (Roblox Studio tools list each open Studio with its place ID). If no place is synced, wait_for_studio, or tell the user; do not inspect another project's Studio.
 
@@ -60,7 +60,7 @@ Rojo owns what it syncs: an edit made in Studio to a synced script or instance i
 
 Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
 
-To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm, a checkout) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
+To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
 
@@ -724,6 +724,11 @@ export class Mcp {
 		}
 	}
 
+	/** serve_here from the repo's main checkout: other branches must not be checked out there, since Studio and every other agent would get them (rojo#1305). */
+	private mainCheckoutNote(slot: SlotView, root: string | null): string {
+		return root && pathKey(root) === pathKey(slot.repoPath) ? "\nYou are serving the main checkout; don't check out other branches here; use new_branch for other work." : "";
+	}
+
 	/** One line on then_return for the answer of a call that took the project (spec 013). */
 	private returnNote(slot: SlotView, args: Args): string {
 		const back = this.hub.claimOf(slot.id)?.returnTo;
@@ -949,7 +954,7 @@ export class Mcp {
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}${this.mainCheckoutNote(slot, root)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -1358,7 +1363,7 @@ export class Mcp {
 					if (!this.hub.openPlacesSwitchOn) this.lifted();
 					try {
 						const opened = await this.hub.openPlace(now.id, chosen.placeId);
-						steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
+						steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: opened.outcome === "already-open" && opened.evidence === "process" ? this.looksOpen(`place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}`, opened.pids) : `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
 						steps.push({ step: "open_place", outcome: "failed", detail: message });
@@ -1439,8 +1444,18 @@ export class Mcp {
 		}
 		const result = await this.hub.openPlace(slot.id, placeId);
 		const name = result.placeName ? `${result.placeName} (place ${placeId})` : `Place ${placeId}`;
-		if (result.outcome === "already-open") return `${name} is already open in Studio; nothing was opened. ${this.health(this.hub.view(this.hub.registry.get(slot.id)))}`;
+		if (result.outcome === "already-open") {
+			const health = this.health(this.hub.view(this.hub.registry.get(slot.id)));
+			if (result.evidence === "process") return `${this.looksOpen(name, result.pids)} ${health}`;
+			return `${name} is already open in Studio; nothing was opened. ${health}`;
+		}
 		return `Opening ${name} in Studio. Studio takes a while to load; call wait_for_studio to know when it is synced with ${slot.projectName}${slot.state === "running" ? "" : " (the project is not serving: start it)"}.`;
+	}
+
+	/** What an agent is told when only a Studio process, not the Rojo-Hub plugin, says the place is open. */
+	private looksOpen(name: string, pids: number[] | undefined): string {
+		const running = pids?.length ? ` (${pids.length === 1 ? "pid" : "pids"} ${pids.join(", ")})` : "";
+		return `${name} looks open: a Studio process for it is running${running} but its Rojo-Hub plugin has not connected. It may still be loading, or closing. Nothing was opened, to avoid a second copy. Call wait_for_studio; if the user closed it, call open_place again once that Studio has exited (a Studio left on its start page counts as running: ask the user to close it).`;
 	}
 
 	/** `Lobby (place 111, open), place 222` */

@@ -251,6 +251,7 @@ export class StudioLinks {
 		link.onClose = () => {
 			this.studios.delete(studio);
 			this.unsavedAssigned.delete(studio.id);
+			if (studio.hello) this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}) disconnected`);
 		};
 		link.onMessage = (text) => {
 			let message: StudioToService;

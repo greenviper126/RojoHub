@@ -1261,13 +1261,15 @@ export class Hub {
 		} else if (target.kind === "branch") {
 			runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
 		}
+		// The same folder again (serve_here from where the checkout happened) keeps the note about that checkout.
+		const changed = !sameTarget(slot.target, target);
 		slot.target = target;
 		if (target.kind === "worktree" && (runtime.state === "running" || runtime.state === "starting")) runtime.served.add(pathKey(target.path));
 		if (target.kind === "worktree") this.saveServed(slot.id, runtime);
 		this.registry.save();
 		runtime.mode = plan.mode;
 		runtime.warnings = plan.warnings;
-		runtime.notes = [];
+		if (changed) runtime.notes = [];
 		runtime.error = null;
 		runtime.log.poll();
 		runtime.log.takeProblems();
@@ -1572,7 +1574,7 @@ export class Hub {
 		runtime.head = now;
 		runtime.checkout = { branch: now, at: Date.now() };
 		runtime.notes = [
-			`${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Picking a branch in Rojo-Hub's picker switches without touching the folder.`,
+			`${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Agents: never check out in a served folder; use new_branch. Users: pick the branch in Rojo-Hub's picker, which switches without touching the folder.`,
 		];
 		void this.describeTarget(slot);
 	}

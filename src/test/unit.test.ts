@@ -447,6 +447,9 @@ test("MCP: initialize, tools/list, notifications and unknown methods", async () 
 	const init = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })) as { result: { protocolVersion: string; instructions: string; capabilities: object } };
 	assert.equal(init.result.protocolVersion, "2025-06-18", "a version it knows is echoed");
 	assert.match(init.result.instructions, /serve_here/);
+	assert.match(init.result.instructions, /Never run git checkout, switch, reset --hard, rebase or stash in a folder Rojo-Hub serves/);
+	assert.match(init.result.instructions, /use new_branch, then serve_here from that worktree/);
+	assert.match(init.result.instructions, /Never run installs \(wally, npm\) in a folder/);
 	assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
 	const unknownVersion = (await mcp.handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "1999-01-01" } })) as { result: { protocolVersion: string } };
 	assert.equal(unknownVersion.result.protocolVersion, "2025-11-25", "otherwise its newest");
@@ -925,13 +928,18 @@ test("opening places: never a second copy, whether the plugin or a Studio comman
 	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
 	const fake = fakeStudio();
 	let reported: { placeId: number; placeName: string }[] = [{ placeId: 111, placeName: "Lobby" }];
-	const places = new Places(home, () => true, () => reported, fake.system);
-	assert.deepEqual(await places.open(111), { placeId: 111, placeName: "Lobby", outcome: "already-open" });
+	const logged: string[] = [];
+	const places = new Places(home, () => true, () => reported, fake.system, (line) => logged.push(line));
+	assert.deepEqual(await places.open(111), { placeId: 111, placeName: "Lobby", outcome: "already-open", evidence: "plugin" });
 	assert.equal(fake.calls.launched.length, 0, "open by its plugin");
 
 	reported = [];
 	fake.running.push({ pid: 50, placeId: 333 });
-	assert.equal((await places.open(333)).outcome, "already-open", "open by command line, before its plugin reports it");
+	const byProcess = await places.open(333);
+	assert.equal(byProcess.outcome, "already-open", "open by command line, before its plugin reports it");
+	assert.equal(byProcess.evidence, "process");
+	assert.deepEqual(byProcess.pids, [50]);
+	assert.ok(logged.some((line) => /looks open \(Studio pid 50, plugin not connected\); not opened/.test(line)), logged.join("|"));
 	assert.equal(fake.calls.launched.length, 0);
 
 	// Two opens at the same moment (a double click, two agents) open it once.
@@ -2216,4 +2224,44 @@ test("request_place: under yolo it moves at once from an unclaimed holder and is
 	assert.equal(asked.structuredContent.outcome, "pending");
 	assert.deepEqual(busy.world.assigned, {});
 	assert.equal(busy.requests.pending().length, 1);
+});
+
+test("open_place: a Studio process alone says so and what to do; a connected plugin keeps the plain wording", async () => {
+	const repo = tempRepo();
+	const stub = ensureStub(repo);
+	let found: { evidence: "plugin" | "process"; pids?: number[] } = { evidence: "process", pids: [4242] };
+	stub.hub.openPlace = async (_id: string, placeId: number) => ({ placeId, placeName: "Lobby", outcome: "already-open", ...found }) as never;
+	const mcp = new Mcp(stub.hub as never);
+	const text = async () => {
+		const answer = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "open_place", arguments: { path: repo } } }, undefined)) as { result: { content: { text: string }[] } };
+		return answer.result.content[0].text;
+	};
+	const process = await text();
+	assert.match(process, /Lobby \(place 111\) looks open: a Studio process for it is running \(pid 4242\) but its Rojo-Hub plugin has not connected/);
+	assert.match(process, /Call wait_for_studio; if the user closed it, call open_place again once that Studio has exited/);
+	assert.doesNotMatch(process, /is already open in Studio/);
+
+	found = { evidence: "plugin" };
+	assert.match(await text(), /^Lobby \(place 111\) is already open in Studio; nothing was opened\./);
+
+	// ensure's open step says the same for a process
+	found = { evidence: "process", pids: [7] };
+	const ensured = await ensureCall(stub, { path: repo });
+	const step = ensured.structuredContent.steps.find((entry: any) => entry.step === "open_place");
+	assert.equal(step.outcome, "already");
+	assert.match(step.detail, /looks open: a Studio process for it is running \(pid 7\)/);
+});
+
+test("serve_here from the main checkout says to use new_branch; from a worktree it does not", async () => {
+	const repo = tempRepo();
+	const worktree = join(mkdtempSync(join(tmpdir(), "rojo-hub-wt-")), "side");
+	execFileSync("git", ["worktree", "add", "-q", worktree, "side"], { cwd: repo, stdio: "pipe" });
+	const stub = ensureStub(repo, { state: "running" });
+	const mcp = new Mcp(stub.hub as never);
+	const serve = async (path: string) => {
+		const answer = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "serve_here", arguments: { path } } }, undefined)) as { result: { content: { text: string }[] } };
+		return answer.result.content[0].text;
+	};
+	assert.match(await serve(repo), /You are serving the main checkout; don't check out other branches here; use new_branch for other work\./);
+	assert.doesNotMatch(await serve(worktree), /serving the main checkout/);
 });
