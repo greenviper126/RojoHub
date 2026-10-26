@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import * as vscode from "vscode";
 
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView, type PlaceRequestView } from "../common/api";
+import { newerInstalled } from "./reload";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { fromEditor, toEditor, type RawCommand } from "../common/setupText";
@@ -61,6 +62,7 @@ let lastStudioPlaces: StudioPlaceView[] = [];
 let lastPlaceRequests: PlaceRequestView[] = [];
 /** rojoHub.openPlaces as the service has it (spec 009). */
 let lastOpenPlaces = false;
+let lastClosePlaces = false;
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -160,6 +162,45 @@ function checkOutdated(serviceVersion: string | undefined): void {
 		});
 }
 
+/*
+	Reloads this window when a newer Rojo-Hub is installed in this profile
+	(rojoHub.reloadOnUpdate), after a notification with ten seconds to say no.
+	Each window does it for itself; the first one to start up starts the new
+	service. Never in a development host. Asked again for a still newer version,
+	not for one the user said "Not Now" to.
+*/
+const RELOAD_AFTER_MS = 10_000;
+let reloadFor: string | null = null;
+const declinedReload = new Set<string>();
+function checkInstalledUpdate(): void {
+	try {
+		if (extensionContext.extensionMode === vscode.ExtensionMode.Development) return;
+		if (vscode.workspace.getConfiguration("rojoHub").get<boolean>("reloadOnUpdate", true) !== true) return;
+		const newer = newerInstalled(extensionContext.extensionPath, SERVICE_VERSION);
+		if (!newer || reloadFor === newer || declinedReload.has(newer)) return;
+		reloadFor = newer;
+		let done = false;
+		const reload = () => {
+			if (done) return;
+			done = true;
+			void vscode.commands.executeCommand("workbench.action.reloadWindow");
+		};
+		const timer = setTimeout(reload, RELOAD_AFTER_MS);
+		void vscode.window.showInformationMessage(`Rojo-Hub ${newer} is installed. Reloading this window in 10 seconds so it takes effect.`, "Reload Now", "Not Now").then((choice) => {
+			if (choice === "Reload Now") {
+				clearTimeout(timer);
+				reload();
+			} else if (choice === "Not Now") {
+				clearTimeout(timer);
+				done = true;
+				declinedReload.add(newer);
+			}
+		});
+	} catch {
+		// the stub vscode of the smoke test, or a host without these parts: no reload
+	}
+}
+
 async function refresh(): Promise<void> {
 	let health = await client.health();
 	if (!health && !serviceHealth.error) {
@@ -216,6 +257,7 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastStudioPlaces = snapshot.studioPlaces ?? [];
 	lastPlaceRequests = snapshot.placeRequests ?? [];
 	lastOpenPlaces = snapshot.openPlaces === true;
+	lastClosePlaces = snapshot.closePlaces === true;
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
 	noticePlaceRequests(lastPlaceRequests);
@@ -314,6 +356,7 @@ function render(): void {
 		placeRequests: serviceHealth.running ? lastPlaceRequests : [],
 		// The service's copy of rojoHub.openPlaces decides; a service older than 0.20.0 cannot open places.
 		openPlaces: serviceHealth.running && lastOpenPlaces,
+		closePlaces: serviceHealth.running && lastClosePlaces,
 		yolo: yoloSetting(),
 	});
 	updateStatus();
@@ -963,6 +1006,7 @@ async function pushSettings(): Promise<void> {
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
+			closePlaces: config.get<boolean>("closePlaces", false),
 			claimMinutes: config.get<number>("claimMinutes", 15),
 			placeMoves: config.get<string>("placeMoves", "ask") === "auto" ? "auto" : "ask",
 			yolo: yoloForService(),
@@ -1487,6 +1531,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			studioPlaces: [],
 			placeRequests: [],
 			openPlaces: false,
+			closePlaces: false,
 			yolo: false,
 		});
 		void vscode.window.showWarningMessage(message);
@@ -1596,6 +1641,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				.then(refresh);
 		}),
 	);
+	// An update installed in this profile: the event, and once now in case it was missed.
+	try {
+		if (typeof vscode.extensions?.onDidChange === "function") context.subscriptions.push(vscode.extensions.onDidChange(checkInstalledUpdate));
+	} catch {
+		// no extension events here
+	}
+	checkInstalledUpdate();
 	registerVsCodeAgents(context, ensureRunning);
 	await refresh();
 	// Agent entries are not re-added on start; a box whose entry was removed by hand is turned off instead.

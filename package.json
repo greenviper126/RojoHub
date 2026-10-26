@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.22.5",
+  "version": "0.22.6",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -417,6 +417,18 @@
           "scope": "application",
           "default": false,
           "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
+        },
+        "rojoHub.closePlaces": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Lets Rojo-Hub close and reopen Studio places (the panel's **Close** and **Reopen**, and agents' `close_place` and `reopen_place`), e.g. to load an updated plugin. Studio is asked to close as if you closed its window, so it still asks about unsaved changes; nothing is ever killed or saved for you. A reopen's own open step needs only this setting, not `rojoHub.openPlaces`."
+        },
+        "rojoHub.reloadOnUpdate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Reload this window by itself (after a notification with ten seconds to say no) when a newer Rojo-Hub is installed in this VS Code profile, so the new extension runs. Off: reload by hand."
         },
         "rojoHub.placeMoves": {
           "type": "string",
