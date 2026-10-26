@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import * as vscode from "vscode";
 
 import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView, type PlaceRequestView } from "../common/api";
-import { newerInstalled } from "./reload";
+import { newerInstalled, profileExtensionsFile } from "./reload";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
 import { fromEditor, toEditor, type RawCommand } from "../common/setupText";
@@ -176,14 +176,16 @@ function checkInstalledUpdate(): void {
 	try {
 		if (extensionContext.extensionMode === vscode.ExtensionMode.Development) return;
 		if (vscode.workspace.getConfiguration("rojoHub").get<boolean>("reloadOnUpdate", true) !== true) return;
-		const newer = newerInstalled(extensionContext.extensionPath, SERVICE_VERSION);
+		const newer = newerInstalled(profileExtensionsFile(extensionContext.globalStorageUri.fsPath, extensionContext.extensionPath), SERVICE_VERSION);
 		if (!newer || reloadFor === newer || declinedReload.has(newer)) return;
+		// A reload that did not bring that version up is not repeated (per workspace, so other windows still reload): never a loop.
+		if (extensionContext.workspaceState.get<string>("rojoHub.reloadedFor") === newer) return;
 		reloadFor = newer;
 		let done = false;
 		const reload = () => {
 			if (done) return;
 			done = true;
-			void vscode.commands.executeCommand("workbench.action.reloadWindow");
+			void Promise.resolve(extensionContext.workspaceState.update("rojoHub.reloadedFor", newer)).finally(() => void vscode.commands.executeCommand("workbench.action.reloadWindow"));
 		};
 		const timer = setTimeout(reload, RELOAD_AFTER_MS);
 		void vscode.window.showInformationMessage(`Rojo-Hub ${newer} is installed. Reloading this window in 10 seconds so it takes effect.`, "Reload Now", "Not Now").then((choice) => {
@@ -1641,9 +1643,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				.then(refresh);
 		}),
 	);
-	// An update installed in this profile: the event, and once now in case it was missed.
+	// An update installed in this profile: the event, every 30 s (an install from the command line may not fire it), and once now.
 	try {
 		if (typeof vscode.extensions?.onDidChange === "function") context.subscriptions.push(vscode.extensions.onDidChange(checkInstalledUpdate));
+		const every = setInterval(checkInstalledUpdate, 30_000);
+		context.subscriptions.push({ dispose: () => clearInterval(every) });
 	} catch {
 		// no extension events here
 	}

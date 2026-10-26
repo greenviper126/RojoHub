@@ -18,7 +18,7 @@ import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
 import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead, revParse } from "../service/git";
-import { newerInstalled } from "../extension/reload";
+import { newerInstalled, profileExtensionsFile } from "../extension/reload";
 import { Mcp, outdatedNote, staleConnection, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
@@ -2538,18 +2538,22 @@ test("status: a place assigned to one project but still synced with another says
 	assert.equal(internals.assignedName(place("vb", null)), "VluxyBuildingTools");
 });
 
-test("reload on update: the newest installed sibling folder above the running version, with a built extension", () => {
-	const root = join(tmpdir(), "ext");
-	const built = new Set(["0.22.6", "0.22.7-win32-x64", "0.23.0", "0.22.5"].map((v) => join(root, `greenviper126.rojo-hub-${v}`, "dist", "extension.js")));
-	const names = ["greenviper126.rojo-hub-0.22.5", "greenviper126.rojo-hub-0.22.6", "greenviper126.rojo-hub-0.22.7-win32-x64", "greenviper126.rojo-hub-0.23.0", "greenviper126.rojo-hub-0.9.0", "other.ext-9.9.9", "greenviper126.rojo-hub-1.0.0"];
-	const list = () => names;
-	const exists = (path: string) => built.has(path);
-	const running = join(root, "greenviper126.rojo-hub-0.22.6");
-	assert.equal(newerInstalled(running, "0.22.6", list, exists), "0.23.0", "the newest built one; 1.0.0 has no built extension");
-	assert.equal(newerInstalled(running, "0.23.0", list, exists), null, "nothing newer than the newest");
-	assert.equal(newerInstalled(running, "0.22.6", () => ["greenviper126.rojo-hub-0.22.6"], exists), null, "only itself");
-	assert.equal(newerInstalled(running, "0.9.0", () => ["greenviper126.rojo-hub-0.10.0"], () => true), "0.10.0", "versions compare numerically");
-	assert.equal(newerInstalled(running, "0.22.6", () => { throw new Error("gone"); }, exists), null, "an unreadable folder is no update");
+test("reload on update: only the window's own profile list counts, never another profile's newer folder", () => {
+	const user = join("C:", "Users", "u", "AppData", "Roaming", "Code", "User");
+	const extensions = join("C:", "Users", "u", ".vscode", "extensions");
+	const running = join(extensions, "greenviper126.rojo-hub-0.22.6");
+	// a named profile keeps its list in its own folder; the default profile in the extensions folder
+	assert.equal(profileExtensionsFile(join(user, "profiles", "-e02f7ca", "globalStorage", "greenviper126.rojo-hub"), running), join(user, "profiles", "-e02f7ca", "extensions.json"));
+	assert.equal(profileExtensionsFile(join(user, "globalStorage", "greenviper126.rojo-hub"), running), join(extensions, "extensions.json"));
+
+	const list = (version: string) => () => JSON.stringify([{ identifier: { id: "other.ext" }, version: "9.9.9" }, { identifier: { id: "GreenViper126.rojo-hub" }, version }]);
+	assert.equal(newerInstalled("x", "0.22.6", list("0.22.7")), "0.22.7");
+	assert.equal(newerInstalled("x", "0.22.6", list("0.22.6")), null, "only itself");
+	assert.equal(newerInstalled("x", "0.22.7", list("0.22.6")), null, "an older one in this profile is no update");
+	assert.equal(newerInstalled("x", "0.9.0", list("0.10.0")), "0.10.0", "versions compare numerically");
+	assert.equal(newerInstalled("x", "0.22.6", () => "[]"), null, "not in this profile");
+	assert.equal(newerInstalled("x", "0.22.6", () => { throw new Error("gone"); }), null, "an unreadable list is no update");
+	assert.equal(newerInstalled("x", "0.22.6", () => "{not json"), null);
 });
 
 test("close_place and reopen_place: refused while closePlaces is off (yolo does not lift it), claims apply, force passes, and both are audited", async () => {
