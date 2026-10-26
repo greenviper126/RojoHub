@@ -26,8 +26,10 @@ export interface RequestDeps {
 	holderOf(placeId: number): string | null;
 	/** The project picked for the place in VS Code. */
 	assigned(placeId: number): string | null;
-	/** Saves the assignment, like the panel's dropdown (PlaceMemory.assign). */
-	assign(placeId: number, slotId: string): void;
+	/** Saves the assignment, like the panel's dropdown (PlaceMemory.assign); `source` is who made it, for service.log. */
+	assign(placeId: number, slotId: string, source: string): void;
+	/** `DL Game - Dev (106807032284628)`, or `place 106807032284628` while its name is not known (service.log). */
+	placeLabel?(placeId: number): string;
 	/** The key of the claim an agent holds on the project, null when it has none. */
 	claimKeyOf(slotId: string): string | null;
 	now?: () => number;
@@ -62,8 +64,23 @@ export const requestId = (askerId: string, placeId: number): string => `${askerI
 export class PlaceRequests {
 	private readonly requests = new Map<string, PlaceRequest>();
 	private readonly outcomes = new Map<string, { outcome: RequestOutcome; at: number }>();
+	/** service.log, set by main.ts once it has one. */
+	log: (message: string) => void = () => undefined;
 
 	constructor(private readonly deps: RequestDeps) {}
+
+	private nameOf(projectId: string | null): string {
+		return this.deps.projects().find((project) => project.id === projectId)?.projectName ?? projectId ?? "no project";
+	}
+
+	private labelOf(placeId: number): string {
+		return this.deps.placeLabel?.(placeId) ?? `place ${placeId}`;
+	}
+
+	/** One line when a pending request ends without an answer or is overtaken. */
+	private ended(request: PlaceRequest, why: string): void {
+		this.log(`places: ${this.nameOf(request.askerId)}'s request for ${this.labelOf(request.placeId)} ended: ${why}`);
+	}
 
 	private now(): number {
 		return this.deps.now?.() ?? Date.now();
@@ -80,19 +97,23 @@ export class PlaceRequests {
 		for (const [id, request] of [...this.requests]) {
 			const asker = projects.find((project) => project.id === request.askerId);
 			if (!asker || !asker.listed.includes(request.placeId)) {
+				this.ended(request, asker ? "the project no longer lists the place" : "the project was removed");
 				this.requests.delete(id);
 				continue;
 			}
 			if (this.deps.claimKeyOf(request.askerId) !== request.askerKey) {
+				this.ended(request, "its claim was released or lapsed");
 				this.requests.delete(id);
 				continue;
 			}
 			if (request.holderId && !projects.some((project) => project.id === request.holderId)) {
+				this.ended(request, "the holding project was removed");
 				this.requests.delete(id);
 				continue;
 			}
 			const holder = this.deps.holderOf(request.placeId);
 			if (holder === request.askerId || this.deps.assigned(request.placeId) === request.askerId) {
+				this.ended(request, "the place now belongs to the asker (assigned or synced another way)");
 				this.requests.delete(id);
 				this.outcomes.set(id, { outcome: "moved", at: this.now() });
 				continue;
@@ -108,8 +129,9 @@ export class PlaceRequests {
 		listed. `autoMove` is rojoHub.placeMoves "auto" or yolo, worked out by the
 		caller: the place then moves at once, unless another agent claimed the
 		project holding it (claims still hold, so the user is asked then).
+		`by` names what allowed that, for the log ("placeMoves", "yolo").
 	*/
-	ask(askerId: string, placeId: number, askerKey: string, autoMove: boolean): AskResult {
+	ask(askerId: string, placeId: number, askerKey: string, autoMove: boolean, by = "auto move"): AskResult {
 		this.prune();
 		const id = requestId(askerId, placeId);
 		const holder = this.deps.holderOf(placeId);
@@ -121,12 +143,13 @@ export class PlaceRequests {
 		// Already assigned to the asker (in the panel): it reconnects within a tick, and there is nobody to ask.
 		if (!holder || this.deps.assigned(placeId) === askerId) {
 			this.requests.delete(id);
-			this.deps.assign(placeId, askerId);
+			this.deps.assign(placeId, askerId, "request_place");
 			return { kind: "assigned" };
 		}
 		if (autoMove && this.deps.claimKeyOf(holder) === null) {
 			this.requests.delete(id);
-			this.deps.assign(placeId, askerId);
+			this.log(`places: ${this.nameOf(askerId)} took ${this.labelOf(placeId)} from ${this.nameOf(holder)} at once (${by}; no agent claimed it)`);
+			this.deps.assign(placeId, askerId, `auto move, ${by}`);
 			return { kind: "moved", from: holder };
 		}
 		const existing = this.requests.get(id);
@@ -138,6 +161,7 @@ export class PlaceRequests {
 		}
 		const request: PlaceRequest = { id, placeId, askerId, askerKey, holderId: holder, since: this.now() };
 		this.requests.set(id, request);
+		this.log(`places: ${this.nameOf(askerId)} asked for ${this.labelOf(placeId)}, held by ${this.nameOf(holder)}`);
 		return { kind: "pending", request, fresh: true };
 	}
 
@@ -169,19 +193,24 @@ export class PlaceRequests {
 		null when there is no such request any more (answered in another window,
 		or it ended meanwhile).
 	*/
-	answer(id: string, answer: "move" | "decline"): PlaceRequest | null {
+	answer(id: string, answer: "move" | "decline", where = "VS Code"): PlaceRequest | null {
 		this.prune();
 		const request = this.requests.get(id);
 		if (!request) return null;
 		this.requests.delete(id);
-		if (answer === "move") this.deps.assign(request.placeId, request.askerId);
+		this.log(`places: ${this.nameOf(request.askerId)}'s request for ${this.labelOf(request.placeId)} answered in ${where}: ${answer === "move" ? "move" : "decline"}`);
+		if (answer === "move") this.deps.assign(request.placeId, request.askerId, `Move on ${this.nameOf(request.askerId)}'s request, answered in ${where}`);
 		this.outcomes.set(id, { outcome: answer === "move" ? "moved" : "declined", at: this.now() });
 		return request;
 	}
 
 	/** The asker let go of its project (release): its requests and remembered answers end. */
 	dropAsker(askerId: string): void {
-		for (const [id, request] of [...this.requests]) if (request.askerId === askerId) this.requests.delete(id);
+		for (const [id, request] of [...this.requests]) {
+			if (request.askerId !== askerId) continue;
+			this.ended(request, "the project was released");
+			this.requests.delete(id);
+		}
 		for (const id of [...this.outcomes.keys()]) if (id.startsWith(`${askerId}:`)) this.outcomes.delete(id);
 	}
 }

@@ -311,8 +311,11 @@ export class StudioLinks {
 		records a handoff: a new number sent with the match, on which a plugin
 		synced with another project switches once (spec 014). Clearing an
 		assignment hands nothing over.
+
+		`source` says who made it (the panel, a Move on a request, request_place,
+		an automatic move), for service.log: nothing else records it.
 	*/
-	assign(key: string, slotId: string | null): void {
+	assign(key: string, slotId: string | null, source = "unknown"): void {
 		if (key.startsWith("studio:")) {
 			const id = key.slice("studio:".length);
 			if (slotId) this.unsavedAssigned.set(id, slotId);
@@ -324,6 +327,10 @@ export class StudioLinks {
 		}
 		if (slotId) this.handoffs.set(key, { slotId, token: ++this.handoffSeq });
 		else this.handoffs.delete(key);
+		const place = this.studios.size > 0 ? [...this.studios].find((studio) => studio.hello && (key.startsWith("studio:") ? `studio:${studio.id}` === key : String(studio.hello.placeId) === key))?.hello : undefined;
+		const label = place ? `${place.placeName} (${key.startsWith("studio:") ? "unsaved" : key})` : key.startsWith("studio:") ? "an unsaved place" : `place ${key}`;
+		const project = slotId ? (this.candidates().find((candidate) => candidate.slotId === slotId)?.projectName ?? slotId) : null;
+		this.log(`studio: ${label} ${project ? `assigned to ${project}` : "assignment cleared"} (${source})`);
 		this.tick();
 	}
 
