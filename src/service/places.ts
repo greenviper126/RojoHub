@@ -7,7 +7,8 @@ import { Conflict } from "./registry";
 
 /*
 	Opening a project's Studio places from VS Code and from agents (spec 009).
-	Off unless rojoHub.openPlaces is on. A place is opened through the link the
+	Opening is off unless rojoHub.openPlaces is on; closing and reopening are off unless
+	rojoHub.closePlaces is on (a reopen's own open step needs only that). A place is opened through the link the
 	website's Edit in Studio uses, which needs the place's universe ID (M1),
 	looked up once and kept. A place already open is never opened again: Studio
 	would open a second copy (M4). Closing asks the window to close, as its X
@@ -15,6 +16,7 @@ import { Conflict } from "./registry";
 */
 
 export const OFF_MESSAGE = "Opening Studio places is turned off in Rojo-Hub's settings (rojoHub.openPlaces). The user can turn it on in VS Code.";
+export const CLOSE_OFF_MESSAGE = "Closing and reopening Studio places is turned off in Rojo-Hub's settings (rojoHub.closePlaces). The user can turn it on in VS Code.";
 
 /** How long a launched place counts as opening, until its plugin reports it. */
 const OPENING_MS = 2 * 60 * 1000;
@@ -134,6 +136,8 @@ export class Places {
 		private readonly reported: () => { placeId: number; placeName: string }[],
 		private readonly system: PlaceSystem = windowsSystem,
 		public log: (message: string) => void = () => undefined,
+		/** rojoHub.closePlaces: Close and Reopen. Never implied by openPlaces or yolo. */
+		private readonly closeEnabled: () => boolean = () => false,
 	) {
 		try {
 			this.known = JSON.parse(readFileSync(this.file, "utf8")) as Record<string, Known>;
@@ -157,6 +161,10 @@ export class Places {
 
 	private check(): void {
 		if (!this.enabled()) throw new Conflict(OFF_MESSAGE);
+	}
+
+	private checkClose(): void {
+		if (!this.closeEnabled()) throw new Conflict(CLOSE_OFF_MESSAGE);
 	}
 
 	private serial<T>(placeId: number, work: () => Promise<T>): Promise<T> {
@@ -237,6 +245,11 @@ export class Places {
 	/** Opens a place in Studio unless it is open already. `gameId`: the project file's, when it sets one. */
 	async open(placeId: number, gameId: number | null = null): Promise<PlaceOpened> {
 		this.check();
+		return this.launch(placeId, gameId);
+	}
+
+	/** The open itself, without the openPlaces check: a reopen is allowed by closePlaces alone. */
+	private launch(placeId: number, gameId: number | null): Promise<PlaceOpened> {
 		return this.serial(placeId, async () => {
 			this.errors.delete(placeId);
 			const open = await this.openNow(placeId);
@@ -276,7 +289,7 @@ export class Places {
 
 	/** Asks the place's Studio to close; Studio may ask about unsaved changes first. Never kills it. */
 	async close(placeId: number): Promise<void> {
-		this.check();
+		this.checkClose();
 		return this.serial(placeId, async () => {
 			this.errors.delete(placeId);
 			await this.askToClose(placeId, await this.processesOf(placeId));
@@ -291,7 +304,7 @@ export class Places {
 		rest goes on in the background, shown on the card.
 	*/
 	async reopen(placeId: number, gameId: number | null = null, waitMs = REOPEN_WAIT_MS): Promise<void> {
-		this.check();
+		this.checkClose();
 		const processes = await this.serial(placeId, async () => {
 			this.errors.delete(placeId);
 			const found = await this.processesOf(placeId);
@@ -311,7 +324,7 @@ export class Places {
 				await new Promise((done) => setTimeout(done, 500));
 			}
 			this.busy.delete(placeId);
-			await this.open(placeId, gameId).catch((error) => this.errors.set(placeId, error instanceof Error ? error.message : String(error)));
+			await this.launch(placeId, gameId).catch((error) => this.errors.set(placeId, error instanceof Error ? error.message : String(error)));
 		})();
 	}
 }

@@ -17,6 +17,7 @@
 
 import { CLAIM_NEVER, DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { compareVersions } from "../common/version";
 import { parseSetupText } from "../common/setupText";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
@@ -499,13 +500,13 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 }
 
 /*
-	A project's places (spec 009), only while rojoHub.openPlaces is on: each
-	place its project file names, whether it is open, and Open, or Close and
-	Reopen. A place that is open is never opened a second time.
+	A project's places (spec 009), while rojoHub.openPlaces or rojoHub.closePlaces is
+	on: each place its project file names, whether it is open, and Open (openPlaces),
+	or Close and Reopen (closePlaces). A place that is open is never opened a second time.
 */
 function cardPlaces(slot: SlotView): string {
 	const places = slot.listedPlaces ?? [];
-	if (!state?.openPlaces || places.length === 0) return "";
+	if (!(state?.openPlaces || state?.closePlaces) || places.length === 0) return "";
 	const rows = places
 		.map((place) => {
 			const key = `place:${slot.id}:${place.placeId}`;
@@ -515,8 +516,12 @@ function cardPlaces(slot: SlotView): string {
 			const actions = busyText
 				? `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">${busyText}</span></span>`
 				: place.open
-					? `${iconButton("place-reopen", "refresh", `Reopen ${name}: close it (Studio asks about unsaved changes), then open it again`, data)}${iconButton("place-close", "close", `Close ${name} (Studio asks about unsaved changes)`, data)}`
-					: button("place-open", "Open", { icon: "link-external", data, kind: "secondary", title: `Open ${name} in Studio` });
+					? !state?.closePlaces
+						? ""
+						: `${iconButton("place-reopen", "refresh", `Reopen ${name}: close it (Studio asks about unsaved changes), then open it again`, data)}${iconButton("place-close", "close", `Close ${name} (Studio asks about unsaved changes)`, data)}`
+					: !state?.openPlaces
+						? ""
+						: button("place-open", "Open", { icon: "link-external", data, kind: "secondary", title: `Open ${name} in Studio` });
 			return `<div class="member card-place">
 				${icon("device-desktop")}
 				<span class="grow two-line">
@@ -892,6 +897,9 @@ function studioPlaces(): string {
 				.map((slot) => `<option value="${escape(slot.id)}"${place.assigned === slot.id ? " selected" : ""}>${escape(slot.projectName)}  :${slot.port}${slot.state === "running" ? "" : " (stopped)"}</option>`)
 				.join("");
 			const title = `${place.placeName} (${place.unsaved ? "not saved to Roblox" : place.placeId}) · plugin ${place.pluginVersion}`;
+			/* A plugin loads when a place opens, so an update reaches it only after the place is reopened. */
+			const serviceVersion = state!.service.version;
+			const older = serviceVersion && compareVersions(place.pluginVersion, serviceVersion) < 0 ? ` <span class="pill info shared" title="${escape(`Plugin ${place.pluginVersion} is older than Rojo-Hub ${serviceVersion}. Reopen this place to update.`)}">Older plugin: reopen to update</span>` : "";
 			/* A place several projects list syncs with one at a time (spec 014); an agent's ask to move it shows with its answer buttons. */
 			const listedBy = place.listedBy ?? [];
 			const shared = listedBy.length > 1 ? ` <span class="pill info shared" title="${escape(`Listed by ${listedBy.join(", ")}. It syncs with one project at a time.`)}">Shared</span>` : "";
@@ -907,7 +915,7 @@ function studioPlaces(): string {
 				.join("");
 			return `<div class="member studio-place">
 				<span class="grow two-line">
-					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}${shared}</span>
+					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}${shared}${older}</span>
 					<span class="sub ellipsis" title="${escape(place.message)}">${escape(place.message)}</span>
 				</span>
 				<span class="pill ${status.kind}" title="${escape(place.message)}">${icon(status.icon, status.icon === "loading" ? "codicon-modifier-spin" : "")}<span class="ellipsis">${escape(status.label)}</span></span>
