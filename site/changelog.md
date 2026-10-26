@@ -2,6 +2,27 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.5
+
+**Open Studio places must be reopened to get the new plugin**: the handoff and the branch line below
+are in the plugin, which Studio loads only when a place is opened.
+
+- **Move hands a synced place over.** A place already synced with one project did not move when you
+  clicked **Move** (or assigned it in the panel's Studio places, or an agent's `request_place`
+  assigned it): the plugin never takes over a live session. Every deliberate assignment now carries
+  a one-time handoff, and the plugin disconnects the place from the old project and connects it to
+  the new one, once. A place you then connect by hand is left alone. The first sync of a place with
+  a project still asks Rojo's confirmation. Older plugins ignore the handoff (no protocol change).
+- **`request_place` asks you in the agent's own client.** When the place is held, the question is
+  put to you through MCP elicitation (a yes/no form in Claude Code and other clients that support
+  it); your answer goes to Rojo-Hub, never through the agent, and is logged as given in chat. A
+  client without elicitation is asked in VS Code as before, and whichever answers first wins.
+- **`rojoHub.placeMoves`** (`ask` by default, or `auto`). With `auto`, a place an agent asks for
+  moves at once, unless another agent has claimed the project holding it; then you are still asked.
+  Every automatic move is in `audit.jsonl` (`by`: `placeMoves` or `yolo`). `status` says which.
+- **The branch is shown in Studio.** The plugin's Connected page shows the branch (and the worktree's
+  name when it differs) under the project name, and follows a live switch.
+
 ## 0.22.4
 
 - **The claim hold is a setting.** `rojoHub.claimMinutes` (default 15, no upper limit, fractions

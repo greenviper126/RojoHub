@@ -15,7 +15,7 @@ export const DEFAULT_CLAIM_MINUTES = 15;
 	and the panel need to know it.
 */
 export const CLAIM_NEVER = Number.MAX_SAFE_INTEGER;
-export const SERVICE_VERSION = "0.22.4";
+export const SERVICE_VERSION = "0.22.5";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 

@@ -1,6 +1,6 @@
 # 014: Place requests
 
-Status: built (0.22.2, branch `experimental/feedback-2026-10-24`). From `specs/feedback-2026-10-25.md`.
+Status: built (0.22.2, branch `experimental/feedback-2026-10-24`); handoff, asking in the agent's client and `rojoHub.placeMoves` added in 0.22.5. From `specs/feedback-2026-10-25.md`.
 
 ## Problem
 
@@ -119,3 +119,67 @@ Requests live in memory only. A service restart drops them, and an agent asks ag
 - **Data.** `status`, `serve_here`, `switch` and `ensure` carry `sharedPlaces` and `incomingRequests` on
   each project; `request_place` answers `outcome`, `placeId`, `name`, `project`, `holder`.
 - **Audit.** A move made at once under yolo writes `move_place` besides the usual `request_place` entry.
+
+## Update (0.22.5)
+
+Seen live on 0.22.4: a place synced with VluxyBuildingTools did not move after FolderThemes asked and
+the user clicked Move: the plugin "never takes over a live session". Three changes.
+
+### 1. A deliberate move hands a synced place over
+
+- Every assignment made on purpose goes through `StudioLinks.assign`: the panel's Studio places
+  route, **Move**, `request_place`'s immediate assignment, and a move at once (`placeMoves` auto or
+  yolo). It records a *handoff* for the place: a number, new each time (seeded from the clock, so a
+  restart never repeats one), sent with the answer as the optional `target.handoff`, while the target is
+  the project it was handed to. Clearing an assignment hands nothing over. The Studio protocol is
+  unchanged: older plugins skip the field.
+- The service logs `studio: <place> (<id>): handing over from X to Y` when a new number reaches a place
+  synced with another project.
+- The plugin (`Hub:handOverIfAsked`): in edit mode, with auto connect on, with a live **synced**
+  session (not connecting, not on Rojo's confirmation or settings page, not resuming a lost session)
+  to a project on a different port, and a handoff number it has not acted on: it ends the session as
+  **Disconnect** does (`App:endSession`; the loss is not held, `handingOver`), connects to the new target, and
+  remembers the number, so it switches once and never fights a user who connects by hand afterwards.
+  A number that arrives when there is no session, or when the session is already the target's, is only
+  remembered. Without a number the old rule stands. First sync with a project still asks Rojo's
+  confirmation (`accepted`). Logged in Studio's output ("Rojo-Hub: handing over from X to Y").
+- Not verified in a real Studio from the build environment; there is no Luau test harness for the
+  plugin, so the Lua is kept small and commented, and the service half is unit and e2e tested (the fake
+  plugin sees a new number on the panel's assignment and on Move).
+
+### 2. Approving in the agent's own client (MCP elicitation)
+
+No `approved` argument: an argument is the model's to set, and approval must be the user's. Instead,
+when a client declares `capabilities.elicitation` in `initialize`, the stdio launcher adds
+`x-rojo-hub-elicit: 1` to `request_place` calls. For a held place the service then returns
+`_meta["rojo-hub/elicit"]` (`requestId`, `message`, and the `moved`, `declined`, `answered` wording).
+The launcher sends `elicitation/create` to the client (one boolean `move`, default false), and:
+
+- accept with `move: true`: `POST /studio/requests/:id/move`;
+- accept with false, or decline: `POST /studio/requests/:id/decline`;
+- cancel, an error, or ten minutes without an answer: nothing is sent, the request stays pending (VS Code
+  can still answer);
+- 409 (answered in VS Code first): the agent is told so.
+
+Both POSTs carry `x-rojo-hub-answered-in: chat`, and the service writes `move_place` or
+`decline_place` to `audit.jsonl` with `approvedIn: "chat"`. The agent gets the outcome as the call's result
+(`structuredContent.outcome`). With the header, `wait` is ignored (the question comes back at once). Without
+elicitation support nothing changes: VS Code notification and panel. The tool description and the MCP
+instructions say the user is asked directly and the agent must not ask in chat. The VS Code
+notification stays; whichever answers first wins.
+
+### 3. `rojoHub.placeMoves`
+
+`ask` (default) or `auto`, application scope, pushed to the service like `openPlaces`. `PlaceRequests.ask`
+takes one `autoMove` flag, computed by the caller as `placeMoves === "auto" || yolo`. It moves at once only
+when the holding project has no claim from another agent; a claimed holder is always asked. Every automatic
+move writes `move_place` with `by: "placeMoves"` or `"yolo"`. `status` carries `placeMoves` and says so
+in one line when it is `auto`.
+
+### Acceptance (0.22.5)
+
+10. A Move, a panel assignment and `request_place`'s assignment each send a new `target.handoff`.
+11. A plugin synced with another project switches once per handoff number; none, no switch.
+12. A client that declares elicitation is asked; accept/true moves, accept/false and decline decline,
+    cancel leaves pending; a client that does not declare it gets no header and no `_meta`.
+13. `placeMoves` auto moves at once from an unclaimed holder (audited), asks for a claimed one; ask asks.

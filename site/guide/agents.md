@@ -53,7 +53,7 @@ registration and settings.
 | `log` | The last lines of Rojo's log |
 | `wait_for_studio` | Wait until a Studio place has synced |
 | `open_place` | Open a project's place in Studio (needs `rojoHub.openPlaces`) |
-| `request_place` | Ask you to move a Studio place another project holds to the agent's project (you answer Move or Decline in VS Code) |
+| `request_place` | Ask you to move a Studio place another project holds to the agent's project (you answer in the agent's own prompt when its client supports it, else Move or Decline in VS Code) |
 | `build` | `rojo build` what a project serves |
 | `sourcemap` | Write the served worktree's `sourcemap.json` |
 
