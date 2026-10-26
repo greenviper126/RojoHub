@@ -758,8 +758,21 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 
 		// VS Code assigns the fork: stored per place, and the plugin is told at once
 		links.assign("111", "fork");
-		assert.equal((await lobby.next()).target?.slotId, "fork");
+		const handed = await lobby.next();
+		assert.equal(handed.target?.slotId, "fork");
+		assert.equal(typeof handed.target?.handoff, "number", "a deliberate assignment carries a handoff, so a synced plugin switches once (spec 014)");
 		assert.equal(assigned.get(111), "fork");
+		// the same assignment again is another handoff: a new number, never a repeat of the last
+		links.assign("111", "fork");
+		const again = await lobby.next();
+		assert.ok((again.target?.handoff ?? 0) > (handed.target?.handoff ?? 0));
+		// back to the project files: no handoff, and the old number is not resent for a project it was not for
+		links.assign("111", null);
+		const cleared = await lobby.next();
+		assert.equal(cleared.target?.slotId, "game");
+		assert.equal(cleared.target?.handoff, undefined, "the project files hand nothing over");
+		links.assign("111", "fork");
+		assert.equal((await lobby.next()).target?.slotId, "fork");
 		const [view] = links.places();
 		assert.equal(view.key, "111");
 		assert.equal(view.assigned, "fork");
@@ -771,7 +784,9 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		const key = links.places().find((entry) => entry.unsaved)!.key;
 		assert.match(key, /^studio:/);
 		links.assign(key, "game");
-		assert.equal((await unsaved.next()).target?.slotId, "game");
+		const unsavedAnswer = await unsaved.next();
+		assert.equal(unsavedAnswer.target?.slotId, "game");
+		assert.equal(typeof unsavedAnswer.target?.handoff, "number");
 		assert.throws(() => links.assign("0", "game"), /not a place ID/);
 		unsaved.socket.close();
 

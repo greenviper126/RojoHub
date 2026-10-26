@@ -1009,6 +1009,8 @@ test("place requests: a free place is assigned at once; a held one is a request 
 	const ask = (path: string, extra: Record<string, unknown> = {}) => structured("request_place", { path, place_id: placeId, ...extra });
 
 	let plugin: WebSocket | null = null;
+	// the handoff number of the latest answer the fake plugin got: a Move or an assignment sends a new one (spec 014)
+	let handoff: number | undefined;
 	try {
 		// the place is not open and nobody holds it: assigned straight away, no notification
 		assert.ok(!(await tool("serve_here", { path: one })).isError);
@@ -1026,10 +1028,13 @@ test("place requests: a free place is assigned at once; a held one is a request 
 				socket.send(JSON.stringify({ type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "e2e", placeId: String(placeId), gameId: "1", placeName: "Shared Lobby", unsaved: false, remembered: null }));
 			}
 			if (message.type === "match" && message.status === "connect" && message.target) {
+				handoff = message.target.handoff;
 				socket.send(JSON.stringify({ type: "state", connected: { port: message.target.port, projectName: message.target.projectName, sessionId: message.target.sessionId } }));
 			}
 		};
 		await until("the place to sync with ReqTwo", async () => (await syncedWith()) === b.projectName);
+		const panelHandoff = handoff;
+		assert.equal(typeof panelHandoff, "number", "the panel's assignment hands the place over (spec 014)");
 
 		// both sides see it: the losing project names the holder and suggests request_place
 		assert.ok(!(await tool("serve_here", { path: two })).isError, "ReqTwo's agent claims its project");
@@ -1068,6 +1073,7 @@ test("place requests: a free place is assigned at once; a held one is a request 
 		await call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/move`);
 		assert.equal((await waiting).outcome, "moved");
 		await until("the place to sync with ReqOne", async () => (await syncedWith()) === a.projectName);
+		assert.ok((handoff ?? 0) > (panelHandoff ?? 0), "Move sent a new handoff number, so a synced plugin switches once");
 		assert.deepEqual(await requests(), []);
 		assert.equal((await ask(one)).outcome, "already");
 

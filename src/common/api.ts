@@ -166,6 +166,15 @@ export interface StudioProject {
 	reason: "assigned" | "servePlaceIds" | "placeId" | "remembered";
 	/** This place has synced with this project before, so its first-sync confirmation was already accepted. */
 	accepted: boolean;
+	/*
+		Set when the user handed this place to this project on purpose (Move on a
+		request, the panel's Studio places, request_place's own assignment, yolo): a
+		number that is new for each handoff. A plugin that is synced with another
+		project then switches once, by itself, and remembers the number; without
+		one it never takes over a live session (spec 014). Optional, so older
+		plugins, which skip unknown fields, need no protocol bump.
+	*/
+	handoff?: number;
 }
 
 /*
