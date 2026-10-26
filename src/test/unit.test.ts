@@ -1860,8 +1860,8 @@ function yoloStub(repo: string, over: { yolo: boolean; claim?: { key: string; la
 	};
 	return { hub: full, slot, home, stopped };
 }
-const callTool = async (mcp: Mcp, name: string, args: object) =>
-	((await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, "2025-06-18")) as { result: { content: { text: string }[]; structuredContent?: any; isError?: boolean } }).result;
+const callTool = async (mcp: Mcp, name: string, args: object, options: { elicit?: boolean } = {}) =>
+	((await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, "2025-06-18", options)) as { result: { content: { text: string }[]; structuredContent?: any; isError?: boolean; _meta?: any } }).result;
 
 test("yolo: stop is refused for a synced place without it, goes through with it, and a claim still refuses", async () => {
 	const repo = tempRepo();
@@ -2087,7 +2087,7 @@ test("place requests: Move assigns, Decline does not, and a second answer finds 
 	assert.equal(declined.requests.outcomeFor("a", 111), null, "an answer is remembered for a while only");
 });
 
-test("place requests: yolo moves at once only from a holder no agent claimed", () => {
+test("place requests: autoMove (yolo or placeMoves auto) moves at once only from a holder no agent claimed", () => {
 	const free = requestWorld();
 	assert.deepEqual(free.requests.ask("a", 111, "worktree:a", true), { kind: "moved", from: "b" });
 	assert.deepEqual(free.world.assigned, { 111: "a" });
@@ -2188,7 +2188,7 @@ test("version: names the service, plugin, launcher, each serving Rojo and each p
 });
 
 /** Two projects, Game (the caller's, claimed by its worktree) and Other, listing Lobby (111); the real PlaceRequests behind an MCP stub. */
-function sharedStub(repo: string, over: { yolo?: boolean; holder?: string | null; claimMine?: boolean; claimTheirs?: boolean } = {}) {
+function sharedStub(repo: string, over: { yolo?: boolean; placeMoves?: "ask" | "auto"; holder?: string | null; claimMine?: boolean; claimTheirs?: boolean } = {}) {
 	const { hub, slot } = stubHub(repo, null);
 	const other = { ...slot, id: "other", projectName: "Other", repoPath: tempRepo(), places: [], listedPlaces: [{ placeId: 111, placeName: "Lobby", open: true, busy: null, error: null }] };
 	const home = yoloHome();
@@ -2214,6 +2214,7 @@ function sharedStub(repo: string, over: { yolo?: boolean; holder?: string | null
 		...hub,
 		home,
 		yoloOn: over.yolo === true,
+		placeMoves: over.placeMoves ?? "ask",
 		list: () => [slot, other],
 		registry: { get: (id: string) => (id === "other" ? other : slot), slots: [slot, other] },
 		claimOf: (id: string) => claims.get(id) ?? null,
@@ -2328,12 +2329,70 @@ test("request_place: under yolo it moves at once from an unclaimed holder and is
 	assert.deepEqual(lines.map((line) => line.action), ["move_place", "request_place"]);
 	assert.deepEqual(lines[0].args, { placeId: 111, from: "Other" });
 	assert.equal(lines[1].lifted, true, "only yolo allowed it");
+	assert.equal(lines[0].by, "yolo");
 
 	const busy = sharedStub(repo, { yolo: true, claimTheirs: true });
 	const asked = await callTool(new Mcp(busy.hub as never), "request_place", { path: repo, place_id: 111 });
 	assert.equal(asked.structuredContent.outcome, "pending");
 	assert.deepEqual(busy.world.assigned, {});
 	assert.equal(busy.requests.pending().length, 1);
+});
+
+test("request_place: rojoHub.placeMoves auto moves at once from an unclaimed holder and is audited; a claimed holder, or ask, still asks the user", async () => {
+	const repo = tempRepo();
+	const auto = sharedStub(repo, { placeMoves: "auto" });
+	const moved = await callTool(new Mcp(auto.hub as never), "request_place", { path: repo, place_id: 111 });
+	assert.equal(moved.structuredContent.outcome, "moved");
+	assert.match(moved.content[0].text, /placeMoves to auto/);
+	assert.deepEqual(auto.world.assigned, { 111: "game" });
+	const lines = auditLines(auto.home);
+	assert.equal(lines[0].action, "move_place");
+	assert.equal(lines[0].by, "placeMoves");
+	assert.equal(lines[0].lifted, false, "yolo did not allow it");
+	assert.deepEqual(lines[0].args, { placeId: 111, from: "Other" });
+
+	const claimed = sharedStub(repo, { placeMoves: "auto", claimTheirs: true });
+	assert.equal((await callTool(new Mcp(claimed.hub as never), "request_place", { path: repo, place_id: 111 })).structuredContent.outcome, "pending", "a claim holds with auto");
+	assert.deepEqual(claimed.world.assigned, {});
+
+	const ask = sharedStub(repo, { placeMoves: "ask" });
+	assert.equal((await callTool(new Mcp(ask.hub as never), "request_place", { path: repo, place_id: 111 })).structuredContent.outcome, "pending");
+	assert.deepEqual(ask.world.assigned, {});
+	assert.equal(ask.requests.pending().length, 1);
+});
+
+test("request_place: the question for the user (_meta rojo-hub/elicit) is returned only to a client that can be asked", async () => {
+	const repo = tempRepo();
+	const stub = sharedStub(repo);
+	const mcp = new Mcp(stub.hub as never);
+	const plain = await callTool(mcp, "request_place", { path: repo, place_id: 111 });
+	assert.equal(plain._meta, undefined, "no _meta without the launcher's header");
+	assert.match(plain.content[0].text, /do not ask in chat/);
+	const asked = await callTool(mcp, "request_place", { path: repo, place_id: 111, wait: 30 }, { elicit: true });
+	assert.equal(asked.structuredContent.outcome, "pending", "wait is not waited for: the question is handed back at once");
+	const ask = asked._meta["rojo-hub/elicit"];
+	assert.equal(ask.requestId, stub.requests.pending()[0].id);
+	assert.equal(ask.message, "Move Lobby from Other to Game? Studio switches it over at once.");
+	assert.equal(ask.moved.data.outcome, "moved");
+	assert.equal(ask.declined.data.outcome, "declined");
+	assert.equal(ask.answered.data.outcome, "ended");
+	assert.equal(stub.requests.pending().length, 1, "one request, however it was asked");
+	assert.match(asked.content[0].text, /never try to approve|do not ask in chat or try to approve/);
+	// a place nobody holds is assigned: nothing to ask
+	const free = sharedStub(repo, { holder: null });
+	assert.equal((await callTool(new Mcp(free.hub as never), "request_place", { path: repo, place_id: 111 }, { elicit: true }))._meta, undefined);
+	// the TOOL says the user is asked and the agent never answers for them
+	assert.doesNotMatch(JSON.stringify(TOOLS.find((tool) => tool.name === "request_place")!.inputSchema), /approved/);
+});
+
+test("status: placeMoves is in its data, and a line says so when it is auto", async () => {
+	const repo = tempRepo();
+	for (const placeMoves of ["ask", "auto"] as const) {
+		const stub = sharedStub(repo, { placeMoves });
+		const status = await callTool(new Mcp(stub.hub as never), "status", { path: repo });
+		assert.equal(status.structuredContent.placeMoves, placeMoves);
+		assert.equal(/^Place moves are on automatic/.test(status.content[0].text), placeMoves === "auto");
+	}
 });
 
 test("open_place: a Studio process alone says so and what to do; a connected plugin keeps the plain wording", async () => {

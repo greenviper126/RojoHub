@@ -125,6 +125,8 @@ export function savePortSettings(home: string, settings: PortSettings): void {
 		openPlaces: settings.openPlaces === true,
 		// Omitted (an older extension) keeps the saved value.
 		claimMinutes: settings.claimMinutes === undefined ? parseClaimMinutes(saved.claimMinutes) : parseClaimMinutes(settings.claimMinutes),
+		// Omitted (an older extension) keeps the saved value.
+		placeMoves: (settings.placeMoves === undefined ? saved.placeMoves : settings.placeMoves) === "auto" ? "auto" : "ask",
 		// Omitted (an older extension, or no token) keeps the saved value.
 		yolo: settings.yolo === undefined ? saved.yolo === true : settings.yolo === true,
 		setupCommands: settings.setupCommands === undefined ? (saved.setupCommands ?? {}) : settings.setupCommands !== null && typeof settings.setupCommands === "object" ? settings.setupCommands : {},

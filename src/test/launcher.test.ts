@@ -215,6 +215,9 @@ test("launcher: line framing", () => {
 interface Seen {
 	body: { id?: number; method?: string; params?: { name?: string } };
 	protocol: string | undefined;
+	elicit: string | undefined;
+	path: string;
+	answeredIn: string | undefined;
 }
 
 class Fake {
@@ -225,6 +228,8 @@ class Fake {
 	onCall: "answer" | "reset" | "http500" = "answer";
 	/** Whether /mcp answers carry x-rojo-hub-version (an older service sends none). */
 	sendHeader = true;
+	/** The HTTP status the service gives the user's Move or Decline (409: already answered). */
+	answerStatus = 200;
 	private server: Server | null = null;
 
 	constructor(
@@ -244,7 +249,11 @@ class Fake {
 				const chunks: Buffer[] = [];
 				for await (const chunk of request) chunks.push(chunk as Buffer);
 				const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Seen["body"];
-				this.seen.push({ body, protocol: header(request, "mcp-protocol-version") });
+				this.seen.push({ body, protocol: header(request, "mcp-protocol-version"), elicit: header(request, "x-rojo-hub-elicit"), path: request.url ?? "", answeredIn: header(request, "x-rojo-hub-answered-in") });
+				if (request.url?.startsWith("/studio/requests/")) {
+					response.writeHead(this.answerStatus, { "content-type": "application/json" });
+					return response.end(this.answerStatus === 200 ? "[]" : JSON.stringify({ error: "That request was already answered, or it ended." }));
+				}
 				const versioned: Record<string, string> = this.sendHeader ? { "x-rojo-hub-version": this.version } : {};
 				if (body.id === undefined) {
 					response.writeHead(202, versioned);
@@ -255,8 +264,23 @@ class Fake {
 					response.writeHead(500, { "content-type": "text/plain" });
 					return response.end("boom");
 				}
-				const result =
-					body.method === "initialize"
+				// request_place for a held place: the question for the user comes back only when the launcher said it can ask
+				const asking = body.method === "tools/call" && body.params?.name === "request_place" && header(request, "x-rojo-hub-elicit") === "1";
+				const result = asking
+					? {
+							content: [{ type: "text", text: "being asked" }],
+							structuredContent: { outcome: "pending" },
+							_meta: {
+								"rojo-hub/elicit": {
+									requestId: "game:111",
+									message: "Move Lobby from Other to Game?",
+									moved: { text: "The user moved Lobby.", data: { outcome: "moved" } },
+									declined: { text: "The user declined.", data: { outcome: "declined" } },
+									answered: { text: "Already answered.", data: { outcome: "ended" } },
+								},
+							},
+						}
+					: body.method === "initialize"
 						? { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "rojo-hub", version: this.version }, instructions: "Use serve_here." }
 						: body.method === "tools/list"
 							? { tools: [{ name: `status-${this.version}`, inputSchema: { type: "object" } }] }
@@ -294,7 +318,7 @@ function freePort(): Promise<number> {
 	});
 }
 
-async function rig(options: { holdMs?: number; startService?: (fake: Fake) => unknown } = {}) {
+async function rig(options: { holdMs?: number; startService?: (fake: Fake) => unknown; onWrite?: (message: Record<string, unknown>) => void; elicitMs?: number } = {}) {
 	const port = await freePort();
 	const home = temp("proxy");
 	const fake = new Fake(port, home);
@@ -306,6 +330,7 @@ async function rig(options: { holdMs?: number; startService?: (fake: Fake) => un
 		cachePath: join(home, "launcher", "cache.json"),
 		holdMs: options.holdMs ?? 3000,
 		pollMs: 20,
+		elicitMs: options.elicitMs,
 		startService: () => {
 			starts++;
 			if (!options.startService) return false;
@@ -313,7 +338,10 @@ async function rig(options: { holdMs?: number; startService?: (fake: Fake) => un
 			setTimeout(() => void Promise.resolve(options.startService!(fake)), 150);
 			return true;
 		},
-		write: (message) => out.push(message),
+		write: (message) => {
+			out.push(message);
+			options.onWrite?.(message);
+		},
 	});
 	const send = (message: object) => proxy.handleLine(JSON.stringify(message));
 	return { fake, proxy, out, send, starts: () => starts, home };
@@ -538,5 +566,131 @@ test("launcher proxy: an older service without the header is checked through /he
 		assert.deepEqual(out[before + 2], { jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 	} finally {
 		await fake.close();
+	}
+});
+
+/* ---- request_place asks the user through MCP elicitation (spec 014) ---- */
+
+const placeCall = (id: number) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "request_place", arguments: { path: "C:\Repo", place_id: 111 } } });
+const withElicitation = { ...initialize, params: { protocolVersion: "2025-06-18", capabilities: { elicitation: {} } } };
+
+/** A client that answers each elicitation/create the way the user would: `answer` is the JSON-RPC result, or "error". */
+async function elicitingRig(answer: object | "error" | "never", options: { elicitMs?: number } = {}) {
+	const asked: Record<string, unknown>[] = [];
+	const holder: { send: (message: object) => Promise<void> } = { send: async () => undefined };
+	const made = await rig({
+		elicitMs: options.elicitMs,
+		onWrite: (message) => {
+			if (message.method !== "elicitation/create") return;
+			asked.push(message);
+			if (answer === "never") return;
+			// the user answers later, on another line, while the tool call is still open
+			setTimeout(() => void holder.send(answer === "error" ? { jsonrpc: "2.0", id: message.id, error: { code: -1, message: "no" } } : { jsonrpc: "2.0", id: message.id, result: answer }), 10);
+		},
+	});
+	holder.send = made.send;
+	await made.fake.listen();
+	return { ...made, asked };
+}
+
+const resultOf = (message: Record<string, unknown>) => message.result as { content: { text: string }[]; structuredContent?: { outcome: string }; _meta?: unknown };
+
+test("launcher proxy: a client that can be asked gets the question; Move reaches the service marked as given in chat, and the agent hears the outcome", async () => {
+	const { fake, out, send, asked } = await elicitingRig({ action: "accept", content: { move: true } });
+	try {
+		await send(withElicitation);
+		await send({ jsonrpc: "2.0", method: "notifications/initialized" });
+		await send(placeCall(2));
+		assert.equal(fake.seen.find((entry) => entry.body.method === "tools/call")?.elicit, "1", "the service is told the user can be asked");
+		assert.equal(asked.length, 1);
+		const params = asked[0].params as { message: string; requestedSchema: { properties: { move: { type: string; default: boolean } }; required: string[] } };
+		assert.equal(params.message, "Move Lobby from Other to Game?");
+		assert.equal(params.requestedSchema.properties.move.type, "boolean");
+		assert.equal(params.requestedSchema.properties.move.default, false);
+		assert.deepEqual(params.requestedSchema.required, ["move"]);
+		const answered = fake.seen.find((entry) => entry.path.startsWith("/studio/requests/"));
+		assert.equal(answered?.path, "/studio/requests/game%3A111/move");
+		assert.equal(answered?.answeredIn, "chat");
+		const reply = out.find((message) => message.id === 2)!;
+		assert.equal(resultOf(reply).content[0].text, "The user moved Lobby.");
+		assert.equal(resultOf(reply).structuredContent?.outcome, "moved");
+		assert.equal(resultOf(reply)._meta, undefined, "the internal question is not passed on");
+	} finally {
+		await fake.close();
+	}
+});
+
+test("launcher proxy: accept with false and decline both decline; cancel, an error and no answer leave the request pending", async () => {
+	for (const [answer, path, text] of [
+		[{ action: "accept", content: { move: false } }, "/studio/requests/game%3A111/decline", "The user declined."],
+		[{ action: "decline" }, "/studio/requests/game%3A111/decline", "The user declined."],
+	] as const) {
+		const { fake, out, send } = await elicitingRig(answer);
+		try {
+			await send(withElicitation);
+			await send(placeCall(2));
+			assert.equal(fake.seen.find((entry) => entry.path.startsWith("/studio/requests/"))?.path, path);
+			assert.equal(resultOf(out.find((message) => message.id === 2)!).content[0].text, text);
+		} finally {
+			await fake.close();
+		}
+	}
+	for (const answer of [{ action: "cancel" }, "error", "never"] as const) {
+		const { fake, out, send } = await elicitingRig(answer, { elicitMs: 150 });
+		try {
+			await send(withElicitation);
+			await send(placeCall(2));
+			assert.equal(fake.seen.filter((entry) => entry.path.startsWith("/studio/requests/")).length, 0, `${JSON.stringify(answer)}: nothing is sent to the service`);
+			const reply = resultOf(out.find((message) => message.id === 2)!);
+			assert.match(reply.content[0].text, /did not answer the question/);
+			assert.match(reply.content[0].text, /being asked/, "the service's own text follows");
+			assert.equal(reply.structuredContent?.outcome, "pending");
+		} finally {
+			await fake.close();
+		}
+	}
+});
+
+test("launcher proxy: a request already answered elsewhere (409) is said so", async () => {
+	const { fake, out, send } = await elicitingRig({ action: "accept", content: { move: true } });
+	fake.answerStatus = 409;
+	try {
+		await send(withElicitation);
+		await send(placeCall(2));
+		const reply = resultOf(out.find((message) => message.id === 2)!);
+		assert.equal(reply.content[0].text, "Already answered.");
+		assert.equal(reply.structuredContent?.outcome, "ended");
+	} finally {
+		await fake.close();
+	}
+});
+
+test("launcher proxy: a client that does not declare elicitation gets no header and no question; other tools never carry it", async () => {
+	const asked: unknown[] = [];
+	const { fake, out, send } = await rig({ onWrite: (message) => message.method === "elicitation/create" && asked.push(message) });
+	await fake.listen();
+	try {
+		await send(initialize);
+		await send(placeCall(2));
+		await send({ ...call(3, "status") });
+		assert.ok(fake.seen.filter((entry) => entry.body.method === "tools/call").every((entry) => entry.elicit === undefined), "no x-rojo-hub-elicit");
+		assert.deepEqual(asked, []);
+		assert.equal(resultOf(out.find((message) => message.id === 2)!).content[0].text, "ok request_place");
+		// declaring only url elicitation is not form elicitation either
+		await send({ ...initialize, id: 9, params: { protocolVersion: "2025-06-18", capabilities: { elicitation: { url: {} } } } });
+		await send(placeCall(4));
+		assert.equal(fake.seen.filter((entry) => entry.body.id === 4)[0].elicit, undefined);
+	} finally {
+		await fake.close();
+	}
+	// and a client that does declare it sends the header for request_place only
+	const declared = await rig();
+	await declared.fake.listen();
+	try {
+		await declared.send(withElicitation);
+		await declared.send(call(3, "status"));
+		assert.equal(declared.fake.seen.find((entry) => entry.body.id === 3)?.elicit, undefined);
+	} finally {
+		await declared.fake.close();
 	}
 });

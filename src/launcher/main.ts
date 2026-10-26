@@ -46,6 +46,7 @@ process.stdin.on("data", (chunk: string) => {
 });
 // The agent went away: finish what is in flight, then end. The service is never stopped.
 process.stdin.on("end", () => {
+	proxy.abandon();
 	const rest = lines.rest();
 	if (rest.trim()) void proxy.handleLine(rest);
 	void proxy.idle().then(() => process.exit(0));

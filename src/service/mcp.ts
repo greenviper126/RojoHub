@@ -47,6 +47,7 @@ const SETUP_WAIT_MS = 40000;
 const STRUCTURED_FROM = "2025-06-18";
 
 /** The first line of status while yolo is on (spec 012, design 4). */
+export const PLACE_MOVES_LINE = "Place moves are on automatic (rojoHub.placeMoves): request_place moves a place at once from a project no other agent claimed, and logs it. A claimed holder still means the user is asked.";
 export const YOLO_LINE = "Yolo mode is ON: the user lifted Rojo-Hub's guards. You may open Studio places and stop or remove projects that Studio places are synced to; other agents' claims still hold. Everything you do is logged.";
 
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
@@ -65,7 +66,7 @@ Opening Studio: when none of the project's places is open, open_place opens one 
 
 Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with on your own; the user does that in the Rojo-Hub panel in VS Code.
 
-Shared places: a Studio place syncs with one project at a time, even when several projects list it. status, serve_here, switch and ensure say when a place of your project is synced with another project, which projects list it, and any pending request. To get such a place, call request_place with its place ID (from your worktree, holding your claim): if no project holds the place it is assigned to yours at once; otherwise the user is asked in VS Code to move it (Move or Decline), and with wait (seconds, up to 300) the call waits for the answer. Asking again only refreshes your request. It ends when you release, your claim runs out, or the user answers. When status says another project asked for a place yours holds, finish what you are doing in Studio and release. Never open or inspect a Studio place that is synced with another project.
+Shared places: a Studio place syncs with one project at a time, even when several projects list it. status, serve_here, switch and ensure say when a place of your project is synced with another project, which projects list it, and any pending request. To get such a place, call request_place with its place ID (from your worktree, holding your claim): if no project holds the place it is assigned to yours at once; otherwise the user is asked directly to move it: in your client's own prompt when it can show one, else in VS Code (Move or Decline). Do not ask in chat and never try to approve the move yourself; only the user's answer moves a place. With wait (seconds, up to 300) the call waits for an answer given in VS Code. Asking again only refreshes your request. When the user set rojoHub.placeMoves to auto (status says), a place moves at once unless an agent claimed the project holding it. It ends when you release, your claim runs out, or the user answers. When status says another project asked for a place yours holds, finish what you are doing in Studio and release. Never open or inspect a Studio place that is synced with another project.
 
 Yolo mode: when the user turned on rojoHub.yolo, status and ensure say so (yolo: true in their data). Then you may open Studio places and stop or remove projects that Studio places are synced to, and stop_all works without force but keeps projects other agents claimed; their claims still hold. request_place moves a place at once when the project holding it is not claimed by another agent. Everything you do is logged. Without it, the rules above apply.`;
 
@@ -83,6 +84,8 @@ interface Tool {
 export interface Answer {
 	text: string;
 	data?: Record<string, unknown>;
+	/** Result `_meta` (MCP): request_place's `rojo-hub/elicit` asks the launcher to put a yes/no to the user (spec 014). */
+	meta?: Record<string, unknown>;
 	/** A failure the agent should read as one (spec 011: ensure's failures are answers, so the steps done are kept). */
 	isError?: boolean;
 }
@@ -129,6 +132,7 @@ const STATUS_SCHEMA = shape({
 	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S })),
 	yourProject: orNull("string"),
 	yolo: B,
+	placeMoves: { type: "string", enum: ["ask", "auto"] },
 	setup: arrayOf(shape({ path: S, state: { type: "string", enum: ["running", "ok", "failed"] }, step: I, of: I })),
 });
 const REQUEST_PLACE_SCHEMA = shape({ outcome: { type: "string", enum: [...REQUEST_OUTCOMES] }, placeId: I, name: orNull("string"), project: S, holder: orNull("string") });
@@ -237,7 +241,7 @@ export const TOOLS: Tool[] = [
 		name: "request_place",
 		title: "Ask for a shared Studio place",
 		description:
-			"Asks the user, in VS Code, to move a Studio place your project lists to your project, when another project holds it (status says so). Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 300) waits for the answer. Yolo mode moves it at once unless an agent claimed the holder.",
+			"Asks the user to move a Studio place your project lists to yours, when another project holds it. The user is asked directly (in your client, else in VS Code): never ask in chat or approve it yourself. Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 300) waits for an answer given in VS Code. With rojoHub.placeMoves auto or yolo it can move at once.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -463,6 +467,8 @@ export class Mcp {
 	private readonly queues = new Map<string, symbol[]>();
 	/** Per call: whether yolo mode is what allowed it (for the audit log). */
 	private readonly lift = new AsyncLocalStorage<{ lifted: boolean }>();
+	/** Per call: the client behind the launcher can put a question to the user (MCP elicitation; header x-rojo-hub-elicit). */
+	private readonly asking = new AsyncLocalStorage<{ elicit: boolean }>();
 
 	constructor(
 		private readonly hub: Hub,
@@ -473,7 +479,7 @@ export class Mcp {
 		Handles one JSON-RPC message: the response to send, or null for a
 		notification (which gets 202 and no body).
 	*/
-	async handle(message: unknown, protocol?: string): Promise<object | null> {
+	async handle(message: unknown, protocol?: string, options: { elicit?: boolean } = {}): Promise<object | null> {
 		// Only a client that sent MCP-Protocol-Version 2025-06-18 or later understands outputSchema and structuredContent.
 		const structured = typeof protocol === "string" && /^\d{4}-\d{2}-\d{2}$/.test(protocol.trim()) && protocol.trim() >= STRUCTURED_FROM;
 		if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -502,8 +508,8 @@ export class Mcp {
 				if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) return fail(-32602, `Unknown tool: ${String(name)}`);
 				const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Args;
 				try {
-					const answer = await this.call(name, args);
-					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.isError ? { isError: true } : {}) });
+					const answer = await this.asking.run({ elicit: options.elicit === true }, () => this.call(name, args));
+					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.meta ? { _meta: answer.meta } : {}), ...(answer.isError ? { isError: true } : {}) });
 				} catch (error) {
 					const known = error instanceof Refusal || error instanceof Conflict || error instanceof NotFound;
 					const detail = error instanceof Error ? error.message : String(error);
@@ -1066,21 +1072,26 @@ export class Mcp {
 		const label = this.placeLabel(placeId, name);
 		const answer = (outcome: (typeof REQUEST_OUTCOMES)[number], text: string, holder: string | null = holderOf()): Answer => ({ text, data: { outcome, placeId, name, project: slot.projectName, holder } });
 
-		const result = this.hub.requests.ask(slot.id, placeId, key, this.hub.yoloOn);
+		// rojoHub.placeMoves "auto" or yolo: a holder no other agent claimed gives the place up at once. A claim always holds.
+		const by = this.hub.placeMoves === "auto" ? "placeMoves" : this.hub.yoloOn ? "yolo" : null;
+		const result = this.hub.requests.ask(slot.id, placeId, key, by !== null);
 		switch (result.kind) {
 			case "already":
 				return answer("already", `${label} already syncs with ${slot.projectName}; nothing to do.`);
 			case "assigned":
 				return answer("assigned", `${label} is assigned to ${slot.projectName}. Nobody held it, so nothing was taken from anyone.${slot.state === "running" ? " If it is open in Studio it connects within a few seconds; call wait_for_studio." : ` ${slot.projectName} is not serving: start it, and the place connects by itself.`}`);
 			case "moved": {
-				this.lifted();
+				if (by === "yolo") this.lifted();
 				const from = names.get(result.from) ?? result.from;
-				writeAudit(this.hub.home, { actor: "mcp", action: "move_place", project: slot.projectName, args: { placeId, from }, yolo: true, lifted: true, outcome: "ok" });
-				return answer("moved", `Yolo mode is on and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.`, slot.projectName);
+				writeAudit(this.hub.home, { actor: "mcp", action: "move_place", project: slot.projectName, args: { placeId, from }, by, yolo: by === "yolo", lifted: by === "yolo", outcome: "ok" });
+				const why = by === "yolo" ? "Yolo mode is on" : "The user set rojoHub.placeMoves to auto";
+				return answer("moved", `${why} and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.`, slot.projectName);
 			}
 		}
 		const holder = heldBefore ?? names.get(result.request.holderId ?? "") ?? null;
-		const seconds = clamp(args.wait, 0, MAX_REQUEST_WAIT_S);
+		// A client that can ask the user directly gets the question back at once (the launcher puts it), so wait has nothing to wait for.
+		const elicit = this.asking.getStore()?.elicit === true;
+		const seconds = elicit ? 0 : clamp(args.wait, 0, MAX_REQUEST_WAIT_S);
 		const deadline = Date.now() + seconds * 1000;
 		for (;;) {
 			const outcome = this.hub.requests.outcomeFor(slot.id, placeId);
@@ -1090,9 +1101,26 @@ export class Mcp {
 			if (Date.now() >= deadline) break;
 			await sleep(500);
 		}
+		if (elicit) {
+			const from = holder ?? "its project";
+			const pending = answer("pending", `The user is being asked, in this client, to move ${label} from ${from} to ${slot.projectName}. Keep working; do not ask in chat or try to approve it yourself. If the question is cancelled, the request stays pending and the user can still answer in VS Code. Status shows the answer.`);
+			return {
+				...pending,
+				meta: {
+					"rojo-hub/elicit": {
+						requestId: result.request.id,
+						message: `Move ${name ?? `place ${placeId}`} from ${from} to ${slot.projectName}? Studio switches it over at once.`,
+						// What the launcher tells the agent for each answer, so the wording stays here.
+						moved: answer("moved", `The user moved ${label} from ${from} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.`, slot.projectName),
+						declined: answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${from}. Do not ask again unless the user says to.`, from),
+						answered: answer("ended", `The request for ${label} was already answered (in VS Code) or ended, so the user's choice here changed nothing. Call status to see where the place is.`),
+					},
+				},
+			};
+		}
 		return answer(
 			"pending",
-			`${result.fresh ? "Asked" : "Still asking"} the user, in VS Code, to move ${label} from ${holder ?? "its project"} to ${slot.projectName}${seconds > 0 ? `; no answer in ${seconds} s` : ""}. Keep working; status shows the answer, or call request_place again with wait. It ends if you release or your claim runs out.`,
+			`${result.fresh ? "Asked" : "Still asking"} the user, in VS Code, to move ${label} from ${holder ?? "its project"} to ${slot.projectName}${seconds > 0 ? `; no answer in ${seconds} s` : ""}. Keep working and do not ask in chat; status shows the answer, or call request_place again with wait. It ends if you release or your claim runs out.`,
 		);
 	}
 
@@ -1595,12 +1623,12 @@ export class Mcp {
 			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion })),
 			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
 			yolo: this.hub.yoloOn === true,
+			placeMoves: this.hub.placeMoves === "auto" ? "auto" : "ask",
 			setup: this.hub.setupJobs.all().map((job) => ({ path: job.path, state: job.state, step: job.step, of: job.of })),
 		};
 		const body = await this.statusText(slots, root, repo);
-		return { text: this.hub.yoloOn ? `${YOLO_LINE}
-
-${body}` : body, data };
+		const notes = [this.hub.yoloOn ? YOLO_LINE : null, this.hub.placeMoves === "auto" ? PLACE_MOVES_LINE : null].filter((line): line is string => line !== null);
+		return { text: notes.length > 0 ? [...notes, "", body].join("\n") : body, data };
 	}
 
 	private async statusText(slots: SlotView[], root: string | null, repo: string | null): Promise<string> {

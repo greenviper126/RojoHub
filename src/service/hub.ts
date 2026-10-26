@@ -528,6 +528,12 @@ export class Hub {
 	}
 	/** rojoHub.claimMinutes (spec 004), read from settings.json once and then kept with each change. */
 	private claimMinutesSetting: number | null = null;
+	/** rojoHub.placeMoves (spec 014), read from settings.json once and then kept with each change. */
+	private placeMovesSetting: "ask" | "auto" | null = null;
+	get placeMoves(): "ask" | "auto" {
+		this.placeMovesSetting ??= loadPortSettings(this.home).placeMoves === "auto" ? "auto" : "ask";
+		return this.placeMovesSetting;
+	}
 	get claimMinutes(): number {
 		this.claimMinutesSetting ??= parseClaimMinutes(loadPortSettings(this.home).claimMinutes);
 		return this.claimMinutesSetting;
@@ -664,6 +670,7 @@ export class Hub {
 		this.setupParsed = parseSetupCommands(saved.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
 		this.claimMinutesSetting = parseClaimMinutes(saved.claimMinutes);
+		this.placeMovesSetting = saved.placeMoves === "auto" ? "auto" : "ask";
 		if ((saved.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: saved.yolo === true ? "yolo_on" : "yolo_off" });
 		this.yoloSetting = saved.yolo === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";

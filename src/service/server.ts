@@ -47,7 +47,8 @@ import { acceptWebSocket } from "./websocket";
 	PUT    /studio/places/:key    { slotId }         assign a project to an open Studio place (null: back to its project files)
 	GET    /studio/requests                          agents' pending asks to move a place to their project (spec 014)
 	POST   /studio/requests/:id/move                 the user agrees: saves the assignment the panel makes, ends the ask
-	POST   /studio/requests/:id/decline              the user refuses: ends the ask (both 409 when it is already answered or ended)
+	POST   /studio/requests/:id/decline              the user refuses: ends the ask (both 409 when it is already answered or ended;
+	                                                 header x-rojo-hub-answered-in: chat marks an answer given in the agent's own prompt, for the audit log)
 	POST   /slots/:id/places/:placeId/open           open one of the project's places in Studio, unless it is open (spec 009)
 	POST   /slots/:id/places/:placeId/close          ask that place's Studio to close (never killed)
 	POST   /slots/:id/places/:placeId/reopen         close it, wait for Studio to exit, open it again
@@ -146,7 +147,8 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return response.end();
 				}
 				const protocol = request.headers["mcp-protocol-version"];
-				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined);
+				// The launcher says its client can put a question to the user (MCP elicitation, spec 014).
+				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined, { elicit: request.headers["x-rojo-hub-elicit"] === "1" });
 				// Every answer names the service, so a launcher notices a replacement between two calls and tells its agent the tools may have changed.
 				if (!answer) {
 					response.writeHead(202, { "x-rojo-hub-version": SERVICE_VERSION });
@@ -208,7 +210,13 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			}
 			if (method === "GET" && url.pathname === "/studio/requests") return send(response, 200, hub.requestViews());
 			if (method === "POST" && parts[0] === "studio" && parts[1] === "requests" && parts.length === 4 && (parts[3] === "move" || parts[3] === "decline")) {
-				if (!hub.requests.answer(parts[2], parts[3])) throw new Conflict("That request was already answered, or it ended.");
+				const answered = hub.requests.answer(parts[2], parts[3]);
+				if (!answered) throw new Conflict("That request was already answered, or it ended.");
+				// The user answered the agent's own prompt (MCP elicitation, through the launcher): the audit log says where.
+				if (request.headers["x-rojo-hub-answered-in"] === "chat") {
+					const nameOf = (id: string | null) => hub.registry.slots.find((slot) => slot.id === id)?.projectName ?? null;
+					writeAudit(hub.home, { actor: "user", action: parts[3] === "move" ? "move_place" : "decline_place", project: nameOf(answered.askerId), args: { placeId: answered.placeId, from: nameOf(answered.holderId) }, approvedIn: "chat", yolo: false, lifted: false, outcome: "ok" });
+				}
 				return send(response, 200, hub.requestViews());
 			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
@@ -226,6 +234,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
 					claimMinutes: input.claimMinutes === undefined ? undefined : parseClaimMinutes(input.claimMinutes),
+					placeMoves: input.placeMoves === undefined ? undefined : input.placeMoves === "auto" ? "auto" : "ask",
 					yolo: trusted && input.yolo !== undefined ? input.yolo === true : undefined,
 					setupCommands: trusted ? input.setupCommands : undefined,
 				});

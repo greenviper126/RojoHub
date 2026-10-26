@@ -3,7 +3,7 @@
 	(spec 007), so when two projects list the same place, the one that does not
 	hold it can ask for it: the user is asked in VS Code, and Move saves the same
 	assignment the panel makes. An agent never takes a place by itself, except
-	under yolo from a project no other agent has claimed.
+	under yolo or rojoHub.placeMoves "auto" from a project no other agent has claimed.
 
 	Requests live in memory only. A restart drops them and an agent asks again.
 	What this file decides is kept apart from the hub (it is handed what it needs)
@@ -105,9 +105,11 @@ export class PlaceRequests {
 	/*
 		An agent's ask for a place its project lists, from the asker's claim `askerKey`.
 		The caller has checked that the claim is the asker's and that the place is
-		listed.
+		listed. `autoMove` is rojoHub.placeMoves "auto" or yolo, worked out by the
+		caller: the place then moves at once, unless another agent claimed the
+		project holding it (claims still hold, so the user is asked then).
 	*/
-	ask(askerId: string, placeId: number, askerKey: string, yolo: boolean): AskResult {
+	ask(askerId: string, placeId: number, askerKey: string, autoMove: boolean): AskResult {
 		this.prune();
 		const id = requestId(askerId, placeId);
 		const holder = this.deps.holderOf(placeId);
@@ -122,7 +124,7 @@ export class PlaceRequests {
 			this.deps.assign(placeId, askerId);
 			return { kind: "assigned" };
 		}
-		if (yolo && this.deps.claimKeyOf(holder) === null) {
+		if (autoMove && this.deps.claimKeyOf(holder) === null) {
 			this.requests.delete(id);
 			this.deps.assign(placeId, askerId);
 			return { kind: "moved", from: holder };

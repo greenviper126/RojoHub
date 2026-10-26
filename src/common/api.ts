@@ -359,6 +359,8 @@ export interface PortSettings {
 	openPlaces?: boolean;
 	/** rojoHub.claimMinutes (spec 004): how long an agent's claim lasts after its last call; 0 never runs out. Missing keeps the saved value; invalid means 15. */
 	claimMinutes?: number;
+	/** rojoHub.placeMoves (spec 014): "auto" moves a place an agent asks for at once when no other agent claimed the project holding it; "ask" (missing) asks the user. Missing keeps the saved value. */
+	placeMoves?: "ask" | "auto";
 	/** rojoHub.yolo (spec 012, design 4): the user lifted the guards. Only pushed once the user accepted the warning; missing means off. */
 	yolo?: boolean;
 	/** rojoHub.setupCommands: repo path -> commands run in a new worktree before it is first served (spec 012); the service validates it. */

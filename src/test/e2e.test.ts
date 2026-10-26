@@ -1095,6 +1095,16 @@ test("place requests: a free place is assigned at once; a held one is a request 
 		const move = audit.find((line) => line.action === "move_place");
 		assert.ok(move, "the move is in the audit log");
 		assert.deepEqual(move.args, { placeId, from: a.projectName });
+		assert.equal((move as { by?: string }).by, "yolo");
+		// rojoHub.placeMoves travels with the settings, shows in status, and is kept when a push leaves it out
+		assert.equal((await structured("status", {})).placeMoves, "ask");
+		await call("PUT", "/settings", { placeMoves: "auto", sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "auto");
+		assert.match((await tool("status", {})).text, /Place moves are on automatic/);
+		await call("PUT", "/settings", { sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "auto", "a push that omits it keeps it");
+		await call("PUT", "/settings", { placeMoves: "ask", sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "ask");
 	} finally {
 		plugin?.close();
 		await call("PUT", "/settings", { yolo: false, sourcemaps: false });

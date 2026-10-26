@@ -17,6 +17,8 @@ import { pathKey } from "../common/paths";
 */
 
 export const HOLD_MS = 20_000;
+/** How long the user is given to answer a question the launcher puts to them for the agent (MCP elicitation). */
+export const ELICIT_MS = 10 * 60_000;
 
 type Json = Record<string, unknown>;
 
@@ -50,6 +52,8 @@ export interface ProxyOptions {
 	holdMs?: number;
 	/** How often /health is asked while the service starts. */
 	pollMs?: number;
+	/** How long the user may take to answer an elicitation (default 10 minutes). */
+	elicitMs?: number;
 	/** Called with each JSON-RPC message for the agent. */
 	write: (message: Json) => void;
 }
@@ -87,6 +91,11 @@ export class Proxy {
 	private toolsStale = false;
 	private starting: Promise<Down | "up"> | null = null;
 	private notifyAfter = false;
+	/** The agent's client declared the elicitation capability in initialize: it can put a question to the user (spec 014). */
+	private elicits = false;
+	private elicitCount = 0;
+	/** Questions put to the client and not yet answered, by JSON-RPC id. */
+	private readonly waiting = new Map<string, (response: Json | null) => void>();
 	private readonly pending = new Set<Promise<void>>();
 
 	constructor(private readonly options: ProxyOptions) {
@@ -105,6 +114,11 @@ export class Proxy {
 		this.pending.add(work);
 		void work.finally(() => this.pending.delete(work));
 		return work;
+	}
+
+	/** The agent went away: questions waiting for the user end unanswered, so nothing is held open. */
+	abandon(): void {
+		for (const done of [...this.waiting.values()]) done(null);
 	}
 
 	/** Resolves when every request in flight has been answered. */
@@ -132,7 +146,11 @@ export class Proxy {
 		}
 		const id = message.id as string | number | null | undefined;
 		const method = message.method;
-		if (typeof method !== "string") return; // a response to a request we never send
+		if (typeof method !== "string") {
+			// The client's answer to a question put to it (elicitation/create), or nothing we sent.
+			if (typeof id === "string") this.waiting.get(id)?.(message);
+			return;
+		}
 		if (id === undefined || id === null) {
 			// A notification gets nothing back. It is passed on best-effort, without starting the service for it.
 			if (method === "notifications/initialized") this.initialized = true;
@@ -143,12 +161,16 @@ export class Proxy {
 		if (method === "initialize") {
 			const asked = (message.params as Json | undefined)?.protocolVersion;
 			if (typeof asked === "string") this.protocol = asked;
+			// Form elicitation: the capability is present and either empty (the 2025-06-18 shape) or names "form".
+			const elicitation = ((message.params as Json | undefined)?.capabilities as Json | undefined)?.elicitation;
+			this.elicits = !!elicitation && typeof elicitation === "object" && (Object.keys(elicitation).length === 0 || "form" in elicitation);
 		}
 		const outcome = await this.forward(message);
 		if (outcome.kind === "answer") {
-			const answer = outcome.body;
+			let answer = outcome.body;
 			if (method === "initialize") this.noteInitialize(answer);
 			if (method === "tools/list") this.noteTools(answer);
+			if (method === "tools/call") answer = await this.elicit(answer);
 			this.options.write(answer);
 		} else if (method === "initialize") {
 			this.localInitialize(id);
@@ -160,6 +182,75 @@ export class Proxy {
 			else this.options.write({ jsonrpc: "2.0", id, error: { code: -32603, message: text } });
 		}
 		this.flushNotification();
+	}
+
+	/*
+		request_place, when the place is held by another project, comes back with
+		`_meta["rojo-hub/elicit"]`: a yes/no for the user. It is put to the user as
+		an MCP elicitation request through the client, so the answer comes from the
+		user and never through the model's arguments (spec 014). Move or decline is
+		sent to the service as the user's answer, marked as given in chat for the
+		audit log; a cancelled or unanswered question leaves the request pending.
+		The agent gets the outcome as the call's result, in the service's wording.
+	*/
+	private async elicit(answer: Json): Promise<Json> {
+		const result = answer.result as Json | undefined;
+		const meta = result?._meta as Json | undefined;
+		const ask = meta?.["rojo-hub/elicit"] as Json | undefined;
+		if (!result || !ask || typeof ask.requestId !== "string" || typeof ask.message !== "string") return answer;
+		const { _meta: _dropped, ...rest } = result;
+		const finish = (chosen: { text?: unknown; data?: unknown } | undefined, prefix = ""): Json => {
+			const content = Array.isArray(rest.content) ? (rest.content as Json[]) : [];
+			const text = typeof chosen?.text === "string" ? chosen.text : typeof content[0]?.text === "string" ? content[0].text : "";
+			const next: Json = { ...rest, content: [{ type: "text", text: prefix + text }, ...content.slice(1)] };
+			if (chosen?.data && rest.structuredContent) next.structuredContent = chosen.data;
+			return { ...answer, result: next };
+		};
+		const choice = await this.askUser(ask.message);
+		if (choice === "leave") return finish(undefined, "The user did not answer the question put to them here (cancelled or timed out); the request stays pending, and they can still answer in VS Code. ");
+		const posted = await this.send(
+			"POST",
+			`/studio/requests/${encodeURIComponent(ask.requestId)}/${choice}`,
+			"{}",
+			{ "content-type": "application/json", "content-length": "2", "x-rojo-hub-answered-in": "chat" },
+			15_000,
+		);
+		if (typeof posted === "string") return finish(undefined, "The user answered, but Rojo-Hub's service could not be reached to record it; the request stays pending. ");
+		if (posted.status === 409) return finish(ask.answered as Json | undefined);
+		if (posted.status !== 200) return finish(undefined, `The user answered, but Rojo-Hub's service refused it (HTTP ${posted.status}); the request stays pending. `);
+		return finish((choice === "move" ? ask.moved : ask.declined) as Json | undefined);
+	}
+
+	/** Puts the yes/no to the user through the client. "leave" when they cancel, the client errors, or no answer comes. */
+	private async askUser(message: string): Promise<"move" | "decline" | "leave"> {
+		const id = `rojohub-elicit-${++this.elicitCount}`;
+		const response = new Promise<Json | null>((done) => {
+			const timer = setTimeout(() => finishWith(null), this.options.elicitMs ?? ELICIT_MS);
+			const finishWith = (value: Json | null) => {
+				clearTimeout(timer);
+				this.waiting.delete(id);
+				done(value);
+			};
+			this.waiting.set(id, finishWith);
+		});
+		this.options.write({
+			jsonrpc: "2.0",
+			id,
+			method: "elicitation/create",
+			params: {
+				message,
+				requestedSchema: {
+					type: "object",
+					properties: { move: { type: "boolean", title: "Move the place", description: "Yes moves it now. No declines the request.", default: false } },
+					required: ["move"],
+				},
+			},
+		});
+		const reply = await response;
+		const outcome = reply?.result as { action?: unknown; content?: { move?: unknown } } | undefined;
+		if (!outcome || reply?.error) return "leave";
+		if (outcome.action === "accept") return outcome.content?.move === true ? "move" : "decline";
+		return outcome.action === "decline" ? "decline" : "leave";
 	}
 
 	private reply(id: string | number, result: Json): void {
@@ -280,6 +371,8 @@ export class Proxy {
 		const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream" };
 		// What the service uses to tell which clients understand outputSchema (spec 011, section 3).
 		if (this.protocol && message.method !== "initialize") headers["mcp-protocol-version"] = this.protocol;
+		// Tells the service the user can be asked here, so request_place hands the question back (spec 014).
+		if (this.elicits && message.method === "tools/call" && (message.params as { name?: unknown } | undefined)?.name === "request_place") headers["x-rojo-hub-elicit"] = "1";
 		const body = JSON.stringify(message);
 		headers["content-length"] = String(Buffer.byteLength(body));
 		const answer = await this.send("POST", "/mcp", body, headers, 30 * 60_000); // above the longest tool (ensure can wait 600 s, run 300 s and start)

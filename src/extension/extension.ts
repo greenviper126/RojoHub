@@ -964,6 +964,7 @@ async function pushSettings(): Promise<void> {
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
 			claimMinutes: config.get<number>("claimMinutes", 15),
+			placeMoves: config.get<string>("placeMoves", "ask") === "auto" ? "auto" : "ask",
 			yolo: yoloForService(),
 			// Only the user's own (global) value, never a workspace one: a repo cannot give itself commands to run (spec 012).
 			setupCommands: config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {},

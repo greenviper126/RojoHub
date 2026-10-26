@@ -418,6 +418,20 @@
           "default": false,
           "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
         },
+        "rojoHub.placeMoves": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "ask",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "You are asked (in the agent's client, else in VS Code) before a Studio place moves to another project.",
+            "A place an agent asks for moves at once, unless another agent has claimed the project that holds it."
+          ],
+          "default": "ask",
+          "markdownDescription": "What happens when an agent asks for a Studio place another project holds (`request_place`). `ask`: you are asked (in the agent's client, else in VS Code). `auto`: the place moves at once, unless another agent has claimed the project that holds it; then you are still asked. Moves made at once are logged in `audit.jsonl`."
+        },
         "rojoHub.claimMinutes": {
           "type": "number",
           "scope": "application",
