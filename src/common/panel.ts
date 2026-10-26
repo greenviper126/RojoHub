@@ -59,6 +59,8 @@ export interface PanelState {
 	placeRequests: PlaceRequestView[];
 	/** rojoHub.openPlaces (spec 009): cards list their places with Open, Close and Reopen only while it is on. */
 	openPlaces: boolean;
+	/** rojoHub.closePlaces: Close and Reopen on an open place appear only while it is on. */
+	closePlaces: boolean;
 	/** rojoHub.yolo (spec 012): the red banner above everything, with a Turn off button. */
 	yolo: boolean;
 }

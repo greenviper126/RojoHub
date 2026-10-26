@@ -18,7 +18,8 @@ import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
 import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead, revParse } from "../service/git";
-import { Mcp, TOOLS } from "../service/mcp";
+import { newerInstalled } from "../extension/reload";
+import { Mcp, outdatedNote, staleConnection, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
@@ -34,7 +35,7 @@ import { countConnections, decodeInfo, findRojo } from "../service/rojo";
 import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
-import { OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
+import { CLOSE_OFF_MESSAGE, OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -685,6 +686,8 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		sync: (id, name) => void synced.set(id, name),
 	};
 	const links = new StudioLinks(() => candidates, memory);
+	const logged: string[] = [];
+	links.log = (message) => void logged.push(message);
 	const server = createServer();
 	let port = 0;
 	server.on("upgrade", (request, socket, head) => {
@@ -757,7 +760,8 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		assert.equal(links.places()[0].projectId, "game", "its answer, and so nothing sent, is unchanged");
 
 		// VS Code assigns the fork: stored per place, and the plugin is told at once
-		links.assign("111", "fork");
+		links.assign("111", "fork", "panel");
+		assert.ok(logged.includes("studio: Lobby (111) assigned to fork (panel)"), logged.join("\n"));
 		const handed = await lobby.next();
 		assert.equal(handed.target?.slotId, "fork");
 		assert.equal(typeof handed.target?.handoff, "number", "a deliberate assignment carries a handoff, so a synced plugin switches once (spec 014)");
@@ -767,7 +771,8 @@ test("the Studio WebSocket: hello gets the place's answer, changes are pushed, V
 		const again = await lobby.next();
 		assert.ok((again.target?.handoff ?? 0) > (handed.target?.handoff ?? 0));
 		// back to the project files: no handoff, and the old number is not resent for a project it was not for
-		links.assign("111", null);
+		links.assign("111", null, "panel");
+		assert.ok(logged.includes("studio: Lobby (111) assignment cleared (panel)"), logged.join("\n"));
 		const cleared = await lobby.next();
 		assert.equal(cleared.target?.slotId, "game");
 		assert.equal(cleared.target?.handoff, undefined, "the project files hand nothing over");
@@ -996,9 +1001,16 @@ test("opening places: off by default does nothing; on, the universe is looked up
 	let on = false;
 	const places = new Places(home, () => on, () => [], fake.system);
 	await assert.rejects(places.open(111), (error: Error) => error.message === OFF_MESSAGE);
-	await assert.rejects(places.close(111), (error: Error) => error.message === OFF_MESSAGE);
-	await assert.rejects(places.reopen(111), (error: Error) => error.message === OFF_MESSAGE);
+	await assert.rejects(places.close(111), (error: Error) => error.message === CLOSE_OFF_MESSAGE);
+	await assert.rejects(places.reopen(111), (error: Error) => error.message === CLOSE_OFF_MESSAGE);
+	assert.match(CLOSE_OFF_MESSAGE, /rojoHub.closePlaces/);
 	assert.deepEqual(fake.calls, { lookups: [], launched: [], closed: [] }, "nothing is looked up, launched or closed while off");
+	// openPlaces alone does not allow closing, and closePlaces alone does not allow opening
+	on = true;
+	await assert.rejects(places.close(111), (error: Error) => error.message === CLOSE_OFF_MESSAGE);
+	const closeOnly = new Places(home, () => false, () => [], fake.system, undefined, () => true);
+	await assert.rejects(closeOnly.open(111), (error: Error) => error.message === OFF_MESSAGE);
+	await assert.rejects(closeOnly.close(111), /place 111 is not open/, "closing is allowed; there is just nothing to close");
 
 	on = true;
 	assert.deepEqual(await places.open(111), { placeId: 111, placeName: "Place111", outcome: "opened" });
@@ -1059,7 +1071,8 @@ test("closing places: only a Studio whose command line names the place, asked (n
 	const home = mkdtempSync(join(tmpdir(), "rojo-hub-places-"));
 	const fake = fakeStudio();
 	let reported: { placeId: number; placeName: string }[] = [];
-	const places = new Places(home, () => true, () => reported, fake.system);
+	// openPlaces is off: a reopen's own open step needs only closePlaces
+	const places = new Places(home, () => false, () => reported, fake.system, undefined, () => true);
 
 	await assert.rejects(places.close(111), /place 111 is not open/);
 	reported = [{ placeId: 111, placeName: "Lobby" }];
@@ -2176,6 +2189,8 @@ test("version: names the service, plugin, launcher, each serving Rojo and each p
 		service: SERVICE_VERSION,
 		plugin: SERVICE_VERSION,
 		launcher: SERVICE_VERSION,
+		connection: null,
+		connectionOutdated: false,
 		projects: [{ id: "game", name: "Game", rojoVersion: "7.7.0" }],
 		places: [
 			{ placeId: 111, name: "Lobby", pluginVersion: "0.21.0", outdated: true },
@@ -2433,4 +2448,145 @@ test("serve_here from the main checkout says to use new_branch; from a worktree 
 	};
 	assert.match(await serve(repo), /You are serving the main checkout; don't check out other branches here; use new_branch for other work\./);
 	assert.doesNotMatch(await serve(worktree), /serving the main checkout/);
+});
+
+test("stale connection: a launcher older than the service, or none named (before 0.22.6, or direct HTTP), is told", async () => {
+	assert.equal(staleConnection(SERVICE_VERSION), null, "a current launcher");
+	assert.equal(staleConnection("99.0.0"), null, "a newer launcher is not stale");
+	assert.equal(staleConnection("0.22.5"), "0.22.5", "an older launcher names itself");
+	assert.equal(staleConnection(undefined), "before 0.22.6", "no header: a launcher from before 0.22.6, or a direct client");
+	assert.equal(staleConnection(" "), "before 0.22.6");
+	assert.equal(staleConnection(["0.1.0"]), "0.1.0");
+
+	const mcp = new Mcp({ home: mkdtempSync(join(tmpdir(), "rh-stale-")), list: () => [], studio: { places: () => [] } } as never);
+	const call = async (connection: string | null, launcher: string | null, name = "version") =>
+		(await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: {} } }, "2025-06-18", { connection, launcher })) as { result?: { content: { text: string }[]; structuredContent?: Record<string, unknown> }; error?: unknown };
+	const fresh = await call(null, SERVICE_VERSION);
+	assert.ok(!fresh.result!.content[0].text.includes("Note: this chat's"), "no note for a current launcher");
+	assert.match(fresh.result!.content[0].text, new RegExp(`This chat's connection: launcher ${SERVICE_VERSION.replace(/\./g, "\.")}\.`));
+	assert.equal(fresh.result!.structuredContent!.connection, SERVICE_VERSION);
+	assert.equal(fresh.result!.structuredContent!.connectionOutdated, false);
+	const old = await call("before 0.22.6", null);
+	const text = old.result!.content[0].text;
+	assert.ok(text.endsWith(outdatedNote("before 0.22.6")), "the note is the last line of every tool result");
+	assert.match(text, /launcher before 0\.22\.6\) than the service/);
+	assert.match(text, /This chat's connection: older than 0\.22\.6\. Ask the user to run \/mcp and reconnect rojohub/);
+	assert.equal(old.result!.structuredContent!.connection, "older than 0.22.6");
+	assert.equal(old.result!.structuredContent!.connectionOutdated, true);
+	assert.ok(!JSON.stringify(old.result!.structuredContent).includes("Note:"), "only the text carries the note");
+	const named = await call("0.22.5", "0.22.5");
+	assert.match(named.result!.content[0].text, /This chat's connection: launcher 0\.22\.5\./);
+	assert.match(named.result!.content[0].text, /launcher 0\.22\.5\) than the service/);
+	const failed = await call("0.22.5", "0.22.5", "status");
+	assert.match(failed.result!.content[0].text, /Note: this chat's Rojo-Hub connection is older/, "an error result carries it too");
+});
+
+test("place requests and assignments are written to the log", () => {
+	const { world, requests } = requestWorld();
+	const logged: string[] = [];
+	requests.log = (line) => void logged.push(line);
+	requests.ask("a", 111, "worktree:a", false);
+	assert.deepEqual(logged, ["places: A asked for place 111, held by B"]);
+	requests.ask("a", 111, "worktree:a", false);
+	assert.equal(logged.length, 1, "a repeat call is not a new request");
+	assert.ok(requests.answer("a:111", "decline", "the agent's chat"));
+	assert.equal(logged[1], "places: A's request for place 111 answered in the agent's chat: decline");
+
+	const sources: string[] = [];
+	const rig = requestWorld();
+	rig.requests.log = (line) => void logged.push(line);
+	const deps = (rig.requests as unknown as { deps: RequestDeps }).deps;
+	const inner = deps.assign;
+	deps.assign = (placeId, slotId, source) => (sources.push(source), inner(placeId, slotId, source));
+	rig.requests.ask("a", 111, "worktree:a", false);
+	rig.requests.answer("a:111", "move");
+	assert.deepEqual(sources, ["Move on A's request, answered in VS Code"]);
+	assert.ok(logged.includes("places: A's request for place 111 answered in VS Code: move"));
+
+	const auto = requestWorld();
+	auto.requests.log = (line) => void logged.push(line);
+	(auto.requests as unknown as { deps: RequestDeps }).deps.assign = (_p, _s, source) => void sources.push(source);
+	auto.requests.ask("a", 111, "worktree:a", true, "yolo");
+	assert.equal(sources[1], "auto move, yolo");
+	assert.ok(logged.includes("places: A took place 111 from B at once (yolo; no agent claimed it)"));
+
+	const ended = requestWorld();
+	ended.requests.log = (line) => void logged.push(line);
+	ended.requests.ask("a", 111, "worktree:a", false);
+	delete ended.world.claims.a;
+	assert.equal(ended.requests.pending().length, 0);
+	assert.ok(logged.includes("places: A's request for place 111 ended: its claim was released or lapsed"));
+	const released = requestWorld();
+	released.requests.log = (line) => void logged.push(line);
+	released.requests.ask("a", 111, "worktree:a", false);
+	released.requests.dropAsker("a");
+	assert.ok(logged.includes("places: A's request for place 111 ended: the project was released"));
+	assert.ok(world);
+});
+
+test("status: a place assigned to one project but still synced with another says the handover is pending", async () => {
+	const place = (assigned: string | null, syncedWith: string | null) => ({ placeName: "TLS Building Tests - Dev", placeId: 88678433007729, unsaved: false, assigned, syncedWith, pluginVersion: "0.22.4" });
+	const mcp = new Mcp({ registry: { slots: [{ id: "ft", projectName: "FolderThemes" }, { id: "vb", projectName: "VluxyBuildingTools" }] }, studio: { places: () => [place("ft", "VluxyBuildingTools")] } } as never);
+	const internals = mcp as unknown as { handoverText(p: unknown, only?: string): string | null; assignedName(p: unknown): string | null };
+	const text = internals.handoverText(place("ft", "VluxyBuildingTools"));
+	assert.equal(text, "TLS Building Tests - Dev is assigned to FolderThemes but still synced with VluxyBuildingTools; its plugin (0.22.4) switches over by itself from 0.22.5 on; with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.");
+	assert.equal(internals.handoverText(place("ft", "FolderThemes")), null, "nothing pending once synced");
+	assert.equal(internals.handoverText(place(null, "FolderThemes")), null, "nothing assigned");
+	assert.equal(internals.handoverText(place("ft", null)), null, "not synced yet: it is connecting, not handing over");
+	assert.equal(internals.handoverText(88678433007729, "vb"), null, "by place ID, only for the named assignment");
+	assert.equal(internals.handoverText(88678433007729, "ft"), text, "by place ID");
+	assert.equal(internals.assignedName(place("vb", null)), "VluxyBuildingTools");
+});
+
+test("reload on update: the newest installed sibling folder above the running version, with a built extension", () => {
+	const root = join(tmpdir(), "ext");
+	const built = new Set(["0.22.6", "0.22.7-win32-x64", "0.23.0", "0.22.5"].map((v) => join(root, `greenviper126.rojo-hub-${v}`, "dist", "extension.js")));
+	const names = ["greenviper126.rojo-hub-0.22.5", "greenviper126.rojo-hub-0.22.6", "greenviper126.rojo-hub-0.22.7-win32-x64", "greenviper126.rojo-hub-0.23.0", "greenviper126.rojo-hub-0.9.0", "other.ext-9.9.9", "greenviper126.rojo-hub-1.0.0"];
+	const list = () => names;
+	const exists = (path: string) => built.has(path);
+	const running = join(root, "greenviper126.rojo-hub-0.22.6");
+	assert.equal(newerInstalled(running, "0.22.6", list, exists), "0.23.0", "the newest built one; 1.0.0 has no built extension");
+	assert.equal(newerInstalled(running, "0.23.0", list, exists), null, "nothing newer than the newest");
+	assert.equal(newerInstalled(running, "0.22.6", () => ["greenviper126.rojo-hub-0.22.6"], exists), null, "only itself");
+	assert.equal(newerInstalled(running, "0.9.0", () => ["greenviper126.rojo-hub-0.10.0"], () => true), "0.10.0", "versions compare numerically");
+	assert.equal(newerInstalled(running, "0.22.6", () => { throw new Error("gone"); }, exists), null, "an unreadable folder is no update");
+});
+
+test("close_place and reopen_place: refused while closePlaces is off (yolo does not lift it), claims apply, force passes, and both are audited", async () => {
+	const repo = tempRepo();
+	const run = (over: { closeOn: boolean; yolo?: boolean; claim?: { key: string; label: string; until: number } | null }) => {
+		const { hub, slot, home } = yoloStub(repo, { yolo: over.yolo === true, claim: over.claim ?? null });
+		const done: string[] = [];
+		const full = { ...hub, closePlacesOn: over.closeOn, closePlace: async (_id: string, placeId: number) => void done.push(`close ${placeId}`), reopenPlace: async (_id: string, placeId: number) => void done.push(`reopen ${placeId}`) };
+		return { mcp: new Mcp(full as never), done, home, slot };
+	};
+	const off = run({ closeOn: false, yolo: true });
+	for (const name of ["close_place", "reopen_place"]) {
+		const refused = await callTool(off.mcp, name, { path: repo });
+		assert.equal(refused.isError, true);
+		assert.match(refused.content[0].text, /rojoHub\.closePlaces/, "names the setting, even under yolo");
+	}
+	assert.deepEqual(off.done, []);
+
+	const on = run({ closeOn: true });
+	const closed = await callTool(on.mcp, "close_place", { path: repo });
+	assert.ok(!closed.isError, closed.content[0].text);
+	assert.match(closed.content[0].text, /Asked Studio to close Lobby \(place 111\)/);
+	const reopened = await callTool(on.mcp, "reopen_place", { path: repo, placeId: 111 });
+	assert.ok(!reopened.isError, reopened.content[0].text);
+	assert.deepEqual(on.done, ["close 111", "reopen 111"]);
+	const lines = readFileSync(join(on.home, AUDIT_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { action: string; args: { placeId: number } });
+	assert.deepEqual(lines.map((line) => line.action), ["close_place", "reopen_place"]);
+	assert.equal(lines[0].args.placeId, 111);
+	assert.match((await callTool(on.mcp, "close_place", { path: repo, placeId: 5 })).content[0].text, /not one of/);
+
+	const claim = { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 };
+	const claimed = run({ closeOn: true, claim });
+	const held = await callTool(claimed.mcp, "close_place", { path: repo });
+	assert.equal(held.isError, true);
+	assert.match(held.content[0].text, /claimed by an agent/);
+	assert.deepEqual(claimed.done, []);
+	const forced = await callTool(claimed.mcp, "close_place", { path: repo, force: true });
+	assert.ok(!forced.isError, forced.content[0].text);
+	assert.deepEqual(claimed.done, ["close 111"]);
 });

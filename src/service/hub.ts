@@ -189,13 +189,20 @@ export class Hub {
 			projects: () => this.requestProjects(),
 			holderOf: (placeId) => this.placeHolder(placeId),
 			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
-			assign: (placeId, slotId) => this.studio.assign(String(placeId), slotId),
+			assign: (placeId, slotId, source) => this.studio.assign(String(placeId), slotId, source),
+			placeLabel: (placeId) => {
+				const name = this.studio.places().find((place) => place.placeId === placeId)?.placeName ?? this.places.listed([placeId])[0]?.placeName;
+				return name ? `${name} (${placeId})` : `place ${placeId}`;
+			},
 			claimKeyOf: (slotId) => this.claimOf(slotId)?.key ?? null,
 		});
 		this.places = new Places(
 			home,
 			() => this.openPlacesOn,
 			() => this.studio.places().filter((place) => !place.unsaved),
+			undefined,
+			undefined,
+			() => this.closePlacesOn,
 		);
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
@@ -522,6 +529,12 @@ export class Hub {
 		this.openPlacesSetting ??= loadPortSettings(this.home).openPlaces === true;
 		return this.openPlacesSetting;
 	}
+	/** rojoHub.closePlaces: Close and Reopen for the panel and agents. Yolo mode does not turn it on. */
+	private closePlacesSetting: boolean | null = null;
+	get closePlacesOn(): boolean {
+		this.closePlacesSetting ??= loadPortSettings(this.home).closePlaces === true;
+		return this.closePlacesSetting;
+	}
 	/** Whether agents and the panel may open places: rojoHub.openPlaces, or yolo mode (spec 012). */
 	get openPlacesOn(): boolean {
 		return this.openPlacesSwitchOn || this.yoloOn;
@@ -669,6 +682,7 @@ export class Hub {
 		const saved = loadPortSettings(this.home);
 		this.setupParsed = parseSetupCommands(saved.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
+		this.closePlacesSetting = saved.closePlaces === true;
 		this.claimMinutesSetting = parseClaimMinutes(saved.claimMinutes);
 		this.placeMovesSetting = saved.placeMoves === "auto" ? "auto" : "ask";
 		if ((saved.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: saved.yolo === true ? "yolo_on" : "yolo_off" });

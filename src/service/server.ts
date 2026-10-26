@@ -6,7 +6,7 @@ import { AGENTS, AgentRegistrar } from "./agentConfig";
 import { writeAudit } from "./audit";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
-import { Mcp } from "./mcp";
+import { Mcp, staleConnection } from "./mcp";
 import { parseClaimMinutes, settingsToken, tokenMatches } from "./ports";
 import { Conflict, NotFound } from "./registry";
 import { acceptWebSocket } from "./websocket";
@@ -53,7 +53,7 @@ import { acceptWebSocket } from "./websocket";
 	POST   /slots/:id/places/:placeId/close          ask that place's Studio to close (never killed)
 	POST   /slots/:id/places/:placeId/reopen         close it, wait for Studio to exit, open it again
 	POST   /slots/:id/places/open-all                open every one of the project's places that is not open
-	(all four refused with 409 while rojoHub.openPlaces is off)
+	(open ones refused with 409 while rojoHub.openPlaces is off, close and reopen while rojoHub.closePlaces is off)
 
 	Only programs on this machine may use it, never a web page:
 	- Host must name the loopback address and this port. A DNS-rebinding page
@@ -114,7 +114,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 	const mcp = new Mcp(hub, groups);
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studioPlaces(), openPlaces: hub.openPlacesOn, placeRequests: hub.requestViews() } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studioPlaces(), openPlaces: hub.openPlacesOn, closePlaces: hub.closePlacesOn, placeRequests: hub.requestViews() } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -148,7 +148,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				}
 				const protocol = request.headers["mcp-protocol-version"];
 				// The launcher says its client can put a question to the user (MCP elicitation, spec 014).
-				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined, { elicit: request.headers["x-rojo-hub-elicit"] === "1" });
+				// Which launcher the call came through (or none), so a chat that kept an older one is told (staleConnection).
+				const connection = staleConnection(request.headers["x-rojo-hub-launcher"]);
+				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined, { elicit: request.headers["x-rojo-hub-elicit"] === "1", connection, launcher: typeof request.headers["x-rojo-hub-launcher"] === "string" ? request.headers["x-rojo-hub-launcher"].trim() || null : null });
 				// Every answer names the service, so a launcher notices a replacement between two calls and tells its agent the tools may have changed.
 				if (!answer) {
 					response.writeHead(202, { "x-rojo-hub-version": SERVICE_VERSION });
@@ -205,12 +207,12 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				const input = await body(request);
 				if (input.slotId !== null && typeof input.slotId !== "string") return send(response, 400, { error: "slotId must be a project id or null" });
 				if (typeof input.slotId === "string") hub.registry.get(input.slotId);
-				hub.studio.assign(parts[2], input.slotId as string | null);
+				hub.studio.assign(parts[2], input.slotId as string | null, "panel");
 				return send(response, 200, hub.studioPlaces());
 			}
 			if (method === "GET" && url.pathname === "/studio/requests") return send(response, 200, hub.requestViews());
 			if (method === "POST" && parts[0] === "studio" && parts[1] === "requests" && parts.length === 4 && (parts[3] === "move" || parts[3] === "decline")) {
-				const answered = hub.requests.answer(parts[2], parts[3]);
+				const answered = hub.requests.answer(parts[2], parts[3], request.headers["x-rojo-hub-answered-in"] === "chat" ? "the agent's chat" : "VS Code");
 				if (!answered) throw new Conflict("That request was already answered, or it ended.");
 				// The user answered the agent's own prompt (MCP elicitation, through the launcher): the audit log says where.
 				if (request.headers["x-rojo-hub-answered-in"] === "chat") {
@@ -233,6 +235,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
+					closePlaces: input.closePlaces === undefined ? undefined : input.closePlaces === true,
 					claimMinutes: input.claimMinutes === undefined ? undefined : parseClaimMinutes(input.claimMinutes),
 					placeMoves: input.placeMoves === undefined ? undefined : input.placeMoves === "auto" ? "auto" : "ask",
 					yolo: trusted && input.yolo !== undefined ? input.yolo === true : undefined,

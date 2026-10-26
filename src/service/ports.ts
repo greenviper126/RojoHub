@@ -124,6 +124,8 @@ export function savePortSettings(home: string, settings: PortSettings): void {
 		studioAutoConnect: settings.studioAutoConnect === "listed" ? "listed" : "remembered",
 		openPlaces: settings.openPlaces === true,
 		// Omitted (an older extension) keeps the saved value.
+		closePlaces: settings.closePlaces === undefined ? saved.closePlaces === true : settings.closePlaces === true,
+		// Omitted (an older extension) keeps the saved value.
 		claimMinutes: settings.claimMinutes === undefined ? parseClaimMinutes(saved.claimMinutes) : parseClaimMinutes(settings.claimMinutes),
 		// Omitted (an older extension) keeps the saved value.
 		placeMoves: (settings.placeMoves === undefined ? saved.placeMoves : settings.placeMoves) === "auto" ? "auto" : "ask",

@@ -10,7 +10,7 @@ import { writeAudit } from "./audit";
 import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type HandBack, type Hub } from "./hub";
-import { OFF_MESSAGE } from "./places";
+import { CLOSE_OFF_MESSAGE, OFF_MESSAGE } from "./places";
 import { loadPortSettings } from "./ports";
 import { listersOf } from "./requests";
 import { Conflict, NotFound } from "./registry";
@@ -40,9 +40,30 @@ const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 const SETTLE_MS = 1500;
 const MAX_WAIT_S = 600;
 /** The longest request_place waits for the user: the user is a person, not a claim. */
-const MAX_REQUEST_WAIT_S = 300;
+const MAX_REQUEST_WAIT_S = 60;
 /** How long new_branch waits for setup commands: below Codex's 60 s tool timeout (spec 012). */
 const SETUP_WAIT_MS = 40000;
+/*
+	Whether the chat's connection is older than the service. A stdio launcher
+	keeps running its old code until the chat reconnects (/mcp) or restarts, so
+	it misses new tools, descriptions and prompts. From 0.22.6 the launcher
+	names itself in x-rojo-hub-launcher; a call without it came from an older
+	launcher or a client talking HTTP directly, and the advice (reconnect through
+	the launcher) fits both. Returns the label for the note, or null when current.
+*/
+export function staleConnection(launcher: string | string[] | undefined): string | null {
+	const version = (Array.isArray(launcher) ? launcher[0] : launcher)?.trim();
+	if (!version) return "before 0.22.6";
+	return compareVersions(version, SERVICE_VERSION) < 0 ? version : null;
+}
+
+/** The line a tool result carries when the chat's connection is older than the service. */
+export const outdatedNote = (launcher: string): string =>
+	`Note: this chat's Rojo-Hub connection is older (launcher ${launcher}) than the service (${SERVICE_VERSION}), so some tools or prompts may be missing. Ask the user to run /mcp and reconnect rojohub, or start a new chat.`;
+
+/** What to do while a place is assigned to one project but still synced with another (the plugin switches over by itself from 0.22.5 on). */
+const HANDOVER_HELP = "its plugin switches over by itself from 0.22.5 on; with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.";
+
 /** The first protocol version with outputSchema and structuredContent. */
 const STRUCTURED_FROM = "2025-06-18";
 
@@ -62,7 +83,7 @@ Sharing: serve_here and switch claim the project for your worktree %CLAIM%. Whil
 
 To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
-Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
+Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. Closing and reopening a place (close_place, reopen_place, for example to load an updated plugin) works only when the user turned on rojoHub.closePlaces; Studio is asked to close as if the user closed its window, so it still asks about unsaved changes, and nothing is killed or saved for you. Never close a place another agent's project is synced to unless the user said to.
 
 Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with on your own; the user does that in the Rojo-Hub panel in VS Code.
 
@@ -129,7 +150,7 @@ const UNAPPLIED_SCHEMA = arrayOf(shape({ placeId: I, placeName: S, total: I, ite
 const STATUS_SCHEMA = shape({
 	projects: arrayOf(PROJECT_STATE_SCHEMA),
 	groups: arrayOf(shape({ id: S, name: S, active: B, projectIds: arrayOf(S) })),
-	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S })),
+	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S, assignedTo: orNull("string") }, ["placeId", "name", "saved", "syncedWith", "pluginVersion"])),
 	yourProject: orNull("string"),
 	yolo: B,
 	placeMoves: { type: "string", enum: ["ask", "auto"] },
@@ -140,6 +161,8 @@ const VERSION_SCHEMA = shape({
 	service: S,
 	plugin: S,
 	launcher: orNull("string"),
+	connection: orNull("string"),
+	connectionOutdated: B,
 	projects: arrayOf(shape({ id: S, name: S, rojoVersion: orNull("string") })),
 	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, outdated: B })),
 });
@@ -241,7 +264,7 @@ export const TOOLS: Tool[] = [
 		name: "request_place",
 		title: "Ask for a shared Studio place",
 		description:
-			"Asks the user to move a Studio place your project lists to yours, when another project holds it. The user is asked directly (in your client, else in VS Code): never ask in chat or approve it yourself. Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 300) waits for an answer given in VS Code. With rojoHub.placeMoves auto or yolo it can move at once.",
+			"Asks the user to move a Studio place your project lists to yours, when another project holds it. The user is asked directly (in your client, else in VS Code): never ask in chat or approve it yourself. Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 60) waits for an answer given in VS Code. With rojoHub.placeMoves auto or yolo it can move at once.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -327,6 +350,20 @@ export const TOOLS: Tool[] = [
 		description:
 			"Opens one of a project's places (from its project file's servePlaceIds or placeId) in Roblox Studio, unless it is already open: then it does nothing and says so. Then call wait_for_studio. Only works when the user turned on rojoHub.openPlaces.",
 		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one. status lists them." } }),
+	},
+	{
+		name: "close_place",
+		title: "Close a place in Studio",
+		description:
+			"Asks Studio to close one of a project's places, as if the user closed its window (Studio asks about unsaved changes; nothing is killed or saved). Only works when the user turned on rojoHub.closePlaces. Refused while another agent claims the project, or the one the place is synced with, unless force.",
+		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one." }, force: forceProperty }),
+	},
+	{
+		name: "reopen_place",
+		title: "Reopen a place in Studio",
+		description:
+			"Closes one of a project's places (Studio asks about unsaved changes) and opens it again when Studio has exited, e.g. to load an updated plugin. Returns once the close was asked; then call wait_for_studio. Only works when the user turned on rojoHub.closePlaces; the open step needs no rojoHub.openPlaces. Claims apply as for close_place.",
+		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one." }, force: forceProperty }),
 	},
 	{
 		name: "wait_for_studio",
@@ -468,7 +505,7 @@ export class Mcp {
 	/** Per call: whether yolo mode is what allowed it (for the audit log). */
 	private readonly lift = new AsyncLocalStorage<{ lifted: boolean }>();
 	/** Per call: the client behind the launcher can put a question to the user (MCP elicitation; header x-rojo-hub-elicit). */
-	private readonly asking = new AsyncLocalStorage<{ elicit: boolean }>();
+	private readonly asking = new AsyncLocalStorage<{ elicit: boolean; connection: string | null; launcher: string | null }>();
 
 	constructor(
 		private readonly hub: Hub,
@@ -479,7 +516,7 @@ export class Mcp {
 		Handles one JSON-RPC message: the response to send, or null for a
 		notification (which gets 202 and no body).
 	*/
-	async handle(message: unknown, protocol?: string, options: { elicit?: boolean } = {}): Promise<object | null> {
+	async handle(message: unknown, protocol?: string, options: { elicit?: boolean; /** staleConnection's label: the chat's launcher is older than the service. */ connection?: string | null; /** The x-rojo-hub-launcher header, if the call came through a launcher that names itself. */ launcher?: string | null } = {}): Promise<object | null> {
 		// Only a client that sent MCP-Protocol-Version 2025-06-18 or later understands outputSchema and structuredContent.
 		const structured = typeof protocol === "string" && /^\d{4}-\d{2}-\d{2}$/.test(protocol.trim()) && protocol.trim() >= STRUCTURED_FROM;
 		if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -508,12 +545,15 @@ export class Mcp {
 				if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) return fail(-32602, `Unknown tool: ${String(name)}`);
 				const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Args;
 				try {
-					const answer = await this.asking.run({ elicit: options.elicit === true }, () => this.call(name, args));
-					return reply({ content: [{ type: "text", text: answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.meta ? { _meta: answer.meta } : {}), ...(answer.isError ? { isError: true } : {}) });
+					const answer = await this.asking.run({ elicit: options.elicit === true, connection: options.connection ?? null, launcher: options.launcher ?? null }, () => this.call(name, args));
+					return reply({ content: [{ type: "text", text: options.connection ? `${answer.text}
+${outdatedNote(options.connection)}` : answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.meta ? { _meta: answer.meta } : {}), ...(answer.isError ? { isError: true } : {}) });
 				} catch (error) {
 					const known = error instanceof Refusal || error instanceof Conflict || error instanceof NotFound;
 					const detail = error instanceof Error ? error.message : String(error);
-					return reply({ content: [{ type: "text", text: known ? detail : `Rojo-Hub failed: ${detail}` }], isError: true });
+					const shown = known ? detail : `Rojo-Hub failed: ${detail}`;
+					return reply({ content: [{ type: "text", text: options.connection ? `${shown}
+${outdatedNote(options.connection)}` : shown }], isError: true });
 				}
 			}
 			default:
@@ -586,6 +626,10 @@ export class Mcp {
 				return this.waitForStudio(args);
 			case "open_place":
 				return this.openPlace(args);
+			case "close_place":
+				return this.closeOrReopen(args, "close");
+			case "reopen_place":
+				return this.closeOrReopen(args, "reopen");
 			case "start_group":
 				return this.startGroup(args);
 			case "stop_group":
@@ -884,6 +928,31 @@ export class Mcp {
 		return name ? `${name} (${placeId})` : `place ${placeId}`;
 	}
 
+	/** The name of the project picked for an open place in VS Code, null when none. */
+	private assignedName(place: { assigned: string | null }): string | null {
+		return place.assigned ? (this.hub.registry.slots.find((slot) => slot.id === place.assigned)?.projectName ?? null) : null;
+	}
+
+	/*
+		A place assigned to one project but still synced with another: the plugin
+		switches over by itself from 0.22.5 on (spec 014); an older one needs the
+		user to Disconnect or reopen. `only` limits it to an assignment to that
+		project id. Null when nothing is pending. By place ID (saved places) or the place itself.
+	*/
+	private handoverText(placeOrId: number | { placeName: string; placeId: number; unsaved: boolean; assigned: string | null; syncedWith: string | null; pluginVersion: string }, only?: string): string | null {
+		const place = typeof placeOrId === "number" ? this.hub.studio.places().find((entry) => entry.placeId === placeOrId && !entry.unsaved) : placeOrId;
+		if (!place || !place.syncedWith || !place.assigned || (only !== undefined && place.assigned !== only)) return null;
+		const to = this.assignedName(place);
+		if (!to || to === place.syncedWith) return null;
+		return `${place.placeName} is assigned to ${to} but still synced with ${place.syncedWith}; its plugin (${place.pluginVersion}) switches over by itself from 0.22.5 on; with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.`;
+	}
+
+	/** ` <handover text>` for request_place's answer while the switch of a moved place has not happened yet, else nothing. */
+	private handoverNote(placeId: number): string {
+		const text = this.handoverText(placeId);
+		return text ? ` ${text}` : "";
+	}
+
 	/** One line per shared or held-elsewhere place, and per ask against this project's places, for status and the switching tools. */
 	private sharingLines(slot: SlotView): string[] {
 		const { shared, incoming } = this.sharing(slot);
@@ -899,7 +968,8 @@ export class Mcp {
 						: entry.request === "moved"
 							? "The user moved it here; it connects within a few seconds."
 							: "Call request_place to ask the user to move it here.";
-			return `${label} is synced with ${entry.heldBy}${also}. ${next}`;
+			const handover = this.handoverText(entry.placeId, slot.id);
+			return `${label} is synced with ${entry.heldBy}${also}. ${handover ?? next}`;
 		});
 		for (const ask of incoming) {
 			lines.push(`${ask.from} asked the user to move ${this.placeLabel(ask.placeId, ask.name)} to it; ${slot.projectName} holds it now. Finish what you are doing in Studio and release.`);
@@ -1074,7 +1144,7 @@ export class Mcp {
 
 		// rojoHub.placeMoves "auto" or yolo: a holder no other agent claimed gives the place up at once. A claim always holds.
 		const by = this.hub.placeMoves === "auto" ? "placeMoves" : this.hub.yoloOn ? "yolo" : null;
-		const result = this.hub.requests.ask(slot.id, placeId, key, by !== null);
+		const result = this.hub.requests.ask(slot.id, placeId, key, by !== null, by ?? undefined);
 		switch (result.kind) {
 			case "already":
 				return answer("already", `${label} already syncs with ${slot.projectName}; nothing to do.`);
@@ -1085,7 +1155,7 @@ export class Mcp {
 				const from = names.get(result.from) ?? result.from;
 				writeAudit(this.hub.home, { actor: "mcp", action: "move_place", project: slot.projectName, args: { placeId, from }, by, yolo: by === "yolo", lifted: by === "yolo", outcome: "ok" });
 				const why = by === "yolo" ? "Yolo mode is on" : "The user set rojoHub.placeMoves to auto";
-				return answer("moved", `${why} and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.`, slot.projectName);
+				return answer("moved", `${why} and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.${this.handoverNote(placeId)}`, slot.projectName);
 			}
 		}
 		const holder = heldBefore ?? names.get(result.request.holderId ?? "") ?? null;
@@ -1095,7 +1165,7 @@ export class Mcp {
 		const deadline = Date.now() + seconds * 1000;
 		for (;;) {
 			const outcome = this.hub.requests.outcomeFor(slot.id, placeId);
-			if (outcome === "moved") return answer("moved", `The user moved ${label} from ${holder ?? "its project"} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.`, slot.projectName);
+			if (outcome === "moved") return answer("moved", `The user moved ${label} from ${holder ?? "its project"} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.${this.handoverNote(placeId)}`, slot.projectName);
 			if (outcome === "declined") return answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${holder ?? "its project"}. Do not ask again unless the user says to.`);
 			if (!this.hub.requests.pendingFor(slot.id, placeId)) return answer("ended", `The request for ${label} ended without an answer (it was released, your claim ran out, or the project or place changed). Call request_place again if you still need it.`);
 			if (Date.now() >= deadline) break;
@@ -1103,6 +1173,7 @@ export class Mcp {
 		}
 		if (elicit) {
 			const from = holder ?? "its project";
+			this.hub.requests.log(`places: asking the user in the chat (MCP elicitation) to move ${label} from ${from} to ${slot.projectName}`);
 			const pending = answer("pending", `The user is being asked, in this client, to move ${label} from ${from} to ${slot.projectName}. Keep working; do not ask in chat or try to approve it yourself. If the question is cancelled, the request stays pending and the user can still answer in VS Code. Status shows the answer.`);
 			return {
 				...pending,
@@ -1111,7 +1182,7 @@ export class Mcp {
 						requestId: result.request.id,
 						message: `Move ${name ?? `place ${placeId}`} from ${from} to ${slot.projectName}? Studio switches it over at once.`,
 						// What the launcher tells the agent for each answer, so the wording stays here.
-						moved: answer("moved", `The user moved ${label} from ${from} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.`, slot.projectName),
+						moved: answer("moved", `The user moved ${label} from ${from} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio. If status still shows it synced with ${from}, ${HANDOVER_HELP}`, slot.projectName),
 						declined: answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${from}. Do not ask again unless the user says to.`, from),
 						answered: answer("ended", `The request for ${label} was already answered (in VS Code) or ended, so the user's choice here changed nothing. Call status to see where the place is.`),
 					},
@@ -1471,21 +1542,53 @@ export class Mcp {
 		};
 	}
 
+	/** Which of the project's places an open_place, close_place or reopen_place call means. */
+	private placeArg(slot: SlotView, args: Args, doing: string): number {
+		const listed = slot.listedPlaces ?? [];
+		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to ${doing}. Ask the user to do it in Studio.`);
+		if (args.placeId === undefined || args.placeId === null || args.placeId === "") {
+			if (listed.length > 1) throw new Refusal(`${slot.projectName} has several places; pass placeId as one of: ${this.listedText(listed)}.`);
+			return listed[0].placeId;
+		}
+		const placeId = Number(args.placeId);
+		if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(args.placeId)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
+		return placeId;
+	}
+
+	/*
+		close_place and reopen_place. Needs rojoHub.closePlaces (yolo does not
+		lift it). Claims apply like stop's guard: another agent's claim on this
+		project, or on the project the place is synced with, refuses unless force.
+	*/
+	private async closeOrReopen(args: Args, kind: "close" | "reopen"): Promise<string> {
+		const { slot, root } = await this.pick(args);
+		this.renew(slot, root);
+		if (!this.hub.closePlacesOn) throw new Refusal(`${CLOSE_OFF_MESSAGE} Ask the user to ${kind} the place in Studio instead.`);
+		const placeId = this.placeArg(slot, args, kind);
+		const open = this.hub.studio.places().find((place) => place.placeId === placeId && !place.unsaved);
+		const name = open?.placeName ? `${open.placeName} (place ${placeId})` : `place ${placeId}`;
+		if (args.force !== true) {
+			const mine = root === null ? null : claimKey({ kind: "worktree", path: root });
+			const holder = open?.syncedWith ? this.hub.list().find((entry) => entry.projectName === open.syncedWith) : undefined;
+			for (const candidate of [slot, ...(holder && holder.id !== slot.id ? [holder] : [])]) {
+				const claim = this.hub.claimOf(candidate.id);
+				if (claim && claim.key !== mine) throw this.claimRefusal(candidate, claim, `${kind === "close" ? "Closing" : "Reopening"} ${name} would pull Studio out from under that agent.`);
+			}
+		}
+		if (kind === "close") await this.hub.closePlace(slot.id, placeId);
+		else await this.hub.reopenPlace(slot.id, placeId);
+		if (!this.hub.yoloOn) writeAudit(this.hub.home, { actor: "mcp", action: `${kind}_place`, project: slot.projectName, args: { placeId }, yolo: false, lifted: false, outcome: "ok" });
+		return kind === "close"
+			? `Asked Studio to close ${name}, as if the user closed its window; Studio may ask about unsaved changes first. Nothing was saved or killed.`
+			: `Asked Studio to close ${name} (it may ask the user about unsaved changes); it opens again when Studio has exited, within five minutes, and loads the current plugin. Call wait_for_studio to know when it is synced with ${slot.projectName}.`;
+	}
+
 	private async openPlace(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
 		if (!this.hub.openPlacesOn) throw new Refusal(`${OFF_MESSAGE} Ask the user to open the place in Studio instead.`);
 		if (!this.hub.openPlacesSwitchOn) this.lifted();
-		const listed = slot.listedPlaces ?? [];
-		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to open. Ask the user to open the place in Studio.`);
-		let placeId: number;
-		if (args.placeId === undefined || args.placeId === null || args.placeId === "") {
-			if (listed.length > 1) throw new Refusal(`${slot.projectName} has several places; pass placeId as one of: ${this.listedText(listed)}.`);
-			placeId = listed[0].placeId;
-		} else {
-			placeId = Number(args.placeId);
-			if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(args.placeId)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
-		}
+		const placeId = this.placeArg(slot, args, "open");
 		const result = await this.hub.openPlace(slot.id, placeId);
 		const name = result.placeName ? `${result.placeName} (place ${placeId})` : `Place ${placeId}`;
 		if (result.outcome === "already-open") {
@@ -1601,13 +1704,17 @@ export class Mcp {
 			pluginVersion: place.pluginVersion,
 			outdated: compareVersions(place.pluginVersion, SERVICE_VERSION) < 0,
 		}));
+		const asked = this.asking.getStore();
+		const outdated = asked?.connection != null;
+		const connection = asked?.launcher ? asked.launcher : outdated ? "older than 0.22.6" : null;
 		const lines = [`Rojo-Hub ${SERVICE_VERSION} (service). Studio plugin it installs: ${SERVICE_VERSION}. MCP launcher: ${launcher === null ? "not installed" : `${launcher} at ${script}`}.`];
 		lines.push(projects.length > 0 ? `Rojo per serving project: ${projects.map((entry) => `${entry.name} ${entry.rojoVersion ?? "unknown"}`).join(", ")}.` : "No project is serving.");
 		if (places.length > 0) {
 			lines.push("Open Studio places:");
 			for (const place of places) lines.push(`  ${place.name}${place.placeId > 0 ? ` (place ${place.placeId})` : " (unsaved)"} plugin ${place.pluginVersion}${place.outdated ? `: older than the service; reopen the place to load ${SERVICE_VERSION}.` : ""}`);
 		} else lines.push("No Studio place with the plugin is open.");
-		return { text: lines.join("\n"), data: { service: SERVICE_VERSION, plugin: SERVICE_VERSION, launcher, projects, places } };
+		if (connection !== null) lines.push(`This chat's connection: ${connection === "older than 0.22.6" ? connection : `launcher ${connection}`}.${outdated ? " Ask the user to run /mcp and reconnect rojohub, or start a new chat." : ""}`);
+		return { text: lines.join("\n"), data: { service: SERVICE_VERSION, plugin: SERVICE_VERSION, launcher, connection, connectionOutdated: outdated, projects, places } };
 	}
 
 	private async status(args: Args): Promise<Answer> {
@@ -1620,7 +1727,7 @@ export class Mcp {
 		const data = {
 			projects: await Promise.all(slots.map((slot) => this.projectState(slot, mineOf(slot)))),
 			groups: groups.map((group) => ({ id: group.id, name: group.name, active: group.active, projectIds: [...group.projectIds] })),
-			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion })),
+			studioPlaces: this.hub.studio.places().map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion, assignedTo: this.assignedName(place) })),
 			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
 			yolo: this.hub.yoloOn === true,
 			placeMoves: this.hub.placeMoves === "auto" ? "auto" : "ask",
@@ -1667,6 +1774,8 @@ export class Mcp {
 			for (const place of places) {
 				const project = place.syncedWith ? `synced with ${place.syncedWith}${place.reason ? ` (${REASONS[place.reason] ?? place.reason})` : ""}` : place.message;
 				lines.push(`  ${place.placeName} (${place.unsaved ? "not saved to Roblox" : `place ${place.placeId}`}, plugin ${place.pluginVersion}): ${project}`);
+				const handover = this.handoverText(place);
+				if (handover) lines.push(`    ${handover}`);
 			}
 		}
 		return lines.join("\n");

@@ -15,7 +15,7 @@ export const DEFAULT_CLAIM_MINUTES = 15;
 	and the panel need to know it.
 */
 export const CLAIM_NEVER = Number.MAX_SAFE_INTEGER;
-export const SERVICE_VERSION = "0.22.5";
+export const SERVICE_VERSION = "0.22.6";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -281,6 +281,8 @@ export interface Snapshot {
 	studioPlaces?: StudioPlaceView[];
 	/** rojoHub.openPlaces (spec 009); missing from services older than 0.20.0, which cannot open places. */
 	openPlaces?: boolean;
+	/** rojoHub.closePlaces: Close and Reopen; missing from services older than 0.22.6. */
+	closePlaces?: boolean;
 	/** Agents' pending asks for Studio places (spec 014); missing from services older than 0.22.2. */
 	placeRequests?: PlaceRequestView[];
 }
@@ -355,8 +357,10 @@ export interface PortSettings {
 		last synced with.
 	*/
 	studioAutoConnect?: "listed" | "remembered";
-	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
+	/** rojoHub.openPlaces: open a project's places from the panel and agents (spec 009); missing means off. */
 	openPlaces?: boolean;
+	/** rojoHub.closePlaces: close and reopen them (Studio still asks about unsaved changes); missing keeps the saved value. */
+	closePlaces?: boolean;
 	/** rojoHub.claimMinutes (spec 004): how long an agent's claim lasts after its last call; 0 never runs out. Missing keeps the saved value; invalid means 15. */
 	claimMinutes?: number;
 	/** rojoHub.placeMoves (spec 014): "auto" moves a place an agent asks for at once when no other agent claimed the project holding it; "ask" (missing) asks the user. Missing keeps the saved value. */
