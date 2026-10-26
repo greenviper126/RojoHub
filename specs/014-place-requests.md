@@ -1,6 +1,6 @@
 # 014: Place requests
 
-Status: built (0.22.2, branch `experimental/feedback-2026-10-24`); handoff, asking in the agent's client and `rojoHub.placeMoves` added in 0.22.5. From `specs/feedback-2026-10-25.md`.
+Status: built (0.22.2, branch `experimental/feedback-2026-10-24`); handoff, asking in the agent's client and `rojoHub.placeMoves` added in 0.22.5; stale-connection note, logs, pending-handover status and a 60 s wait cap in 0.22.6. From `specs/feedback-2026-10-25.md`.
 
 ## Problem
 
@@ -183,3 +183,37 @@ in one line when it is `auto`.
 12. A client that declares elicitation is asked; accept/true moves, accept/false and decline decline,
     cancel leaves pending; a client that does not declare it gets no header and no `_meta`.
 13. `placeMoves` auto moves at once from an unclaimed holder (audited), asks for a claimed one; ask asks.
+
+## Update (0.22.6)
+
+Seen live on 0.22.5: the question never appeared because every running launcher predated 0.22.5 (a
+launcher keeps its code until the chat reconnects), a Move was "lost" with nothing in the logs to say
+who reassigned the place, and `wait: 120` ran into the client's tool-call handling.
+
+1. **Stale connection.** The launcher sends `x-rojo-hub-launcher: <version>` on every /mcp POST. When it
+   is missing or older than `SERVICE_VERSION`, every tools/call result's text (not
+   `structuredContent`) ends with "Note: this chat's Rojo-Hub connection is older (launcher <v or
+   'before 0.22.6'>) than the service (<v>) ... Ask the user to run /mcp and reconnect rojohub, or start
+   a new chat." There is no special case for direct-HTTP clients: the advice fits them too. `version`
+   reports `connection` and `connectionOutdated`.
+2. **Logs.** `service.log` gets `places:` lines for a request created, the question put to the client,
+   an answer (move or decline, in VS Code or the agent's chat), an end (released, lapsed, removed,
+   unlisted) and an automatic move; and a `studio:` line for every `StudioLinks.assign`, with its source
+   (`panel`, `Move on X's request, answered in ...`, `request_place`, `auto move, placeMoves|yolo`).
+3. **Pending handover.** `status` says when a place is assigned to A but still synced with B
+   (`studioPlaces[].assignedTo`, optional), and `request_place` after a move.
+4. **`wait` is capped at 60 s** (was 300).
+
+### Acceptance (0.22.6)
+
+14. A call without the header, or with an older one, carries the note; a current launcher's does not.
+15. The log lines above are written (unit tests with a log stub).
+16. `assignedTo` and the handover sentence appear only while the assigned project differs from the synced one.
+
+### Also in 0.22.6
+
+- The plugin says when it is older than the service (`Hub:updateNote`, from `match.serviceVersion`; both
+  pages), and the panel's Studio places mark such a place. No protocol change.
+- `rojoHub.closePlaces` gates Close, Reopen, `close_place` and `reopen_place` (spec 009's Close and
+  Reopen no longer need `openPlaces`); yolo does not turn it on; a reopen's open step needs only it.
+- Windows reload themselves when a newer Rojo-Hub is installed (`rojoHub.reloadOnUpdate`).

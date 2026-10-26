@@ -10,6 +10,7 @@ User settings, shared by every project, window and profile. Search `rojoHub` in 
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's Studio plugin installed. |
 | `rojoHub.studioAutoConnect` | `"remembered"` | `"listed"`: only places a project file lists or you assign connect by themselves. `"remembered"`: also a place's last project. |
 | `rojoHub.openPlaces` | `false` | Open, close and reopen places from project cards; lets agents use `open_place`. |
+| `rojoHub.reloadOnUpdate` | `true` | Reload this window by itself, 10 seconds after a notification (**Reload Now** / **Not Now**), when a newer Rojo-Hub is installed in this VS Code profile, so the new extension runs. |
 | `rojoHub.placeMoves` | `"ask"` | When an agent asks for a Studio place another project holds: `"ask"` asks you (in the agent's client, else in VS Code); `"auto"` moves it at once unless another agent claimed the holding project. |
 | `rojoHub.yolo` | `false` | **Dangerous.** Lets agents open Studio places and stop projects Studio is using, and `stop_all` without `force` (claims still hold). Asks you to confirm; every agent action is logged to `audit.jsonl`. See [Yolo mode](/guide/agents#yolo-mode). |
 | `rojoHub.setupCommands` | `{}` | **Dangerous.** Per repo path, programs that run in a new worktree before it is first served (`rokit install`, `wally install`). Edit in the panel (⋯ → *Setup commands…*). Only you can set it; not synced. See [Agents](/guide/agents#setup-commands). |

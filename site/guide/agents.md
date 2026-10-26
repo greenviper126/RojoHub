@@ -81,7 +81,7 @@ than one project.
 | `set_project_file` | `file`, `path?`, `project?` |
 | `wait_for_studio` | `path?`, `project?`, `timeout?` |
 | `open_place` | `placeId?`, `path?`, `project?` |
-| `request_place` | `place_id`, `path`, `wait?` (seconds, up to 300), `project?` |
+| `request_place` | `place_id`, `path`, `wait?` (seconds, up to 60), `project?` |
 | `start_group` / `stop_group` | `group`, `only?`, `force?` |
 | `create_group` | `name`, `projects?`, `groups?` |
 | `edit_group` | `group`, `name?`, `add_projects?`, `remove_projects?`, `add_groups?`, `remove_groups?` |

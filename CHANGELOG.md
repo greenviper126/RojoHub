@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.22.6
+
+**Chats opened before an update keep the old Rojo-Hub connection** until they reconnect (`/mcp`, then
+reconnect `rojohub`) or start a new chat, so new launcher behaviour (the `request_place` question in
+your client, new tools and descriptions) does not reach them. From 0.22.6 on they are told so.
+
+- **A stale connection is announced.** The launcher names its version in `x-rojo-hub-launcher` on every
+  call. When it is missing (a launcher before 0.22.6, or a client talking HTTP directly) or older than
+  the service, every tool result ends with a note asking you to run `/mcp` and reconnect, or start a
+  new chat. `version` reports the chat's own connection (`connection`, `connectionOutdated`),
+  separately from the launcher file on disk.
+- **Place requests and assignments are in `service.log`.** Requests created, the question put to your
+  client, answers (Move or Decline, and where), requests that ended, automatic moves, and every place
+  assignment with its source (the panel, Move on a request, `request_place`, an automatic move).
+- **A pending handover is shown.** `status` says when a place is assigned to one project but still
+  synced with another (`studioPlaces[].assignedTo` in the data), and `request_place` says so after a
+  move that has not taken effect yet.
+- **The plugin says when it is older than Rojo-Hub.** A plugin loads when a place opens, so an update
+  reaches an open place only when it is reopened. A plugin 0.22.6 or newer shows "Rojo-Hub plugin
+  0.22.6; 0.22.7 is installed. Reopen this place to update." on both its pages, and the panel's
+  Studio places mark such a place **Older plugin: reopen to update**. Older plugins cannot show it
+  (the panel, `status` and `version` list their versions). No protocol change.
+- **`rojoHub.closePlaces`** (off by default) lets Rojo-Hub close and reopen Studio places: the panel's
+  **Close** and **Reopen** (shown only while it is on, even with `rojoHub.openPlaces` off) and the new
+  agent tools `close_place` and `reopen_place`, for example to load an updated plugin. Studio is asked
+  to close as if you closed its window, so it still asks about unsaved changes; nothing is killed or
+  saved. A reopen's open step needs only this setting. Yolo does not turn it on. Agents are refused
+  while another agent claims the project (or the one the place is synced with) unless `force`, and
+  both are written to `audit.jsonl`.
+- **Windows reload themselves after an update.** When a newer Rojo-Hub is installed in a VS Code
+  profile, each window of that profile says so and reloads after 10 seconds (**Reload Now** or **Not
+  Now** to choose), so the new extension runs and the first window starts the new service. Turn it off
+  with `rojoHub.reloadOnUpdate`. It works for updates after 0.22.6 is the version running.
+- **`request_place` waits at most 60 seconds** (it was 300): the question comes back at once in a
+  client that can ask, and long waits run into clients' tool-call handling.
+
 ## 0.22.5
 
 **Open Studio places must be reopened to get the new plugin**: the handoff and the branch line below
