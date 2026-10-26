@@ -23,7 +23,7 @@ playtest shows, without either of them knowing.
   user's decision. **Superseded by spec 008 (0.19.2)**: agents now have every common panel action,
   with guards on what could pull Studio out from under someone.
 - **Claims.** `serve_here` and `switch` claim the project for what they serve (a worktree, or a
-  branch) for 15 minutes. Any tool call from the same worktree renews it. While another target
+  branch) for 15 minutes (since 0.22.4 `rojoHub.claimMinutes`, default 15; 0 never runs out, and the panel can release a claim). Any tool call from the same worktree renews it. While another target
   holds the claim, both tools refuse with who holds it and until when, unless `force: true`.
   `release` drops it. A switch by the user (panel, picker, menu) always goes through and clears the
   claim. Claims are kept in `claims.json` (since 0.19.1; before, in memory only, so a service

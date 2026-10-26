@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PlaceOpened, PlaceRequestView, PortMove, PortSettings, SlotView, StudioPlaceView, StudioPluginStatus, Target, TargetOption } from "../common/api";
+import { CLAIM_NEVER, type PlaceOpened, type PlaceRequestView, type PortMove, type PortSettings, type SlotView, type StudioPlaceView, type StudioPluginStatus, type Target, type TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, resolveBase, sameFolders, sameTarget } from "./git";
 import { writeAudit } from "./audit";
 import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
-import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
+import { assignPorts, loadPortConfig, loadPortSettings, parseClaimMinutes, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
 import { PlaceRequests, listersOf, type RequestProject } from "./requests";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
@@ -526,6 +526,20 @@ export class Hub {
 	get openPlacesOn(): boolean {
 		return this.openPlacesSwitchOn || this.yoloOn;
 	}
+	/** rojoHub.claimMinutes (spec 004), read from settings.json once and then kept with each change. */
+	private claimMinutesSetting: number | null = null;
+	get claimMinutes(): number {
+		this.claimMinutesSetting ??= parseClaimMinutes(loadPortSettings(this.home).claimMinutes);
+		return this.claimMinutesSetting;
+	}
+	/*
+		When a claim set or renewed at `now` runs out: rojoHub.claimMinutes from
+		now, or CLAIM_NEVER when it is 0. Read at every set and renewal, so a
+		changed setting reaches a claim the next time it is renewed.
+	*/
+	claimUntil(now = Date.now()): number {
+		return this.claimMinutes === 0 ? CLAIM_NEVER : now + this.claimMinutes * 60000;
+	}
 	/** rojoHub.yolo (spec 012, design 4), as the extension pushed it after the user accepted the warning. */
 	private yoloSetting: boolean | null = null;
 	get yoloOn(): boolean {
@@ -649,6 +663,7 @@ export class Hub {
 		const saved = loadPortSettings(this.home);
 		this.setupParsed = parseSetupCommands(saved.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
+		this.claimMinutesSetting = parseClaimMinutes(saved.claimMinutes);
 		if ((saved.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: saved.yolo === true ? "yolo_on" : "yolo_off" });
 		this.yoloSetting = saved.yolo === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
@@ -754,6 +769,23 @@ export class Hub {
 		} catch {
 			// Claims still work for this service's life; only surviving a restart is lost.
 		}
+	}
+
+	/*
+		Ends the slot's claim, or the memory of one that ran out: the release the
+		MCP tool and the panel's Release claim share. Its asks for shared places end
+		with it (spec 014), and a then_return goes back first (spec 013), before the
+		claim is dropped, so an agent waiting for the project cannot interleave.
+	*/
+	async releaseClaim(id: string): Promise<{ kind: "none" } | { kind: "released" | "lapsed"; claim: Claim; back: HandBack | null }> {
+		const claim = this.claimOf(id);
+		const lapsed = claim ? null : this.lapsedClaim(id);
+		const ending = claim ?? lapsed;
+		if (!ending) return { kind: "none" };
+		this.requests.dropAsker(id);
+		const back = ending.returnTo ? await this.handBack(id, ending, claim ? "release" : "expiry") : null;
+		this.setClaim(id, null);
+		return { kind: claim ? "released" : "lapsed", claim: ending, back };
 	}
 
 	private loadClaims(): void {

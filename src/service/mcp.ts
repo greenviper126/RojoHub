@@ -2,14 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 
-import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
+import { CLAIM_NEVER, SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
 import { launcherScript, launcherVersion } from "../common/launcher";
 import { isProjectFileName } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import { writeAudit } from "./audit";
 import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
-import { claimKey, type Hub } from "./hub";
+import { claimKey, type HandBack, type Hub } from "./hub";
 import { OFF_MESSAGE } from "./places";
 import { loadPortSettings } from "./ports";
 import { listersOf } from "./requests";
@@ -29,13 +29,12 @@ import { resolveRojo } from "./tools";
 	place is synced to while the caller holds no claim, needs `force`; stopping
 	everything always does. Several agents can work in worktrees of one repo while
 	one Studio shows one of them, so switching claims the project for the
-	switcher's target for CLAIM_MS; others are refused, or wait with `wait`. A
+	switcher's target for rojoHub.claimMinutes (0: until release); others are refused, or wait with `wait`. A
 	switch made by the user clears the claim. What stays the user's: which
 	project a Studio place syncs with (an agent can only ask, with request_place, spec
 	014), agent registration, settings.
 */
 
-export const CLAIM_MS = 15 * 60 * 1000;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
@@ -58,7 +57,7 @@ Which Studio to look at: serve_here, status and wait_for_studio name the Studio 
 
 Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
 
-Sharing: serve_here and switch claim the project for your worktree for 15 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
+Sharing: serve_here and switch claim the project for your worktree %CLAIM%. While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
 
 To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
@@ -111,7 +110,7 @@ export const PROJECT_STATE_SCHEMA = shape({
 	rojo: shape({ state: { type: "string", enum: ["running", "starting", "stopped", "error"] }, error: orNull("string"), sessionId: orNull("string"), connections: I }),
 	served: shape({ kind: { type: "string", enum: ["worktree", "branch"] }, label: S, path: orNull("string"), branch: orNull("string"), commit: orNull("string") }),
 	claim: {
-		anyOf: [{ type: "null" }, shape({ holder: S, until: S, secondsLeft: I, yours: orNull("boolean"), thenReturn: orNull("string") })],
+		anyOf: [{ type: "null" }, shape({ holder: S, until: orNull("string"), secondsLeft: orNull("integer"), yours: orNull("boolean"), thenReturn: orNull("string") })],
 	},
 	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, reason: orNull("string"), saved: B })),
 	connecting: arrayOf(shape({ placeId: I, name: S, confirming: B })),
@@ -195,7 +194,7 @@ export const TOOLS: Tool[] = [
 		name: "serve_here",
 		title: "Serve my worktree",
 		description:
-			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 15 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
+			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it (rojoHub.claimMinutes, 15 by default). Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
 		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, then_return: thenReturnProperty, force: forceProperty }, required: ["path"] },
 		outputSchema: SWITCH_SCHEMA,
 	},
@@ -211,7 +210,7 @@ export const TOOLS: Tool[] = [
 		name: "ensure",
 		title: "Get ready for Studio",
 		description:
-			"Gets Studio showing your worktree in one call: starts the project if stopped, serves your worktree (claims it for 15 minutes), opens the place when none is open (if the user allowed rojoHub.openPlaces), waits for the sync. Done steps are skipped, so a second call only renews the claim. Says why it could not finish and what to do; ready: true means a place is synced.",
+			"Gets Studio showing your worktree in one call: starts the project if stopped, serves your worktree (claims it; rojoHub.claimMinutes, 15 by default), opens the place when none is open (if the user allowed rojoHub.openPlaces), waits for the sync. Done steps are skipped, so a second call only renews the claim. Says why it could not finish and what to do; ready: true means a place is synced.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -421,6 +420,21 @@ async function worktreeRoot(path: string): Promise<string> {
 	}
 }
 
+/*
+	How long a claim lasts, for the instructions (built at every initialize, so
+	they follow rojoHub.claimMinutes).
+*/
+function claimTerm(minutes: number): string {
+	return minutes === 0
+		? "until you call release (rojoHub.claimMinutes is 0: claims never run out)"
+		: `for ${minutes} minute${minutes === 1 ? "" : "s"} (rojoHub.claimMinutes; each Rojo-Hub call you make from it renews that)`;
+}
+
+/** What a claim's end is called in answers: a clock time, or "until release" for a claim that never runs out (rojoHub.claimMinutes 0). */
+function untilText(until: number, who = "you"): string {
+	return until === CLAIM_NEVER ? `until ${who} call${who === "you" ? "" : "s"} release (claims don't run out: rojoHub.claimMinutes is 0)` : `until ${time(until)}`;
+}
+
 function time(ms: number): string {
 	return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -476,7 +490,7 @@ export class Mcp {
 					protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
 					capabilities: { tools: { listChanged: false } },
 					serverInfo: { name: "rojo-hub", title: "Rojo-Hub", version: SERVICE_VERSION },
-					instructions: INSTRUCTIONS,
+					instructions: INSTRUCTIONS.replace("%CLAIM%", claimTerm(this.hub.claimMinutes)),
 				});
 			}
 			case "ping":
@@ -637,7 +651,7 @@ export class Mcp {
 	private claimRefusal(slot: SlotView, claim: { label: string; until: number }, how: string): Refusal {
 		const minutes = Math.max(1, Math.ceil((claim.until - Date.now()) / 60000));
 		return new Refusal(
-			`${slot.projectName} is claimed by an agent working in ${claim.label} until ${time(claim.until)} (${minutes} min). ${how} Wait (pass wait: seconds to take it when it is free), ask the user, or pass force: true if the user said to.`,
+			`${slot.projectName} is claimed by an agent working in ${claim.label} ${untilText(claim.until, "it")}${claim.until === CLAIM_NEVER ? "" : ` (${minutes} min)`}. ${how} Wait (pass wait: seconds to take it when it is free), ask the user, or pass force: true if the user said to.`,
 		);
 	}
 
@@ -668,10 +682,16 @@ export class Mcp {
 		}
 	}
 
+	/** How long the claim just taken or renewed lasts, as an answer says it (the end time, or until release when rojoHub.claimMinutes is 0). */
+	private holdText(renews = false): string {
+		const until = this.hub.claimUntil();
+		return until === CLAIM_NEVER ? untilText(until) : `${untilText(until)}${renews ? "; each Rojo-Hub call from this worktree renews that" : ""}`;
+	}
+
 	private renew(slot: SlotView, root: string | null): void {
 		if (!root) return;
 		const claim = this.hub.claimOf(slot.id);
-		if (claim && claim.key === claimKey({ kind: "worktree", path: root })) this.hub.setClaim(slot.id, { ...claim, until: Date.now() + CLAIM_MS });
+		if (claim && claim.key === claimKey({ kind: "worktree", path: root })) this.hub.setClaim(slot.id, { ...claim, until: this.hub.claimUntil() });
 	}
 
 	/*
@@ -714,7 +734,7 @@ export class Mcp {
 		// What to give back (spec 013): kept from this agent's earlier call, else what is served now.
 		let returnTo = before?.key === key ? before.returnTo : undefined;
 		if (!returnTo && args.then_return === true && claimKey(current.target) !== key) returnTo = { target: current.target, label: current.targetLabel };
-		this.hub.setClaim(slot.id, { key, label, until: Date.now() + CLAIM_MS, ...(returnTo ? { returnTo } : {}) });
+		this.hub.setClaim(slot.id, { key, label, until: this.hub.claimUntil(), ...(returnTo ? { returnTo } : {}) });
 		if (claimKey(current.target) === key) return current;
 		try {
 			return await this.hub.switch(slot.id, target);
@@ -800,8 +820,8 @@ export class Mcp {
 			claim: claim
 				? {
 						holder: claim.label,
-						until: new Date(claim.until).toISOString(),
-						secondsLeft: Math.max(0, Math.round((claim.until - Date.now()) / 1000)),
+						until: claim.until === CLAIM_NEVER ? null : new Date(claim.until).toISOString(),
+						secondsLeft: claim.until === CLAIM_NEVER ? null : Math.max(0, Math.round((claim.until - Date.now()) / 1000)),
 						yours: root === null ? null : claim.key === claimKey({ kind: "worktree", path: root }),
 						thenReturn: claim.returnTo?.label ?? null,
 					}
@@ -954,7 +974,7 @@ export class Mcp {
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.${this.returnNote(slot, args)}${this.mainCheckoutNote(slot, root)}`,
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it ${this.holdText(true)}. Call release when you are done with Studio.${this.returnNote(slot, args)}${this.mainCheckoutNote(slot, root)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -985,7 +1005,7 @@ export class Mcp {
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
 		return {
-			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
+			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed ${this.holdText()}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
 			data: await this.switchData(slot, now, root, since),
 		};
 	}
@@ -996,9 +1016,7 @@ export class Mcp {
 		if (!claim) {
 			const lapsed = this.hub.lapsedClaim(slot.id);
 			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
-				this.hub.requests.dropAsker(slot.id);
-				const back = lapsed.returnTo ? await this.hub.handBack(slot.id, lapsed, "expiry") : null;
-				this.hub.setClaim(slot.id, null);
+				const { back } = (await this.hub.releaseClaim(slot.id)) as { back: HandBack | null };
 				const now = this.hub.view(this.hub.registry.get(slot.id));
 				return `${root ? "Your" : `${lapsed.label}'s`} claim on ${slot.projectName} had already run out; ${back?.returned ? `it went back to ${back.label}.` : `it still serves ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`}`;
 			}
@@ -1009,11 +1027,9 @@ export class Mcp {
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {
 			throw new Refusal(`${slot.projectName} is claimed by ${claim.label}, not by your worktree; leaving it.`);
 		}
-		// Its asks for shared places end with the claim they were made under (spec 014).
-		this.hub.requests.dropAsker(slot.id);
-		// Switched back before the claim is dropped, so an agent waiting for the project cannot interleave.
-		const back = claim.returnTo ? await this.hub.handBack(slot.id, claim, "release") : null;
-		this.hub.setClaim(slot.id, null);
+		// Its asks for shared places end, and a then_return goes back, inside releaseClaim (specs 013, 014).
+		const released = await this.hub.releaseClaim(slot.id);
+		const back = released.kind === "none" ? null : released.back;
 		if (back?.returned) return `Released ${slot.projectName}. It switched back to ${back.label}, which it served before you took it.`;
 		const now = this.hub.view(this.hub.registry.get(slot.id));
 		return `Released ${slot.projectName}. It keeps serving ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`;
@@ -1174,10 +1190,10 @@ export class Mcp {
 		if (!made.switched) {
 			return `Made branch ${made.branch} from ${made.from} in ${made.path}, but its setup commands are still running in the background; nothing was switched and you hold nothing yet.${setupText}\nCall ensure with path ${made.path} to wait for the setup and serve the worktree.`;
 		}
-		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: Date.now() + CLAIM_MS });
+		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: this.hub.claimUntil() });
 		const now = await this.settled(made.slot);
 		const notes = made.notes.length ? ` (${made.notes.join("; ")})` : "";
-		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}${setupText}`;
+		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it ${this.holdText()}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}${setupText}`;
 	}
 
 	private async log(args: Args): Promise<string> {
@@ -1595,7 +1611,7 @@ ${body}` : body, data };
 			if (lines.length > 0) lines.push("");
 			const serves = slot.target.kind === "worktree" ? `${slot.targetLabel}${slot.branch && slot.branch !== slot.targetLabel ? ` (branch ${slot.branch})` : ""} at ${slot.target.path}` : `branch ${slot.targetLabel} (read-only copy)`;
 			lines.push(`${slot.projectName} (id ${slot.id}), port ${slot.port}: ${this.health(slot)}`, `  serves ${serves}, project file ${slot.projectFile}`, `  repo ${slot.repoPath}`);
-			if (claim) lines.push(`  claimed by an agent in ${claim.label} until ${time(claim.until)}`);
+			if (claim) lines.push(`  claimed by an agent in ${claim.label} ${untilText(claim.until, "it")}`);
 			if (slot.listedPlaces?.length) lines.push(`  places: ${this.listedText(slot.listedPlaces)}${this.hub.openPlacesOn ? " (open_place opens one)" : ""}`);
 			for (const warning of slot.warnings) lines.push(`  note: ${warning}`);
 			for (const line of this.sharingLines(slot)) lines.push(`  place: ${line}`);

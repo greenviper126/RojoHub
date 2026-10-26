@@ -418,6 +418,13 @@
           "default": false,
           "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
         },
+        "rojoHub.claimMinutes": {
+          "type": "number",
+          "scope": "application",
+          "default": 15,
+          "minimum": 0,
+          "markdownDescription": "How long an agent's claim on a project lasts after its last Rojo-Hub call, in minutes. 0: a claim never runs out; it lasts until the agent calls `release` (or you release it in the panel)."
+        },
         "rojoHub.yolo": {
           "type": "boolean",
           "scope": "application",

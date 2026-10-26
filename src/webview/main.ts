@@ -15,7 +15,7 @@
 	of time, and the panel keeps them.
 */
 
-import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
+import { CLAIM_NEVER, DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
 import { parseSetupText } from "../common/setupText";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
@@ -265,6 +265,7 @@ function notices(slot: SlotView): string {
 }
 
 function claimText(claim: NonNullable<SlotView["claim"]>): string {
+	if (claim.until === CLAIM_NEVER) return `An agent working in ${claim.label} is using this project until it calls release (rojoHub.claimMinutes is 0). Other agents cannot switch it until then; switching it yourself still works, or release the claim here.`;
 	const until = new Date(claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	return `An agent working in ${claim.label} is using this project until ${until}. Other agents cannot switch it until then; switching it yourself still works.`;
 }
@@ -272,8 +273,8 @@ function claimText(claim: NonNullable<SlotView["claim"]>): string {
 /* Who holds the project (spec 004): shown so a switch by hand is not a surprise to the agent's user. */
 function claimNote(slot: SlotView): string {
 	if (!slot.claim) return "";
-	const until = new Date(slot.claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-	return `<div class="claim muted small" title="${escape(claimText(slot.claim))}">${icon("robot")}<span class="grow ellipsis">Agent in <strong>${escape(slot.claim.label)}</strong> until ${escape(until)}</span></div>`;
+	const until = slot.claim.until === CLAIM_NEVER ? "it releases" : `${new Date(slot.claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+	return `<div class="claim muted small" title="${escape(claimText(slot.claim))}">${icon("robot")}<span class="grow ellipsis">Agent in <strong>${escape(slot.claim.label)}</strong> until ${escape(until)}</span><button class="link small" data-action="release-claim" data-id="${escape(slot.id)}" title="End the agent's claim now, so any agent can switch this project again">Release claim</button></div>`;
 }
 
 /** "3 days ago" for a unix time in seconds. */
@@ -1569,6 +1570,9 @@ document.addEventListener("click", (event) => {
 			return render();
 		case "cancel-setup":
 			ui.setupEditor = null;
+			return render();
+		case "release-claim":
+			sendTracked(`slot:${id}`, { type: "releaseClaim", id });
 			return render();
 		case "sourcemap":
 			sendTracked(`slot:${id}`, { type: "sourcemap", id });

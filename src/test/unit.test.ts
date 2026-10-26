@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import type { IncomingMessage } from "node:http";
 
-import { DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, SERVICE_VERSION, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
+import { CLAIM_NEVER, DEFAULT_PORT_RANGE, MCP_URL, SERVICE_PORT, SERVICE_VERSION, STUDIO_PATH, STUDIO_PROTOCOL, type StudioHello, type StudioMatch } from "../common/api";
 import { pathKey } from "../common/paths";
 import { expandGroup, pathBetween } from "../common/groups";
 import { defaultProjectFile, isProjectFileName, listProjectFiles } from "../common/projectFiles";
@@ -22,7 +22,7 @@ import { Mcp, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
-import { assignPorts, loadPortSettings, parsePortSettings, preferredPort, savePortSettings, settingsToken, tokenMatches, type PortRequest } from "../service/ports";
+import { assignPorts, loadPortSettings, parseClaimMinutes, parsePortSettings, preferredPort, savePortSettings, settingsToken, tokenMatches, type PortRequest } from "../service/ports";
 import { claimKey, Hub } from "../service/hub";
 import { Groups } from "../service/groups";
 import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../service/audit";
@@ -443,10 +443,11 @@ test("headFile and readHead find a worktree's HEAD, primary or linked", () => {
 });
 
 test("MCP: initialize, tools/list, notifications and unknown methods", async () => {
-	const mcp = new Mcp(null as never);
+	const mcp = new Mcp({ claimMinutes: 15 } as never);
 	const init = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })) as { result: { protocolVersion: string; instructions: string; capabilities: object } };
 	assert.equal(init.result.protocolVersion, "2025-06-18", "a version it knows is echoed");
 	assert.match(init.result.instructions, /serve_here/);
+	assert.match(init.result.instructions, /for 15 minutes \(rojoHub\.claimMinutes;/, "the instructions state the claim setting");
 	assert.match(init.result.instructions, /Never run git checkout, switch, reset --hard, rebase or stash in a folder Rojo-Hub serves/);
 	assert.match(init.result.instructions, /use new_branch, then serve_here from that worktree/);
 	assert.match(init.result.instructions, /Never run installs \(wally, npm\) in a folder/);
@@ -856,6 +857,84 @@ test("agents' claims survive a service restart, and run out as before", () => {
 	assert.equal(first.lapsedClaim("old"), null, "claiming again forgets it");
 });
 
+test("rojoHub.claimMinutes (spec 004): parsing, fallback, and claims that run out after N minutes or never", () => {
+	assert.equal(parseClaimMinutes(undefined), 15, "unset means 15");
+	assert.equal(parseClaimMinutes(30), 30);
+	assert.equal(parseClaimMinutes(0.5), 0.5, "fractions are allowed");
+	assert.equal(parseClaimMinutes(0), 0, "0 is a value, not a missing one");
+	assert.equal(parseClaimMinutes(1_000_000), 1_000_000, "no upper limit");
+	for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY, "5", null, {}]) assert.equal(parseClaimMinutes(bad), 15, `${String(bad)} falls back to 15`);
+
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-claimminutes-"));
+	assert.equal(new Hub(home).claimMinutes, 15, "nothing saved: 15");
+	savePortSettings(home, { claimMinutes: 0 });
+	assert.equal(loadPortSettings(home).claimMinutes, 0);
+	savePortSettings(home, {});
+	assert.equal(loadPortSettings(home).claimMinutes, 0, "a push without it (an older extension) keeps the saved value");
+	savePortSettings(home, { claimMinutes: -3 });
+	assert.equal(loadPortSettings(home).claimMinutes, 15, "a negative value is saved as 15");
+
+	// N minutes: the claim lapses N minutes after it was set (a fake clock: it is set in the past)
+	savePortSettings(home, { claimMinutes: 2 });
+	const timed = new Hub(home);
+	const key = "worktree:c:/work/timed";
+	assert.equal(timed.claimUntil(1_000), 1_000 + 120_000);
+	timed.setClaim("young", { key, label: "young", until: timed.claimUntil(Date.now() - 60_000) });
+	timed.setClaim("old", { key, label: "old", until: timed.claimUntil(Date.now() - 121_000) });
+	assert.equal(timed.claimOf("young")?.label, "young", "a claim set 1 minute ago still holds with 2 minutes");
+	assert.equal(timed.claimOf("old"), null, "one set 2 minutes and a second ago has lapsed");
+	assert.equal(timed.lapsedClaim("old")?.label, "old");
+
+	// 0: never lapses, survives a restart through claims.json, and is told apart by CLAIM_NEVER
+	savePortSettings(home, { claimMinutes: 0 });
+	const forever = new Hub(home);
+	assert.equal(forever.claimUntil(1_000), CLAIM_NEVER);
+	forever.setClaim("held", { key, label: "held", until: forever.claimUntil(0) });
+	assert.equal(forever.claimOf("held")?.until, CLAIM_NEVER, "no clock reaches it");
+	assert.equal(forever.lapsedClaim("held"), null);
+	assert.equal(new Hub(home).claimOf("held")?.until, CLAIM_NEVER, "claims.json round-trips it");
+	// a claim from 0 is renewed to N minutes once the setting is N
+	savePortSettings(home, { claimMinutes: 3 });
+	assert.ok(Math.abs(new Hub(home).claimUntil() - (Date.now() + 180_000)) < 5_000);
+});
+
+test("rojoHub.claimMinutes 0: answers say the claim lasts until release, and the structured claim is null-valued and valid", async () => {
+	const repo = tempRepo();
+	const schemaOf = (name: string) => TOOLS.find((tool) => tool.name === name)!.outputSchema as Schema;
+	type Result = { result: { content: { type: string; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean } };
+	const callOn = (mcp: Mcp, name: string, args: object) => mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, "2025-06-18") as Promise<Result>;
+
+	// someone else holds a claim that never runs out
+	const held = stubHub(repo, { key: "worktree:elsewhere", label: "Other", until: CLAIM_NEVER });
+	const mcp = new Mcp({ ...held.hub, claimMinutes: 0, claimUntil: () => CLAIM_NEVER } as never);
+	const status = await callOn(mcp, "status", { path: repo });
+	assert.match(status.result.content[0].text, /claimed by an agent in Other until it calls release \(claims don't run out: rojoHub\.claimMinutes is 0\)/);
+	assert.deepEqual(check(status.result.structuredContent, schemaOf("status")), [], "a never-expiring claim matches the schema");
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const claim = (status.result.structuredContent!.projects as any[])[0].claim;
+	assert.equal(claim.holder, "Other");
+	assert.equal(claim.until, null);
+	assert.equal(claim.secondsLeft, null);
+	const refused = await callOn(mcp, "serve_here", { path: repo });
+	assert.ok(refused.result.isError);
+	assert.match(refused.result.content[0].text, /claimed by an agent working in Other until it calls release \(claims don't run out/);
+	assert.doesNotMatch(refused.result.content[0].text, /\d+ min\)/, "no countdown for a claim that does not run out");
+
+	// our own serve_here under 0, and under 15
+	const mine = stubHub(repo, null);
+	const taken = await callOn(new Mcp({ ...mine.hub, claimMinutes: 0, claimUntil: () => CLAIM_NEVER } as never), "serve_here", { path: repo });
+	assert.match(taken.result.content[0].text, /You hold it until you call release \(claims don't run out: rojoHub\.claimMinutes is 0\)\. Call release/);
+	assert.doesNotMatch(taken.result.content[0].text, /renews that/);
+	const limited = await callOn(new Mcp(stubHub(repo, null).hub as never), "serve_here", { path: repo });
+	assert.match(limited.result.content[0].text, /You hold it until \d.*; each Rojo-Hub call from this worktree renews that\./);
+
+	// the instructions follow the setting
+	const instructions = async (minutes: number) => ((await new Mcp({ claimMinutes: minutes } as never).handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })) as { result: { instructions: string } }).result.instructions;
+	assert.match(await instructions(0), /for your worktree until you call release \(rojoHub\.claimMinutes is 0: claims never run out\)\. While another/);
+	assert.match(await instructions(1), /for 1 minute \(rojoHub\.claimMinutes;/);
+	assert.match(await instructions(45), /for 45 minutes \(rojoHub\.claimMinutes;/);
+});
+
 /* ---------- opening places (spec 009) ---------- */
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -1098,6 +1177,10 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 	const hub = {
 		list: () => [slot],
 		claimOf: () => held,
+		claimMinutes: 15,
+		claimUntil: () => Date.now() + 15 * 60_000,
+		// the real release, run against the stub's own claims and requests
+		releaseClaim: Hub.prototype.releaseClaim,
 		setClaim: (_id: string, next: typeof claim) => void (held = next),
 		view: () => slot,
 		registry: { get: () => slot, slots: [slot] },
@@ -1236,6 +1319,10 @@ function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[];
 	const hub = {
 		list: () => [slot],
 		claimOf: () => held,
+		claimMinutes: 15,
+		claimUntil: () => Date.now() + 15 * 60_000,
+		// the real release, run against the stub's own claims and requests
+		releaseClaim: Hub.prototype.releaseClaim,
 		lapsedClaim: () => null,
 		setClaim: (_id: string, next: typeof held) => void (held = next),
 		view: () => slot,
@@ -1792,6 +1879,10 @@ test("yolo: stop_all needs force without it, and with it skips claimed projects 
 			view: () => ({ state: "running" }),
 			stop: async (id: string) => void stopped.push(id),
 			claimOf: (id: string) => (claimed.includes(id) ? { key: "worktree:x", label: "x", until: Date.now() + 60_000 } : null),
+			claimMinutes: 15,
+			claimUntil: () => Date.now() + 15 * 60_000,
+			// the real release, run against the stub's own claims and requests
+			releaseClaim: Hub.prototype.releaseClaim,
 			list: () => slots,
 			home: yoloHome(),
 			yoloOn: false,
@@ -2111,6 +2202,10 @@ function sharedStub(repo: string, over: { yolo?: boolean; holder?: string | null
 		list: () => [slot, other],
 		registry: { get: (id: string) => (id === "other" ? other : slot), slots: [slot, other] },
 		claimOf: (id: string) => claims.get(id) ?? null,
+		claimMinutes: 15,
+		claimUntil: () => Date.now() + 15 * 60_000,
+		// the real release, run against the stub's own claims and requests
+		releaseClaim: Hub.prototype.releaseClaim,
 		lapsedClaim: () => null,
 		setClaim: (id: string, next: { key: string; label: string; until: number } | null) => void (next ? claims.set(id, next) : claims.delete(id)),
 		requestProjects: projects,

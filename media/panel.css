@@ -1779,6 +1779,12 @@ button:focus-visible {
 	padding: 0 2px;
 }
 
+/* Release claim (spec 004): never squeezed out by a long worktree name */
+.claim .link {
+	flex: none;
+	text-decoration: underline;
+}
+
 .claim-icon {
 	display: inline-flex;
 	color: var(--info);

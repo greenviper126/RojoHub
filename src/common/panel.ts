@@ -96,6 +96,8 @@ export type FromPanel =
 	| { type: "openSetupEditor"; id: string }
 	| { type: "setSetupCommands"; id: string; text: string }
 	| { type: "sourcemap"; id: string }
+	/** Release the agent's claim on the project (rojoHub.claimMinutes 0 never lets go by itself). */
+	| { type: "releaseClaim"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
 	/** The card's project file list (spec 005): one of its files picked, or Browse…. */

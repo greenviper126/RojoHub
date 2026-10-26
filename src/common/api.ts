@@ -7,6 +7,14 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
+/** rojoHub.claimMinutes when unset or invalid (spec 004). */
+export const DEFAULT_CLAIM_MINUTES = 15;
+/*
+	A claim's `until` when rojoHub.claimMinutes is 0: a time no clock reaches, so
+	every "has it run out" check, and claims.json, work unchanged. Only wording
+	and the panel need to know it.
+*/
+export const CLAIM_NEVER = Number.MAX_SAFE_INTEGER;
 export const SERVICE_VERSION = "0.22.4";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
@@ -61,7 +69,7 @@ export interface SlotView {
 	targetsAt: number;
 	/** Whether the service keeps the served worktree's sourcemap.json current, and why not (spec 003). */
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
-	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
+	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. `until` is CLAIM_NEVER when rojoHub.claimMinutes is 0. */
 	claim: { label: string; until: number } | null;
 	/** Studio places whose Rojo-Hub plugin is synced to this project now (spec 007). */
 	places: StudioPlace[];
@@ -340,6 +348,8 @@ export interface PortSettings {
 	studioAutoConnect?: "listed" | "remembered";
 	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
 	openPlaces?: boolean;
+	/** rojoHub.claimMinutes (spec 004): how long an agent's claim lasts after its last call; 0 never runs out. Missing keeps the saved value; invalid means 15. */
+	claimMinutes?: number;
 	/** rojoHub.yolo (spec 012, design 4): the user lifted the guards. Only pushed once the user accepted the warning; missing means off. */
 	yolo?: boolean;
 	/** rojoHub.setupCommands: repo path -> commands run in a new worktree before it is first served (spec 012); the service validates it. */

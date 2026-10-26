@@ -4,6 +4,10 @@ Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/rele
 
 ## 0.22.4
 
+- **The claim hold is a setting.** `rojoHub.claimMinutes` (default 15, no upper limit, fractions
+  allowed) sets how long an agent's claim lasts after its last call. **0 means a claim never runs
+  out**: it lasts until the agent calls `release`. Answers, the instructions and `status` say so, and
+  the card gets a **Release claim** button (`POST /slots/:id/release`) for a claim whose agent is gone.
 - **The MCP launcher notices a new service.** Every answer from the service names its version, so an
   agent chat is told to read the tool list again (`notifications/tools/list_changed`) as soon as a
   new service took over, not only when a call failed.

@@ -981,16 +981,28 @@ and `yourProject`; `serve_here` and `switch` return `project`, `switched` (false
 the target), `problems` (Rojo's error lines and the card's warnings) and `unapplied`.
 
 **Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them, so
-`serve_here` and `switch` claim the project for their target (worktree or branch) for 15 minutes.
-While another target holds it, they refuse, naming holder and expiry (`force` overrides, only when you
-say).
+`serve_here` and `switch` claim the project for their target (worktree or branch) for
+`rojoHub.claimMinutes` minutes (default 15). While another target holds it, they refuse, naming holder
+and expiry (`force` overrides, only when you say).
 
-- **Renewing**: a worktree claim is renewed for 15 minutes by `status`, `build` and `sourcemap` calls
+- **How long**: `rojoHub.claimMinutes` (a number, default 15, no upper limit, fractions allowed;
+  negative or invalid means 15). The service reads it whenever it sets or renews a claim, so a
+  changed value reaches a claim the next time it is renewed: from 15 to 0 it stops expiring at the
+  next renewal; from 0 to 30 it ends 30 minutes after the next renewal (until then it never runs out).
+  **0 means a claim never runs out**: it lasts until the agent calls `release`, or you release it (see
+  *Release claim* below). Answers then say *until you call release (claims don't run out:
+  rojoHub.claimMinutes is 0)* instead of a time, the MCP instructions state the same, and `status`
+  data has `until` and `secondsLeft` as `null`. The risk of 0 is an agent that crashed or was closed
+  holding the project for good.
+- **Renewing**: a worktree claim is renewed for `rojoHub.claimMinutes` minutes by `status`, `build` and `sourcemap` calls
   with a `path` inside it, and by `serve_here`/`switch` for it. `release` does not renew. A branch
   claim from `switch` is renewed only by switching to that branch again.
 - **`release`** drops it (a claim that already ran out is not an error: it says so and what the project still serves); with a `path` in another worktree than the holder it refuses; without a
   `path` it needs `force` (no telling whose claim it is).
-- The card shows *Agent in new-ui until 14:05* (worktree folder name or branch); folded, a robot icon.
+- The card shows *Agent in new-ui until 14:05* (worktree folder name or branch; *until it releases*
+  when claims never run out); folded, a robot icon. **Release claim** on that line ends the claim
+  now with the same release as the tool: a `then_return` switches back and the agent's asks for shared
+  places end. It is written to the audit log (`release_claim`).
 - **Your own switches always go through** (picker, *Switch Branch…*, anything calling
   `POST /slots/:id/switch`) and, like *New branch*, clear the claim. Start, stop and group actions
   keep it.
@@ -1058,6 +1070,7 @@ debugging.
 | `POST /slots/:id/branch` | `{ name, base }` | New branch in its own worktree (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` into `output`, an absolute `.rbxl`/`.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
+| `POST /slots/:id/release` | | The user releases the project's claim (or the memory of one that ran out): `{ released, returned, notReturned? }` |
 | `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open", evidence?: "plugin" \| "process", pids? }`. 409 while `openPlaces` is off, or for an unlisted place |
 | `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when its window is unknown) |
 | `POST /slots/:id/places/:placeId/reopen` | | Close, then open once that Studio exited; answers once the close was asked |
@@ -1072,7 +1085,7 @@ debugging.
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | Display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, yolo?, setupCommands? }` | Settings from the extension. `yolo` and `setupCommands` are applied only with header `X-Rojo-Hub-Token` (the `settings-token` file in the state folder); without it they are ignored and the answer lists them in `ignored`. A missing `yolo` or `setupCommands` keeps its saved value; any other missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, claimMinutes?, yolo?, setupCommands? }` | Settings from the extension. `yolo` and `setupCommands` are applied only with header `X-Rojo-Hub-Token` (the `settings-token` file in the state folder); without it they are ignored and the answer lists them in `ignored`. A missing `yolo`, `setupCommands` or `claimMinutes` keeps its saved value; any other missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
 | `GET /studio/requests` | | Agents' pending requests for shared places (spec 014): `id`, `placeId`, `placeName`, `asker`, `holder`, `holderClaimed`, `since` |
@@ -1103,7 +1116,7 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
 | `settings-token` | A random secret the service makes once. `PUT /settings` applies `yolo` and `setupCommands` only with it in header `X-Rojo-Hub-Token`; the extension reads it from here. It keeps out other programs and sandboxed agents that can only reach 127.0.0.1; a process running as you that can read this folder can read it too |
 | `slots/<id>/served.json` | The worktrees the slot's running rojo has read, so a restarted service that adopts the rojo still refuses setup in them; removed when the rojo stops |
-| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `yolo`, `setupCommands` |
+| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `claimMinutes`, `yolo`, `setupCommands` |
 | `audit.jsonl` | One JSON line per setup command run (time, who asked, command, exit code, output tail), per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
@@ -1145,6 +1158,7 @@ All are **user settings for every project and window**; workspaces cannot overri
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` current in each served worktree ([Sourcemaps](#sourcemaps)). |
 | `rojoHub.studioAutoConnect` | `"remembered"` | Which places connect by themselves: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) or assigned in Studio places; `"remembered"` also a place's last project ([Connecting Studio](#7-connecting-studio)). |
 | `rojoHub.openPlaces` | `false` | Open, close and reopen places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. |
+| `rojoHub.claimMinutes` | `15` | How long an agent's claim on a project lasts after its last Rojo-Hub call, in minutes; 0 or more, no maximum, fractions allowed (invalid: 15). **0: a claim never runs out**; it lasts until the agent calls `release` or you press *Release claim* on the card (see Claims above). |
 | `rojoHub.yolo` | `false` | **DANGEROUS.** Lifts the guards for agents ([Yolo mode](#yolo-mode)). Application scope, not synced. |
 | `rojoHub.setupCommands` | `{}` | **Dangerous.** Per repo path, programs run in a new worktree before it is first served ([Setup commands](#setup-commands-spec-012)). Edited in the panel (⋯ → *Setup commands…*) or `settings.json`; user-level only, not synced. |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies. Off: the folder is left alone. |

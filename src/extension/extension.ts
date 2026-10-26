@@ -963,6 +963,7 @@ async function pushSettings(): Promise<void> {
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
+			claimMinutes: config.get<number>("claimMinutes", 15),
 			yolo: yoloForService(),
 			// Only the user's own (global) value, never a workspace one: a repo cannot give itself commands to run (spec 012).
 			setupCommands: config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {},
@@ -1186,6 +1187,7 @@ function trackedKey(message: FromPanel): { key: string; count: number } | null {
 		case "switch":
 		case "setProjectFile":
 		case "sourcemap":
+		case "releaseClaim":
 			return { key: `slot:${message.id}`, count: 1 };
 		case "build":
 			return { key: `build:${message.id}`, count: 1 };
@@ -1318,6 +1320,11 @@ async function handlePanel(message: FromPanel): Promise<void> {
 		case "sourcemap": {
 			const written = await act(`slot:${message.id}`, () => client.sourcemap(message.id));
 			if (written) void vscode.window.setStatusBarMessage(`$(check) Rojo-Hub wrote ${written.path}`, 4000);
+			return;
+		}
+		case "releaseClaim": {
+			const result = await act(`slot:${message.id}`, () => client.releaseClaim(message.id));
+			if (result?.notReturned) void vscode.window.showInformationMessage(`Rojo-Hub: released, but not switched back: ${result.notReturned}.`);
 			return;
 		}
 		case "copy":

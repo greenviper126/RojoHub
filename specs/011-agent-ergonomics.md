@@ -279,7 +279,7 @@ except as marked nullable; `additionalProperties` allowed so later versions may 
    `timeout` in case the user opens it?
 6. Add a `dirty` flag to `served` (uncommitted changes in the served worktree)? Default: no.
 7. Claim expiry in `structuredContent` is the hold of the day (15 min from feedback item 11, on this
-   branch). Default: the schema carries `until` and `secondsLeft`, whatever the hold is.
+   branch). Default: the schema carries `until` and `secondsLeft`, whatever the hold is. Since `rojoHub.claimMinutes` (0.22.4) both are `null` when it is 0 (never expires).
 
 ## Test plan
 

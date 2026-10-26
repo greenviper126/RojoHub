@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEFAULT_PORT_RANGE, SERVICE_PORT, type PortSettings } from "../common/api";
+import { DEFAULT_CLAIM_MINUTES, DEFAULT_PORT_RANGE, SERVICE_PORT, type PortSettings } from "../common/api";
 import { git } from "./git";
 
 /*
@@ -70,6 +70,11 @@ export function parsePortSettings(settings: PortSettings): PortConfig {
 	return config;
 }
 
+/** rojoHub.claimMinutes: a finite number of minutes, 0 or more (0: never runs out); anything else is the default. */
+export function parseClaimMinutes(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : DEFAULT_CLAIM_MINUTES;
+}
+
 function settingsFile(home: string): string {
 	return join(home, "settings.json");
 }
@@ -118,6 +123,8 @@ export function savePortSettings(home: string, settings: PortSettings): void {
 		studioPlugin: settings.studioPlugin !== false,
 		studioAutoConnect: settings.studioAutoConnect === "listed" ? "listed" : "remembered",
 		openPlaces: settings.openPlaces === true,
+		// Omitted (an older extension) keeps the saved value.
+		claimMinutes: settings.claimMinutes === undefined ? parseClaimMinutes(saved.claimMinutes) : parseClaimMinutes(settings.claimMinutes),
 		// Omitted (an older extension, or no token) keeps the saved value.
 		yolo: settings.yolo === undefined ? saved.yolo === true : settings.yolo === true,
 		setupCommands: settings.setupCommands === undefined ? (saved.setupCommands ?? {}) : settings.setupCommands !== null && typeof settings.setupCommands === "object" ? settings.setupCommands : {},

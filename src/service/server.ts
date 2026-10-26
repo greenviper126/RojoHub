@@ -3,10 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { SERVICE_VERSION, STUDIO_PATH, type AgentId, type AgentWishes, type Health, type Snapshot, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
 import { AGENTS, AgentRegistrar } from "./agentConfig";
+import { writeAudit } from "./audit";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
 import { Mcp } from "./mcp";
-import { settingsToken, tokenMatches } from "./ports";
+import { parseClaimMinutes, settingsToken, tokenMatches } from "./ports";
 import { Conflict, NotFound } from "./registry";
 import { acceptWebSocket } from "./websocket";
 
@@ -27,6 +28,7 @@ import { acceptWebSocket } from "./websocket";
 	POST   /slots/:id/build       { output }         rojo build of what the slot serves
 	POST   /slots/:id/sourcemap                      write the served worktree's sourcemap.json once
 	POST   /slots/:id/switch      { target }             a user's switch, which also clears an agent's claim
+	POST   /slots/:id/release                        the user releases an agent's claim (then_return hands back, place asks end; audited)
 	GET    /groups
 	POST   /groups                { name, slotIds?, groupIds? }
 	PUT    /groups/:id            { name?, slotIds?, groupIds? }   groupIds that would loop are refused (409)
@@ -223,6 +225,7 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
+					claimMinutes: input.claimMinutes === undefined ? undefined : parseClaimMinutes(input.claimMinutes),
 					yolo: trusted && input.yolo !== undefined ? input.yolo === true : undefined,
 					setupCommands: trusted ? input.setupCommands : undefined,
 				});
@@ -317,6 +320,14 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return send(response, 200, { ...made, slot: { ...made.slot, claim: null } });
 				}
 				if (method === "POST" && action === "sourcemap") return send(response, 200, await hub.writeSourcemap(id));
+				if (method === "POST" && action === "release") {
+					// The user's release of an agent's claim (a crashed agent never calls release, and rojoHub.claimMinutes 0 never lets go): the same release as the MCP tool's.
+					hub.registry.get(id);
+					const released = await hub.releaseClaim(id);
+					if (released.kind !== "none") writeAudit(hub.home, { actor: "extension", action: "release_claim", project: id, holder: released.claim.label });
+					const back = released.kind === "none" ? null : released.back;
+					return send(response, 200, { released: released.kind !== "none", returned: back?.returned === true, ...(back && !back.returned ? { notReturned: back.why } : {}) });
+				}
 				if (method === "PUT" && action === "project-file") {
 					const input = await body(request);
 					if (!isProjectFileName(input.projectFile)) return send(response, 400, { error: "projectFile must be a *.project.json file name" });

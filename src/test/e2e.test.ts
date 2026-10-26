@@ -495,6 +495,43 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	await call("DELETE", `/slots/${slot.id}`);
 });
 
+test("rojoHub.claimMinutes 0: a claim never runs out, and the panel's release route ends it (with then_return)", async () => {
+	const dir = await makeRepo("Foreverly");
+	const alpha = join(root, "Foreverly-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "forever-alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	await call("POST", `/slots/${slot.id}/start`);
+	await call("PUT", "/settings", { claimMinutes: 0 });
+	try {
+		const first = await tool("serve_here", { path: alpha, then_return: true });
+		assert.ok(!first.isError, first.text);
+		assert.match(first.text, /You hold it until you call release \(claims don't run out: rojoHub\.claimMinutes is 0\)/);
+		assert.equal((await view()).claim?.until, Number.MAX_SAFE_INTEGER, "the card's claim never runs out");
+		const state = (await structured("status", { path: alpha })).projects.find((entry: Record<string, any>) => entry.id === slot.id);
+		assert.equal(state.claim.until, null);
+		assert.equal(state.claim.secondsLeft, null);
+		assert.match((await tool("status", { path: alpha })).text, /claimed by an agent in Foreverly-alpha until it calls release/);
+
+		// the user releases it from the panel: the same release as the tool's, so then_return hands back
+		const released = await call<{ released: boolean; returned: boolean }>("POST", `/slots/${slot.id}/release`);
+		assert.deepEqual(released, { released: true, returned: true });
+		const after = await view();
+		assert.equal(after.claim, null);
+		assert.equal(after.target.kind === "worktree" && pathKey(after.target.path), pathKey(dir), "it went back to what it served before");
+		assert.deepEqual(await call("POST", `/slots/${slot.id}/release`), { released: false, returned: false }, "nothing left to release");
+
+		// an N-minute setting claims with a clock time again
+		await call("PUT", "/settings", { claimMinutes: 20 });
+		assert.ok(!(await tool("serve_here", { path: alpha })).isError);
+		assert.ok((await view()).claim!.until < Date.now() + 21 * 60_000);
+		assert.deepEqual(await call("POST", `/slots/${slot.id}/release`), { released: true, returned: false });
+	} finally {
+		await call("PUT", "/settings", { claimMinutes: 15 });
+	}
+	await call("DELETE", `/slots/${slot.id}`);
+});
+
 test("ensure over MCP (spec 011): starts a stopped project and serves the worktree, then does nothing twice; with no Studio it says so at once", async () => {
 	const dir = await makeRepo("Ensurey");
 	const alpha = join(root, "Ensurey-alpha");

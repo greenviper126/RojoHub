@@ -20,7 +20,9 @@ what the project served before, and it must not switch to a worktree it does not
 2. **When it returns.** On `release`, before the claim is dropped (so an agent queued with `wait`
    cannot interleave), and when the claim runs out. Expiry was lazy (`claimOf` drops expired
    claims), so the service now checks once a second (`returnLapsed`, on the poller that already
-   exists) and `release` also handles a claim that lapsed a moment ago.
+   exists) and `release` also handles a claim that lapsed a moment ago. (0.22.4: with
+   `rojoHub.claimMinutes` 0 a claim never runs out, so the return happens on release only; the
+   panel's Release claim runs the same `Hub.releaseClaim`.)
 3. **Where it is decided.** `Hub.handBack`, inside the slot's queue, so it cannot race another
    switch. It switches back only if all of these hold, else it leaves the project alone and says why:
    - the project is running (a stopped slot is not touched),

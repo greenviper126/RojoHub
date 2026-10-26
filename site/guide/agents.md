@@ -117,8 +117,9 @@ nothing is switched, and the answer names the command and its output; fix it and
 
 ## Claims: several agents, one Studio
 
-`serve_here`, `switch` and `new_branch` claim the project for 15 minutes, renewed by the agent's
-further calls from that worktree. While another worktree holds the claim, they refuse and say who
+`serve_here`, `switch` and `new_branch` claim the project for `rojoHub.claimMinutes` minutes (default
+15), renewed by the agent's further calls from that worktree. Set it to 0 and a claim never runs out:
+it lasts until the agent calls `release` or you press **Release claim** on the project card. While another worktree holds the claim, they refuse and say who
 holds it; with `wait` (up to 600 seconds) they queue and take over when it ends. `release` hands it
 back.
 
