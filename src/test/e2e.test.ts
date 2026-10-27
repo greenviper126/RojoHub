@@ -25,6 +25,14 @@ const repo = join(root, "Game");
 const featureTree = join(root, "wt-feature");
 const home = join(root, "home");
 const projectName = `HubE2E-${process.pid}`;
+/*
+	Test projects get their ports from a range of their own: in the default one a
+	test project's hashed port could be one a live Rojo of the user's projects
+	holds ("Port N is held by another Rojo"). Every PUT /settings carries it,
+	since one without portRange resets it to the default.
+*/
+const TEST_PORTS = { portRange: "45873-46872" };
+const withPorts = (body: unknown) => (body && typeof body === "object" && !("portRange" in body) ? { ...TEST_PORTS, ...body } : body);
 let service: ChildProcess;
 
 function gitIn(cwd: string, ...args: string[]): string {
@@ -40,7 +48,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 	const response = await fetch(api + path, {
 		method,
 		headers: { "content-type": "application/json", ...(path === "/settings" && existsSyncFile(join(home, "settings-token")) ? { "x-rojo-hub-token": readFileSync(join(home, "settings-token"), "utf8").trim() } : {}) },
-		body: body === undefined ? undefined : JSON.stringify(body),
+		body: body === undefined ? undefined : JSON.stringify(method === "PUT" && path === "/settings" ? withPorts(body) : body),
 	});
 	const payload = (await response.json()) as T & { error?: string };
 	if (!response.ok) throw new Error(`${method} ${path}: ${payload.error}`);
@@ -92,6 +100,7 @@ before(async () => {
 	gitIn(repo, "commit", "-q", "-m", "other");
 	gitIn(repo, "checkout", "-q", "main");
 	gitIn(repo, "worktree", "add", "-q", featureTree, "feature");
+	write(join(home, "settings.json"), JSON.stringify(TEST_PORTS));
 
 	service = spawn(process.execPath, [join(__dirname, "..", "service", "main.js")], {
 		// A throwaway plugins folder: the service installs its Studio plugin (spec 007), never into the real Studio here.
@@ -116,7 +125,8 @@ test("one port, live switches, one session", async () => {
 	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
 	assert.equal(pathKey(slot.repoPath), pathKey(repo), "registering from a worktree registers the primary");
 	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
-	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
+	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings(TEST_PORTS)), "port hashed from the first commit");
+	assert.ok(slot.port >= 45873 && slot.port <= 46872, "in the tests' own range, away from the user's live projects");
 	assert.equal(slot.portSource, "hash");
 	await assert.rejects(call("POST", "/slots", { path: repo }), /already registered/);
 
@@ -755,7 +765,7 @@ test("settings token: yolo and setupCommands are applied only with the hub home'
 	const token = readFileSync(join(home, "settings-token"), "utf8").trim();
 	assert.match(token, /^[0-9a-f]{64}$/, "the service made the token on start");
 	const put = async (headers: Record<string, string>, body: unknown) =>
-		(await fetch(api + "/settings", { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then((response) => response.json())) as { ok: boolean; ignored?: string[] };
+		(await fetch(api + "/settings", { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(withPorts(body)) }).then((response) => response.json())) as { ok: boolean; ignored?: string[] };
 	const saved = () => JSON.parse(readFileSync(join(home, "settings.json"), "utf8"));
 	try {
 		const none = await put({}, { yolo: true, setupCommands: { x: [] }, sourcemaps: true });
