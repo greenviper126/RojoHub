@@ -2781,6 +2781,11 @@ test("ensure versions: an outdated chat connection is reported with the /mcp ste
 	assert.equal(result.structuredContent.ready, true);
 	assert.match(result.structuredContent.versions.needsUser[0], /run \/mcp and reconnect rojohub, or start a new chat/);
 	assert.equal(allStepsOf(result)[2], "versions:skipped");
+
+	// a place reopened is "done" even while the connection still needs the user (field test 2026-10-27 read "skipped" as nothing done)
+	const both = await versionsCall(versionsStub(tempRepo(), [versionsPlace({ pluginVersion: "0.21.0" })]), {}, { connection: "0.22.5" });
+	assert.equal(allStepsOf(both)[2], "versions:done");
+	assert.equal(both.structuredContent.versions.needsUser.length, 1);
 });
 
 test("ensure versions: everything current is one 'all on' line, no reopen and no wait", async () => {

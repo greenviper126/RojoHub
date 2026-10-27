@@ -42,8 +42,8 @@ and before `open_place`.
    skipped.
 4. **This chat's connection.** When the connection is outdated (`staleConnection`), the step says the
    user must run `/mcp` and reconnect rojohub, or start a new chat: the one thing no tool can do.
-5. Outcome of the step: `done` when something was reopened, `already` when every part is current,
-   `skipped` when something needs the user (each item says what). It never makes `ensure` fail and
+5. Outcome of the step: `done` when a place was reopened and came back (even if something else still
+   needs the user; the lines say what), else `skipped` when something needs the user, else `already`. It never makes `ensure` fail and
    never changes `ready`.
 
 The answer's structured content gets `versions: { service, current: boolean, needsUser: string[],
