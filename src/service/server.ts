@@ -212,7 +212,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 			}
 			if (method === "GET" && url.pathname === "/studio/requests") return send(response, 200, hub.requestViews());
 			if (method === "POST" && parts[0] === "studio" && parts[1] === "requests" && parts.length === 4 && (parts[3] === "move" || parts[3] === "decline")) {
-				const answered = hub.requests.answer(parts[2], parts[3], request.headers["x-rojo-hub-answered-in"] === "chat" ? "the agent's chat" : "VS Code");
+				const raw = request.headers["x-rojo-hub-elicit-result"];
+				const where = request.headers["x-rojo-hub-answered-in"] === "chat" ? `the agent's chat${typeof raw === "string" && raw ? ` (client answered ${raw})` : ""}` : "VS Code";
+				const answered = hub.requests.answer(parts[2], parts[3], where);
 				if (!answered) throw new Conflict("That request was already answered, or it ended.");
 				// The user answered the agent's own prompt (MCP elicitation, through the launcher): the audit log says where.
 				if (request.headers["x-rojo-hub-answered-in"] === "chat") {

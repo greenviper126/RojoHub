@@ -153,15 +153,21 @@ No `approved` argument: an argument is the model's to set, and approval must be 
 when a client declares `capabilities.elicitation` in `initialize`, the stdio launcher adds
 `x-rojo-hub-elicit: 1` to `request_place` calls. For a held place the service then returns
 `_meta["rojo-hub/elicit"]` (`requestId`, `message`, and the `moved`, `declined`, `answered` wording).
-The launcher sends `elicitation/create` to the client (one boolean `move`, default false), and:
+The launcher sends `elicitation/create` to the client (one boolean `move`, default true, there only
+because a form needs a field), and the buttons are the answer, whatever the field says:
 
-- accept with `move: true`: `POST /studio/requests/:id/move`;
-- accept with false, or decline: `POST /studio/requests/:id/decline`;
+- accept: `POST /studio/requests/:id/move`;
+- decline: `POST /studio/requests/:id/decline`;
+
+(0.22.5 to 0.22.9 read the field, default false, and declined an accept with it unticked. In the field
+the box could not be ticked in the user's client, so every accept declined. Fixed in 0.22.10.)
+
 - cancel, an error, or ten minutes without an answer: nothing is sent, the request stays pending (VS Code
   can still answer);
 - 409 (answered in VS Code first): the agent is told so.
 
-Both POSTs carry `x-rojo-hub-answered-in: chat`, and the service writes `move_place` or
+Both POSTs carry `x-rojo-hub-answered-in: chat` and the client's own answer (`x-rojo-hub-elicit-result`,
+logged with the answer), and the service writes `move_place` or
 `decline_place` to `audit.jsonl` with `approvedIn: "chat"`. The agent gets the outcome as the call's result
 (`structuredContent.outcome`). With the header, `wait` is ignored (the question comes back at once). Without
 elicitation support nothing changes: VS Code notification and panel. The tool description and the MCP
@@ -180,7 +186,7 @@ in one line when it is `auto`.
 
 10. A Move, a panel assignment and `request_place`'s assignment each send a new `target.handoff`.
 11. A plugin synced with another project switches once per handoff number; none, no switch.
-12. A client that declares elicitation is asked; accept/true moves, accept/false and decline decline,
+12. A client that declares elicitation is asked; accept moves (whatever the field says), decline declines,
     cancel leaves pending; a client that does not declare it gets no header and no `_meta`.
 13. `placeMoves` auto moves at once from an unclaimed holder (audited), asks for a claimed one; ask asks.
 

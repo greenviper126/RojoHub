@@ -2,6 +2,15 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.10
+
+- **Fixed: accepting the Move question in the agent's chat declined it.** The question's one
+  checkbox started unticked and the answer was read from it, so pressing accept without ticking it
+  declined. In practice the box could not be ticked. Now the buttons are the answer: accept moves
+  the place, decline declines, and the box is ignored. The service log also records what the client
+  sent with each answer. Reconnect agent chats (`/mcp`) to get it, since the question is put by the
+  chat's own Rojo-Hub connection.
+
 ## 0.22.9
 
 - **Fixed: windows never reloaded by themselves after an update** (`rojoHub.reloadOnUpdate`,

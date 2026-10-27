@@ -218,6 +218,7 @@ interface Seen {
 	elicit: string | undefined;
 	path: string;
 	answeredIn: string | undefined;
+	elicitResult?: string;
 	launcher: string | undefined;
 }
 
@@ -250,7 +251,7 @@ class Fake {
 				const chunks: Buffer[] = [];
 				for await (const chunk of request) chunks.push(chunk as Buffer);
 				const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Seen["body"];
-				this.seen.push({ body, protocol: header(request, "mcp-protocol-version"), elicit: header(request, "x-rojo-hub-elicit"), path: request.url ?? "", answeredIn: header(request, "x-rojo-hub-answered-in"), launcher: header(request, "x-rojo-hub-launcher") });
+				this.seen.push({ body, protocol: header(request, "mcp-protocol-version"), elicit: header(request, "x-rojo-hub-elicit"), path: request.url ?? "", answeredIn: header(request, "x-rojo-hub-answered-in"), elicitResult: header(request, "x-rojo-hub-elicit-result"), launcher: header(request, "x-rojo-hub-launcher") });
 				if (request.url?.startsWith("/studio/requests/")) {
 					response.writeHead(this.answerStatus, { "content-type": "application/json" });
 					return response.end(this.answerStatus === 200 ? "[]" : JSON.stringify({ error: "That request was already answered, or it ended." }));
@@ -604,14 +605,14 @@ test("launcher proxy: a client that can be asked gets the question; Move reaches
 		await send(placeCall(2));
 		assert.equal(fake.seen.find((entry) => entry.body.method === "tools/call")?.elicit, "1", "the service is told the user can be asked");
 		assert.equal(asked.length, 1);
-		const params = asked[0].params as { message: string; requestedSchema: { properties: { move: { type: string; default: boolean } }; required: string[] } };
+		const params = asked[0].params as { message: string; requestedSchema: { properties: { move: { type: string; default: boolean } } } };
 		assert.equal(params.message, "Move Lobby from Other to Game?");
 		assert.equal(params.requestedSchema.properties.move.type, "boolean");
-		assert.equal(params.requestedSchema.properties.move.default, false);
-		assert.deepEqual(params.requestedSchema.required, ["move"]);
+		assert.equal(params.requestedSchema.properties.move.default, true, "ticked to start with: accepting is Move");
 		const answered = fake.seen.find((entry) => entry.path.startsWith("/studio/requests/"));
 		assert.equal(answered?.path, "/studio/requests/game%3A111/move");
 		assert.equal(answered?.answeredIn, "chat");
+		assert.equal(answered?.elicitResult, '{"action":"accept","content":{"move":true}}', "the client's own answer goes to the log");
 		const reply = out.find((message) => message.id === 2)!;
 		assert.equal(resultOf(reply).content[0].text, "The user moved Lobby.");
 		assert.equal(resultOf(reply).structuredContent?.outcome, "moved");
@@ -621,10 +622,14 @@ test("launcher proxy: a client that can be asked gets the question; Move reaches
 	}
 });
 
-test("launcher proxy: accept with false and decline both decline; cancel, an error and no answer leave the request pending", async () => {
+test("launcher proxy: accept is Move whatever the field says, decline declines; cancel, an error and no answer leave the request pending", async () => {
 	for (const [answer, path, text] of [
-		[{ action: "accept", content: { move: false } }, "/studio/requests/game%3A111/decline", "The user declined."],
+		// field report 2026-10-27: the box started unticked and could not be ticked, so every accept declined
+		[{ action: "accept" }, "/studio/requests/game%3A111/move", "The user moved Lobby."],
+		[{ action: "accept", content: {} }, "/studio/requests/game%3A111/move", "The user moved Lobby."],
+		[{ action: "accept", content: { move: false } }, "/studio/requests/game%3A111/move", "The user moved Lobby."],
 		[{ action: "decline" }, "/studio/requests/game%3A111/decline", "The user declined."],
+		[{ action: "decline", content: { move: true } }, "/studio/requests/game%3A111/decline", "The user declined."],
 	] as const) {
 		const { fake, out, send } = await elicitingRig(answer);
 		try {

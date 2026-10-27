@@ -1,8 +1,8 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.22.9,
-2026-10-26. Why each design choice was made, with measurements:
+underneath, and the known limits. It is the source for user documentation. Version 0.22.10,
+2026-10-27. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -521,11 +521,12 @@ two registered projects list the same place (`servePlaceIds`, `placeId`; not `bl
   capability (Claude Code does), the launcher marks `request_place` calls with `x-rojo-hub-elicit: 1`,
   and the answer for a held place carries `_meta["rojo-hub/elicit"]` (the request, the question
   "Move Lobby from Other to Game? Studio switches it over at once.", and the wording for each
-  outcome). The launcher puts that to you with `elicitation/create` (one yes/no field, default no)
-  and sends your answer to the service (`POST /studio/requests/:id/move` or `decline`, with
-  `x-rojo-hub-answered-in: chat`, which the audit log records as `approvedIn: "chat"`). The model
-  never sees the form and cannot answer it: there is no `approved` argument. Yes moves the place;
-  No and Decline decline; cancel, an error or ten minutes without an answer leave the request pending
+  outcome). The launcher puts that to you with `elicitation/create` and sends your answer to the
+  service (`POST /studio/requests/:id/move` or `decline`, with `x-rojo-hub-answered-in: chat`, which
+  the audit log records as `approvedIn: "chat"`, and the client's own answer, which the service log
+  shows). The model never sees the form and cannot answer it: there is no `approved` argument. The
+  buttons are the answer: Accept moves the place and Decline declines, whatever the form's one field
+  (there because a form needs one) says; cancel, an error or ten minutes without an answer leave the request pending
   (still answerable in VS Code). If it was answered elsewhere first, the agent is told so. In such a
   call `wait` has nothing to wait for and is ignored. A client without elicitation is asked in VS Code
   only, as before, and agents are told not to ask in chat either way. `wait` is capped at 60 seconds.

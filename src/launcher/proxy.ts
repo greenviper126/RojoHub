@@ -208,13 +208,14 @@ export class Proxy {
 			if (chosen?.data && rest.structuredContent) next.structuredContent = chosen.data;
 			return { ...answer, result: next };
 		};
-		const choice = await this.askUser(ask.message);
+		const { choice, raw } = await this.askUser(ask.message);
 		if (choice === "leave") return finish(undefined, "The user did not answer the question put to them here (cancelled or timed out); the request stays pending, and they can still answer in VS Code. ");
 		const posted = await this.send(
 			"POST",
 			`/studio/requests/${encodeURIComponent(ask.requestId)}/${choice}`,
 			"{}",
-			{ "content-type": "application/json", "content-length": "2", "x-rojo-hub-answered-in": "chat" },
+			// The client's own answer, for the log: a wrong reading of it shows there.
+			{ "content-type": "application/json", "content-length": "2", "x-rojo-hub-answered-in": "chat", "x-rojo-hub-elicit-result": raw },
 			15_000,
 		);
 		if (typeof posted === "string") return finish(undefined, "The user answered, but Rojo-Hub's service could not be reached to record it; the request stays pending. ");
@@ -223,8 +224,15 @@ export class Proxy {
 		return finish((choice === "move" ? ask.moved : ask.declined) as Json | undefined);
 	}
 
-	/** Puts the yes/no to the user through the client. "leave" when they cancel, the client errors, or no answer comes. */
-	private async askUser(message: string): Promise<"move" | "decline" | "leave"> {
+	/*
+		Puts the yes/no to the user through the client. The buttons are the answer:
+		accept is Move, decline is decline, whatever the form's field says. 0.22.5-
+		0.22.9 read the field, which started unticked, and the user could not tick
+		it in their client, so every accept declined. The field is there only
+		because a form needs one. "leave" when they cancel, the client errors, or no
+		answer comes. `raw` is the client's answer as sent, for the log.
+	*/
+	private async askUser(message: string): Promise<{ choice: "move" | "decline" | "leave"; raw: string }> {
 		const id = `rojohub-elicit-${++this.elicitCount}`;
 		const response = new Promise<Json | null>((done) => {
 			const timer = setTimeout(() => finishWith(null), this.options.elicitMs ?? ELICIT_MS);
@@ -243,16 +251,16 @@ export class Proxy {
 				message,
 				requestedSchema: {
 					type: "object",
-					properties: { move: { type: "boolean", title: "Move the place", description: "Yes moves it now. No declines the request.", default: false } },
-					required: ["move"],
+					properties: { move: { type: "boolean", title: "Move the place", description: "Accept moves it now; Decline refuses the request.", default: true } },
 				},
 			},
 		});
 		const reply = await response;
-		const outcome = reply?.result as { action?: unknown; content?: { move?: unknown } } | undefined;
-		if (!outcome || reply?.error) return "leave";
-		if (outcome.action === "accept") return outcome.content?.move === true ? "move" : "decline";
-		return outcome.action === "decline" ? "decline" : "leave";
+		const outcome = reply?.result as { action?: unknown } | undefined;
+		// Header-safe: ASCII only, and short.
+		const raw = (reply === null ? "no answer" : JSON.stringify(reply.error ?? reply.result ?? null)).replace(/[^\x20-\x7e]/g, "?").slice(0, 200);
+		if (!outcome || reply?.error) return { choice: "leave", raw };
+		return { choice: outcome.action === "accept" ? "move" : outcome.action === "decline" ? "decline" : "leave", raw };
 	}
 
 	private reply(id: string | number, result: Json): void {
