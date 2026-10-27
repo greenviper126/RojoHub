@@ -2715,7 +2715,7 @@ test("ensure versions: a place whose project another agent claims is not reopene
 	hub.claimOf = (id: string) => (id === "rival" ? other : null);
 	const held = await versionsCall(stub);
 	assert.deepEqual(stub.reopened, []);
-	assert.equal(held.structuredContent.versions.reopened[0].outcome, "failed");
+	assert.equal(held.structuredContent.versions.reopened[0].outcome, "skipped", "left alone on purpose, not an error");
 	assert.match(held.structuredContent.versions.reopened[0].detail, /another agent claimed Rival/);
 	assert.equal(held.structuredContent.ready, true, "never changes ready");
 	const forced = await versionsCall(stub, { force: true });

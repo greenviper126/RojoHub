@@ -183,14 +183,14 @@ interface EnsureVersions {
 	service: string;
 	current: boolean;
 	needsUser: string[];
-	reopened: { placeId: number; name: string; outcome: "reloaded" | "waiting" | "failed"; detail: string }[];
+	reopened: { placeId: number; name: string; outcome: "reloaded" | "waiting" | "skipped" | "failed"; detail: string }[];
 	outdatedElsewhere: { placeId: number; name: string; pluginVersion: string }[];
 }
 const VERSIONS_SCHEMA = shape({
 	service: S,
 	current: B,
 	needsUser: arrayOf(S),
-	reopened: arrayOf(shape({ placeId: I, name: S, outcome: { type: "string", enum: ["reloaded", "waiting", "failed"] }, detail: S })),
+	reopened: arrayOf(shape({ placeId: I, name: S, outcome: { type: "string", enum: ["reloaded", "waiting", "skipped", "failed"] }, detail: S })),
 	outdatedElsewhere: arrayOf(shape({ placeId: I, name: S, pluginVersion: S })),
 });
 /** project is null only for no_project: no step ran, so there is no project to describe. */
@@ -1589,7 +1589,7 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 				});
 				if (other) {
 					const detail = `not reopened: another agent claimed ${other.projectName}, which would pull Studio out from under it (pass force only when the user asks)`;
-					reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "failed", detail });
+					reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "skipped", detail });
 					needsUser.push(`${text}; ${detail}. Reopen it in Studio when that agent is done.`);
 					lines.push(`needs you: ${text}; ${detail}`);
 					continue;

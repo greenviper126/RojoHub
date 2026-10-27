@@ -47,7 +47,7 @@ and before `open_place`.
    never changes `ready`.
 
 The answer's structured content gets `versions: { service, current: boolean, needsUser: string[],
-reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "failed", detail }], outdatedElsewhere:
+reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "skipped" (another agent's claim) | "failed", detail }], outdatedElsewhere:
 [{ placeId, name, pluginVersion }] }`. The text gets one line per item: ok, fixed, or "needs you: <exact
 step>". The `ensure` description and the MCP instructions say ensure also brings Rojo-Hub's parts to the
 current version, so "run ensure" is the whole instruction.
