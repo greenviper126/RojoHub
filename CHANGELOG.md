@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.22.12
+
+- `ensure`'s versions step says "done" when it reopened a place, even if something else still needs
+  you (it said "skipped").
+- `versions.current` is true when nothing in this agent's setup needs you. Another project's place
+  on an older plugin is still listed, but no longer makes it false.
+
 ## 0.22.11
 
 - **New: `ensure` brings everything to the current version.** After an update, tell agents to run
