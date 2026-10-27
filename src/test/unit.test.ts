@@ -2683,7 +2683,7 @@ test("ensure versions: an older-plugin place of this project is reopened and rep
 	assert.deepEqual(stub.reopened, [111]);
 	assert.deepEqual(versions.reopened, [{ placeId: 111, name: "Lobby", outcome: "reloaded", detail: `plugin 0.21.0 to ${SERVICE_VERSION}` }]);
 	assert.deepEqual(versions.outdatedElsewhere, [{ placeId: 222, name: "Other", pluginVersion: "0.21.0" }], "another project's place is only listed (acceptance 4)");
-	assert.equal(versions.current, false);
+	assert.equal(versions.current, true, "this agent's setup is current once its place is back; another project's place is only listed");
 	assert.deepEqual(allStepsOf(result), ["start:already", "serve:already", "versions:done", "open_place:already", "wait_for_studio:already"]);
 	assert.equal(result.structuredContent.ready, true);
 	assert.match(result.content[0].text, /fixed: reopened Lobby \(place 111\)/);

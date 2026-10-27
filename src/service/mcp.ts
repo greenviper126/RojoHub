@@ -1643,8 +1643,9 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 			lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
 		}
 
-		const current = needsUser.length === 0 && reopened.length === 0 && outdatedElsewhere.length === 0;
-		if (current) lines.push(`all on ${SERVICE_VERSION}`);
+		// current: nothing of this agent's setup is behind or needs the user. Other projects' places are theirs to reopen and only listed.
+		const current = needsUser.length === 0;
+		if (current && reopened.length === 0 && outdatedElsewhere.length === 0) lines.push(`all on ${SERVICE_VERSION}`);
 		else if (mine.length === 0 && !installed && connection == null) lines.unshift(`ok: this project's places and this chat are on ${SERVICE_VERSION}`);
 		// Something fixed is "done" even when something else still needs the user (the lines say what); testers read "skipped" there as nothing done.
 		const outcome = reopened.some((entry) => entry.outcome === "reloaded") ? "done" : needsUser.length > 0 ? "skipped" : "already";

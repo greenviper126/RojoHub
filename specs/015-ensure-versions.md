@@ -62,7 +62,10 @@ current version, so "run ensure" is the whole instruction.
 5. A newer version in a profile's extensions.json is reported with the reload step; an older or equal
    one is not; unreadable lists are skipped.
 6. An outdated connection is reported with the /mcp step.
-7. Everything current: `versions.current: true`, one "all on X" line, no extra wait.
+7. Everything current: `versions.current: true`, one "all on X" line, no extra wait. `current` means
+   nothing in `needsUser`: this agent's setup is current. Other projects' outdated places, theirs to
+   reopen, are listed in `outdatedElsewhere` and do not make it false (field test 2026-10-27: "ok:
+   this project's places and this chat are on X" next to `current: false` read as a contradiction).
 8. The step never turns a ready ensure into a failure.
 
 ## Non-goals
