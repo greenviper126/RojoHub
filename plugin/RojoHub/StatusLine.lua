@@ -11,15 +11,18 @@ local Packages = Rojo.Packages
 local Roact = require(Packages.Roact)
 
 local Theme = require(Plugin.App.Theme)
+local UpdateNote = require(script.Parent.UpdateNote)
 
 local e = Roact.createElement
 
 local NOT_RUNNING = "Rojo-Hub isn't running. Open VS Code with Rojo-Hub, or connect by hand."
 
 local function StatusLine(props)
+	local note = UpdateNote(props.match)
+	local text = if props.match then `Rojo-Hub: {props.match.message}` else NOT_RUNNING
 	return Theme.with(function(theme)
 		return e("TextLabel", {
-			Text = if props.match then `Rojo-Hub: {props.match.message}` else NOT_RUNNING,
+			Text = if note then `{text}\n{note}` else text,
 			FontFace = theme.Font.Main,
 			TextSize = theme.TextSize.Small,
 			TextColor3 = theme.SubTextColor,

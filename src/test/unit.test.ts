@@ -35,7 +35,7 @@ import { countConnections, decodeInfo, findRojo } from "../service/rojo";
 import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
-import { CLOSE_OFF_MESSAGE, OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
+import { CLOSE_OFF_MESSAGE, type CloseAnswer, OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -975,6 +975,7 @@ function fakeStudio() {
 	const calls = { lookups: [] as number[], launched: [] as string[], closed: [] as number[] };
 	const running: StudioProcess[] = [];
 	const dead = new Set<number>();
+	const closeAnswers = new Map<number, CloseAnswer>();
 	let failLookup = false;
 	const system: PlaceSystem = {
 		async lookup(placeId) {
@@ -992,11 +993,11 @@ function fakeStudio() {
 		},
 		async close(pid) {
 			calls.closed.push(pid);
-			return true;
+			return closeAnswers.get(pid) ?? "asked";
 		},
 		alive: (pid) => !dead.has(pid),
 	};
-	return { system, calls, running, dead, failLookup: (on: boolean) => (failLookup = on) };
+	return { system, calls, running, dead, closeAnswers, failLookup: (on: boolean) => (failLookup = on) };
 }
 
 test("placeInCommandLine reads the link's place ID, and -placeId", () => {
@@ -1111,6 +1112,25 @@ test("closing places: only a Studio whose command line names the place, asked (n
 	await sleep(1000);
 	assert.match(places.listed([222])[0].error ?? "", /did not close/);
 	assert.equal(fake.calls.launched.length, 1);
+
+	// A close Studio did not take says why, and is not counted as closing.
+	fake.running.push({ pid: 90, placeId: 333 }, { pid: 91, placeId: 333 });
+	fake.closeAnswers.set(90, "dialog").set(91, "no-window");
+	await assert.rejects(places.close(333), (error: Error) => /pid 90: its window is not taking input, as while a dialog is open; Studio pid 91: Windows shows no window for it\)\. Close the dialog in Studio, then try again\.$/.test(error.message));
+	fake.closeAnswers.set(90, "failed: timed out").set(91, "gone");
+	await assert.rejects(places.reopen(333), /pid 90: asking failed \(timed out\); Studio pid 91: it had already exited\)\. Close it in Studio\.$/);
+	assert.ok(!places.listed([333])[0].busy, "a close not taken is not counted as closing");
+
+	// Reopen waits only for the Studio that was asked, and a place whose Studios all exited counts as closed.
+	fake.running.push({ pid: 95, placeId: 444 }, { pid: 96, placeId: 444 });
+	fake.closeAnswers.set(95, "asked").set(96, "no-window");
+	await places.reopen(444, 2, 5000);
+	fake.dead.add(95);
+	await sleep(700);
+	assert.equal(places.listed([444])[0].error ?? null, null, "pid 96 was not waited for");
+	assert.ok(fake.calls.launched.length > 1 || places.listed([444])[0].busy !== "reopening", "the reopen went on once the asked Studio exited");
+	fake.closeAnswers.set(90, "gone").set(91, "gone");
+	await places.close(333);
 });
 
 test("SourcemapWatcher pauses after repeated crashes, then retries, and stays stopped once stopped", async () => {

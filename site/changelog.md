@@ -2,6 +2,20 @@
 
 Downloads are on [GitHub Releases](https://github.com/greenviper126/RojoHub/releases).
 
+## 0.22.8
+
+- **Close and Reopen say why Studio did not take the request.** The error used to say only that
+  Studio did not take it. It now gives the reason for each Studio process, as Windows reported it:
+  its window is not taking input (as while a dialog is open; close the dialog and try again), it
+  has no window, it already exited, or asking failed. The service log also lists that process's
+  windows.
+- A reopen waits only for the Studio that was asked to close, so it no longer runs into its
+  5-minute limit because of a Studio that was never asked. A place whose Studio already exited
+  counts as closed.
+- The plugin's update line now also shows on the Not Connected page. It starts with "Reopen this
+  place to update Rojo-Hub", so the Connected page, which cuts the line at its end, keeps the
+  instruction.
+
 ## 0.22.7
 
 - **Fixed: Rojo's window in Studio did not open with the 0.22.6 plugin.** The plugin's page asked the

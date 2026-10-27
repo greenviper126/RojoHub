@@ -32,7 +32,8 @@ local function updateNote(match)
 	if type(installed) ~= "string" or not older(HubVersion, installed) then
 		return nil
 	end
-	return `Rojo-Hub plugin {HubVersion}; {installed} is installed. Reopen this place to update.`
+	-- The Connected page shows this on one line cut at its end, so the instruction comes first.
+	return `Reopen this place to update Rojo-Hub: plugin {HubVersion}, {installed} installed.`
 end
 
 return updateNote

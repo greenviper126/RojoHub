@@ -1,7 +1,7 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.22.7,
+underneath, and the known limits. It is the source for user documentation. Version 0.22.8,
 2026-10-26. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
@@ -642,7 +642,10 @@ get `open_place`. Off, the card shows no Open button and the API and `open_place
 reopen's own open step needs only `closePlaces`, and agents are refused while another agent claims the
 project (or the one the place is synced with) unless `force`. Close and Reopen ask the place's Studio to
 close as if you closed its window, so it still asks about unsaved changes; nothing is killed or saved.
-They are what load an updated plugin into an open place.
+They are what load an updated plugin into an open place. Windows refuses the request while Studio's
+window is not taking input, as while a dialog is open in it; the error then says so per Studio
+process (a dialog, no window, already exited, or asking failed), and the service log lists that
+process's windows. A reopen waits only for the Studio that was asked to close.
 
 - **Open** opens the place for editing, like the website's *Edit in Studio* (a `roblox-studio:` link
   with the universe ID). The plugin connects it as usual. *Open all places in Studio* (⋯ menu) opens
