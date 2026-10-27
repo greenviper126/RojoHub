@@ -18,7 +18,7 @@ import { savedState } from "../extension/saved";
 import { findWorkspaces, parseWorkspaceFile } from "../extension/workspaces";
 import { AGENTS, agentState } from "../service/agentConfig";
 import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead, revParse } from "../service/git";
-import { newerInstalled, profileExtensionsFile } from "../extension/reload";
+import { newerInstalled, profileExtensionsFile, userFolder } from "../extension/reload";
 import { Mcp, outdatedNote, staleConnection, TOOLS } from "../service/mcp";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
@@ -2573,9 +2573,20 @@ test("reload on update: only the window's own profile list counts, never another
 	const user = join("C:", "Users", "u", "AppData", "Roaming", "Code", "User");
 	const extensions = join("C:", "Users", "u", ".vscode", "extensions");
 	const running = join(extensions, "greenviper126.rojo-hub-0.22.6");
-	// a named profile keeps its list in its own folder; the default profile in the extensions folder
-	assert.equal(profileExtensionsFile(join(user, "profiles", "-e02f7ca", "globalStorage", "greenviper126.rojo-hub"), running), join(user, "profiles", "-e02f7ca", "extensions.json"));
-	assert.equal(profileExtensionsFile(join(user, "globalStorage", "greenviper126.rojo-hub"), running), join(extensions, "extensions.json"));
+	// globalStorage is shared by all profiles (measured: a Roblox-profile window got the shared one, so 0.22.6-0.22.8 never reloaded)
+	const shared = join(user, "globalStorage", "greenviper126.rojo-hub");
+	assert.equal(userFolder(shared), user);
+	assert.equal(userFolder(join(user, "profiles", "-e02f7ca", "globalStorage", "greenviper126.rojo-hub")), user, "a per-profile one, should VS Code give it");
+	// the profile comes from VS Code's own record of which profile each workspace opens in
+	const storage = (file: string) => {
+		assert.equal(file, join(user, "globalStorage", "storage.json"));
+		return JSON.stringify({ profileAssociations: { workspaces: { "file:///c%3A/roblox/game": "-e02f7ca", "file:///c%3A/other": "__default__profile__" } } });
+	};
+	assert.equal(profileExtensionsFile(shared, running, "file:///c%3A/roblox/game", storage), join(user, "profiles", "-e02f7ca", "extensions.json"));
+	assert.equal(profileExtensionsFile(shared, running, "file:///c%3A/other", storage), join(extensions, "extensions.json"), "the default profile's list is in the extensions folder");
+	assert.equal(profileExtensionsFile(shared, running, "file:///c%3A/unknown", storage), null, "a workspace VS Code has no record of: no reload");
+	assert.equal(profileExtensionsFile(shared, running, undefined, storage), null, "an empty window: no reload");
+	assert.equal(profileExtensionsFile(shared, running, "file:///c%3A/roblox/game", () => "{not json"), null);
 
 	const list = (version: string) => () => JSON.stringify([{ identifier: { id: "other.ext" }, version: "9.9.9" }, { identifier: { id: "GreenViper126.rojo-hub" }, version }]);
 	assert.equal(newerInstalled("x", "0.22.6", list("0.22.7")), "0.22.7");

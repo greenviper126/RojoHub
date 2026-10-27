@@ -176,7 +176,9 @@ function checkInstalledUpdate(): void {
 	try {
 		if (extensionContext.extensionMode === vscode.ExtensionMode.Development) return;
 		if (vscode.workspace.getConfiguration("rojoHub").get<boolean>("reloadOnUpdate", true) !== true) return;
-		const newer = newerInstalled(profileExtensionsFile(extensionContext.globalStorageUri.fsPath, extensionContext.extensionPath), SERVICE_VERSION);
+		const workspace = (vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri)?.toString();
+		const list = profileExtensionsFile(extensionContext.globalStorageUri.fsPath, extensionContext.extensionPath, workspace);
+		const newer = list ? newerInstalled(list, SERVICE_VERSION) : null;
 		if (!newer || reloadFor === newer || declinedReload.has(newer)) return;
 		// A reload that did not bring that version up is not repeated (per workspace, so other windows still reload): never a loop.
 		if (extensionContext.workspaceState.get<string>("rojoHub.reloadedFor") === newer) return;

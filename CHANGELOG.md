@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.9
+
+- **Fixed: windows never reloaded by themselves after an update** (`rojoHub.reloadOnUpdate`,
+  0.22.6 to 0.22.8). They worked out their profile from the extension's storage folder, which VS
+  Code shares between all profiles, so a window in a named profile read the default profile's list
+  and never saw the update. The profile now comes from VS Code's own record of which profile each
+  workspace opens in. This works for updates installed after 0.22.9 is running, so reload once by
+  hand to get it.
+
 ## 0.22.8
 
 - **Close and Reopen say why Studio did not take the request.** The error used to say only that
