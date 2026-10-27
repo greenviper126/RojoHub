@@ -10,6 +10,7 @@ import { writeAudit } from "./audit";
 import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
 import { claimKey, type HandBack, type Hub } from "./hub";
+import { extensionLists, newestInstalled } from "./installed";
 import { CLOSE_OFF_MESSAGE, OFF_MESSAGE } from "./places";
 import { loadPortSettings } from "./ports";
 import { listersOf } from "./requests";
@@ -81,7 +82,7 @@ Rojo owns what it syncs: an edit made in Studio to a synced script or instance i
 
 Sharing: serve_here and switch claim the project for your worktree %CLAIM%. While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
 
-To get ready in one call, use ensure: it starts the project, serves your worktree, opens the place and waits for Studio. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
+To get ready in one call, use ensure: it starts the project, serves your worktree, brings Rojo-Hub's parts to the current version (it reopens this project's Studio places that run an older plugin when the user turned on rojoHub.closePlaces, and tells you what only the user can do: reload a VS Code window, run /mcp to reconnect this chat), opens the place and waits for Studio. So "run ensure" is the whole setup. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
 Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. Closing and reopening a place (close_place, reopen_place, for example to load an updated plugin) works only when the user turned on rojoHub.closePlaces; Studio is asked to close as if the user closed its window, so it still asks about unsaved changes, and nothing is killed or saved for you. Never close a place another agent's project is synced to unless the user said to.
 
@@ -168,7 +169,7 @@ const VERSION_SCHEMA = shape({
 });
 const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
 
-export const ENSURE_STEPS = ["start", "setup", "serve", "open_place", "wait_for_studio"] as const;
+export const ENSURE_STEPS = ["start", "setup", "serve", "versions", "open_place", "wait_for_studio"] as const;
 export const ENSURE_OUTCOMES = ["done", "already", "skipped", "failed"] as const;
 export const ENSURE_FAILURES = ["no_project", "start_failed", "setup_failed", "setup_running", "claimed", "rojo_error", "open_places_off", "no_listed_places", "several_places", "open_failed", "studio_confirming", "timeout", "stopped"] as const;
 type EnsureFailure = (typeof ENSURE_FAILURES)[number];
@@ -177,11 +178,27 @@ interface EnsureStep {
 	outcome: (typeof ENSURE_OUTCOMES)[number];
 	detail: string;
 }
+/** What the versions step found (spec 015); null when the step did not run. */
+interface EnsureVersions {
+	service: string;
+	current: boolean;
+	needsUser: string[];
+	reopened: { placeId: number; name: string; outcome: "reloaded" | "waiting" | "failed"; detail: string }[];
+	outdatedElsewhere: { placeId: number; name: string; pluginVersion: string }[];
+}
+const VERSIONS_SCHEMA = shape({
+	service: S,
+	current: B,
+	needsUser: arrayOf(S),
+	reopened: arrayOf(shape({ placeId: I, name: S, outcome: { type: "string", enum: ["reloaded", "waiting", "failed"] }, detail: S })),
+	outdatedElsewhere: arrayOf(shape({ placeId: I, name: S, pluginVersion: S })),
+});
 /** project is null only for no_project: no step ran, so there is no project to describe. */
 const ENSURE_SCHEMA = shape({
 	ready: B,
 	steps: arrayOf(shape({ step: { type: "string", enum: [...ENSURE_STEPS] }, outcome: { type: "string", enum: [...ENSURE_OUTCOMES] }, detail: S })),
 	project: { anyOf: [{ type: "null" }, PROJECT_STATE_SCHEMA] },
+	versions: { anyOf: [{ type: "null" }, VERSIONS_SCHEMA] },
 	placeIds: arrayOf(I),
 	checks: arrayOf(shape({ name: { type: "string", enum: ["rojo", "packages", "node_modules", "sourcemap"] }, ok: B, detail: S })),
 	warnings: arrayOf(S),
@@ -237,7 +254,7 @@ export const TOOLS: Tool[] = [
 		name: "ensure",
 		title: "Get ready for Studio",
 		description:
-			"Gets Studio showing your worktree in one call: starts the project if stopped, serves your worktree (claims it; rojoHub.claimMinutes, 15 by default), opens the place when none is open (if the user allowed rojoHub.openPlaces), waits for the sync. Done steps are skipped, so a second call only renews the claim. Says why it could not finish and what to do; ready: true means a place is synced.",
+			"Gets Studio showing your worktree in one call: starts the project, serves your worktree (claims it), brings Rojo-Hub to the current version (reopens older-plugin places if rojoHub.closePlaces is on; says what only the user can do), opens the place if none is open (rojoHub.openPlaces), waits for the sync. Says why it could not finish; ready: true means a place is synced.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -510,6 +527,8 @@ export class Mcp {
 	constructor(
 		private readonly hub: Hub,
 		private readonly groups?: Groups,
+		/** extensionLists: the VS Code extensions.json files the versions step reads; pollMs: how often it looks for reopened places. */
+		private readonly options: { extensionLists?: () => string[]; pollMs?: number } = {},
 	) {}
 
 	/*
@@ -1358,7 +1377,8 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 		}
 		const fresh = () => this.hub.view(this.hub.registry.get(slot.id));
 		let checks: CheckResult[] = [];
-		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since, checks);
+		let versions: EnsureVersions | null = null;
+		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since, checks, versions);
 		const raw = args.place === undefined || args.place === null || args.place === "" ? null : typeof args.place === "string" ? args.place.trim() : args.place;
 		const wantedPlace = raw === null ? null : typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
 		if (wantedPlace !== null && (!Number.isSafeInteger(wantedPlace) || wantedPlace <= 0)) return fail("no_listed_places", `place must be a positive integer place ID (a number or digits), not ${JSON.stringify(args.place)}. Call ensure again with place as one of the project's places.`);
@@ -1366,7 +1386,7 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 
 		// An error nothing above turned into an answer still keeps the steps done.
 		let stage: EnsureStep["step"] = "start";
-		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", setup: "setup_failed", serve: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
+		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", setup: "setup_failed", serve: "rojo_error", versions: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
 		try {
 			// 2. start
 			stage = "start";
@@ -1445,6 +1465,18 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 				return fail("rojo_error", `The switch was made, but Rojo reports: ${lines} Fix the files in your worktree (log shows more); do not restart the project.`);
 			}
 
+			// 3b. versions (spec 015): never a failure, never changes ready.
+			stage = "versions";
+			try {
+				const found = await this.versionsStep(now, root!, args, Math.max(5, clamp(args.timeout, 60, 300)));
+				versions = found.versions;
+				steps.push({ step: "versions", outcome: found.outcome, detail: found.lines.join("\n") });
+				// a reopened place disconnected and came back: look at the project again
+				now = fresh();
+			} catch (error) {
+				steps.push({ step: "versions", outcome: "skipped", detail: `could not check versions: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}` });
+			}
+
 			// 4. open_place
 			stage = "open_place";
 			const listed = now.listedPlaces ?? [];
@@ -1506,12 +1538,116 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 					return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
 				}
 			}
-			return this.ensureAnswer(fresh(), root, steps, null, since, checks);
+			return this.ensureAnswer(fresh(), root, steps, null, since, checks, versions);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			steps.push({ step: stage, outcome: "failed", detail: message });
 			return fail(failed[stage], `${message.split("\n")[0]} (step ${stage}); the steps above were done.`);
 		}
+	}
+
+	/*
+		ensure's versions step (spec 015): reopens this project's places that run
+		an older plugin (when rojoHub.closePlaces is on and no other agent claims
+		the project they are synced with), waits for them to come back, and says
+		what only the user can do. Reads and asks; it throws nothing the caller
+		must act on.
+	*/
+	private async versionsStep(slot: SlotView, root: string, args: Args, timeoutSeconds: number): Promise<{ outcome: "done" | "already" | "skipped"; versions: EnsureVersions; lines: string[] }> {
+		const deadline = Date.now() + timeoutSeconds * 1000;
+		const needsUser: string[] = [];
+		const lines: string[] = [];
+		const reopened: EnsureVersions["reopened"] = [];
+		const outdatedElsewhere: EnsureVersions["outdatedElsewhere"] = [];
+		const label = (place: { placeName: string; placeId: number; unsaved: boolean }) => (place.unsaved ? `${place.placeName} (unsaved)` : `${place.placeName} (place ${place.placeId})`);
+		const older = this.hub.studio.places().filter((place) => compareVersions(place.pluginVersion, SERVICE_VERSION) < 0);
+		const mine = older.filter((place) => place.projectId === slot.id || place.syncedWith === slot.projectName);
+		for (const place of older) {
+			if (!mine.includes(place)) outdatedElsewhere.push({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, pluginVersion: place.pluginVersion });
+		}
+
+		// this project's older places
+		const asked: typeof mine = [];
+		for (const place of mine) {
+			const text = `${label(place)} runs plugin ${place.pluginVersion}, older than ${SERVICE_VERSION}`;
+			if (place.unsaved) {
+				needsUser.push(`${text}; it is unsaved, so save it and reopen it in Studio.`);
+				lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+				continue;
+			}
+			if (!this.hub.closePlacesOn) {
+				needsUser.push(`${text}; reopen it in Studio, or ask the user to turn on rojoHub.closePlaces so ensure can reopen places.`);
+				lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+				continue;
+			}
+			if (args.force !== true) {
+				const mineKey = claimKey({ kind: "worktree", path: root });
+				const holder = place.syncedWith ? this.hub.list().find((entry) => entry.projectName === place.syncedWith) : undefined;
+				const other = [slot, ...(holder && holder.id !== slot.id ? [holder] : [])].find((candidate) => {
+					const claim = this.hub.claimOf(candidate.id);
+					return claim !== null && claim !== undefined && claim.key !== mineKey;
+				});
+				if (other) {
+					const detail = `not reopened: another agent claimed ${other.projectName}, which would pull Studio out from under it (pass force only when the user asks)`;
+					reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "failed", detail });
+					needsUser.push(`${text}; ${detail}. Reopen it in Studio when that agent is done.`);
+					lines.push(`needs you: ${text}; ${detail}`);
+					continue;
+				}
+			}
+			try {
+				await this.hub.reopenPlace(slot.id, place.placeId);
+				if (!this.hub.yoloOn) writeAudit(this.hub.home, { actor: "mcp", action: "reopen_place", project: slot.projectName, args: { placeId: place.placeId, by: "ensure" }, yolo: false, lifted: false, outcome: "ok" });
+				asked.push(place);
+			} catch (error) {
+				const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "failed", detail });
+				needsUser.push(`${label(place)} could not be reopened (${detail}); reopen it in Studio.`);
+				lines.push(`needs you: ${label(place)} could not be reopened: ${detail}`);
+			}
+		}
+
+		// wait for the reopened places to say hello again with the current plugin
+		const back = (placeId: number) => this.hub.studio.places().find((entry) => !entry.unsaved && entry.placeId === placeId && compareVersions(entry.pluginVersion, SERVICE_VERSION) >= 0);
+		for (;;) {
+			if (asked.every((place) => back(place.placeId)) || Date.now() >= deadline) break;
+			await sleep(this.options.pollMs ?? 500);
+		}
+		for (const place of asked) {
+			const now = back(place.placeId);
+			if (now) {
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "reloaded", detail: `plugin ${place.pluginVersion} to ${now.pluginVersion}` });
+				lines.push(`fixed: reopened ${label(place)}, plugin ${place.pluginVersion} to ${now.pluginVersion}`);
+			} else {
+				const detail = "waiting on you in Studio (it may be asking about unsaved changes); it keeps syncing with its old plugin until then";
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "waiting", detail });
+				needsUser.push(`${label(place)} is ${detail}.`);
+				lines.push(`needs you: ${label(place)} is ${detail}`);
+			}
+		}
+
+		// other projects' older places: listed only
+		for (const place of outdatedElsewhere) lines.push(`ok: ${place.name}${place.placeId > 0 ? ` (place ${place.placeId})` : " (unsaved)"} runs plugin ${place.pluginVersion}; it is not this project's, so it was left alone`);
+
+		// a newer Rojo-Hub installed than the service running
+		const installed = newestInstalled((this.options.extensionLists ?? extensionLists)(), SERVICE_VERSION);
+		if (installed) {
+			needsUser.push(`Rojo-Hub ${installed} is installed but ${SERVICE_VERSION} is running; reload a VS Code window (Developer: Reload Window).`);
+			lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+		}
+
+		// this chat's own connection
+		const connection = this.asking.getStore()?.connection;
+		if (connection != null) {
+			needsUser.push(`This chat's Rojo-Hub connection is older (launcher ${connection}); the user must run /mcp and reconnect rojohub, or start a new chat.`);
+			lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+		}
+
+		const current = needsUser.length === 0 && reopened.length === 0 && outdatedElsewhere.length === 0;
+		if (current) lines.push(`all on ${SERVICE_VERSION}`);
+		else if (mine.length === 0 && !installed && connection == null) lines.unshift(`ok: this project's places and this chat are on ${SERVICE_VERSION}`);
+		const outcome = needsUser.length > 0 ? "skipped" : reopened.length > 0 ? "done" : "already";
+		return { outcome, versions: { service: SERVICE_VERSION, current, needsUser, reopened, outdatedElsewhere }, lines };
 	}
 
 	/** The install checks (spec 012, design 2) of a worktree, for the project as it is now. Reads files only. */
@@ -1528,7 +1664,7 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 	}
 
 	/** The answer of ensure: the steps, then why it stopped or how Studio looks. ready: running, serving this worktree, a place synced. */
-	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number, checks: CheckResult[] = []): Promise<Answer> {
+	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number, checks: CheckResult[] = [], versions: EnsureVersions | null = null): Promise<Answer> {
 		const warnings = checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`);
 		const project = slot ? await this.projectState(slot, root) : null;
 		const places = slot && slot.state === "running" ? (slot.places ?? []) : [];
@@ -1537,7 +1673,7 @@ ${outdatedNote(options.connection)}` : shown }], isError: true });
 		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.sharingText(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
 		return {
 			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}${warnings.map((warning) => `\nwarning: ${warning}`).join("")}`,
-			data: { ready, steps, project, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), checks, warnings, failure, yolo: this.hub.yoloOn === true },
+			data: { ready, steps, project, versions, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), checks, warnings, failure, yolo: this.hub.yoloOn === true },
 			...(failure ? { isError: true } : {}),
 		};
 	}

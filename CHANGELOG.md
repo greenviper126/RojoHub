@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.11
+
+- **New: `ensure` brings everything to the current version.** After an update, tell agents to run
+  `ensure` and nothing else. A new `versions` step reopens this project's Studio places that still run
+  an older plugin (with `rojoHub.closePlaces` on, never a place whose project another agent claimed,
+  and Studio still asks about unsaved changes), waits for them to come back, and then says plainly
+  what only you can do: reload a VS Code window when a newer Rojo-Hub is installed than the one
+  running, or run `/mcp` to reconnect the chat. With `closePlaces` off it only lists the places. Other
+  projects' places are listed and left alone. It never makes `ensure` fail.
+
 ## 0.22.10
 
 - **Fixed: accepting the Move question in the agent's chat declined it.** The question's one

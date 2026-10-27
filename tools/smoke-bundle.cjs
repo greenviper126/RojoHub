@@ -56,7 +56,7 @@ const port = 34868;
 const home = mkdtempSync(path.join(tmpdir(), "rojo-hub-smoke-"));
 const plugins = path.join(home, "Plugins");
 const child = spawn(process.execPath, [path.join(dist, "service.js")], {
-	env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(port), ROJO_HUB_STUDIO_PLUGINS: plugins },
+	env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(port), ROJO_HUB_STUDIO_PLUGINS: plugins, ROJO_HUB_VSCODE_USER: path.join(home, "vscode-user"), ROJO_HUB_VSCODE_EXTENSIONS: path.join(home, "vscode-extensions") },
 	stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";

@@ -95,7 +95,7 @@ before(async () => {
 
 	service = spawn(process.execPath, [join(__dirname, "..", "service", "main.js")], {
 		// A throwaway plugins folder: the service installs its Studio plugin (spec 007), never into the real Studio here.
-		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT), ROJO_HUB_STUDIO_PLUGINS: join(root, "Plugins") },
+		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT), ROJO_HUB_STUDIO_PLUGINS: join(root, "Plugins"), ROJO_HUB_VSCODE_USER: join(root, "vscode-user"), ROJO_HUB_VSCODE_EXTENSIONS: join(root, "vscode-extensions") },
 		stdio: "inherit",
 	});
 	await until("service", () => fetch(api + "/health").then((r) => r.ok).catch(() => false));

@@ -39,7 +39,7 @@ registration and settings.
 |---|---|
 | `status` | Every project, what it serves, who claims it, its Studio places and warnings; open places |
 | `version` | Which versions are running: service, Studio plugin, MCP launcher, each project's Rojo, each open place's plugin (and whether the place needs reopening) |
-| `ensure` | Get ready in one call: start the project, serve the worktree, open the place (needs `rojoHub.openPlaces`), wait for Studio |
+| `ensure` | Get ready in one call: start the project, serve the worktree, bring Rojo-Hub's parts to the current version (reopens this project's Studio places on an older plugin with `rojoHub.closePlaces`; says what you must do yourself), open the place (needs `rojoHub.openPlaces`), wait for Studio |
 | `serve_here` | Serve the agent's own worktree to Studio, live, and claim the project |
 | `switch` | Serve a branch or worktree, and claim the project |
 | `new_branch` | Make a branch in its own worktree, serve it, and claim the project |

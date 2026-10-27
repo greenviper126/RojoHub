@@ -20,6 +20,7 @@ import { AGENTS, agentState } from "../service/agentConfig";
 import { gitVersion, headFile, MIN_GIT, parseWorktrees, readHead, revParse } from "../service/git";
 import { newerInstalled, profileExtensionsFile, userFolder } from "../extension/reload";
 import { Mcp, outdatedNote, staleConnection, TOOLS } from "../service/mcp";
+import { extensionLists } from "../service/installed";
 import { isRefChange } from "../service/targets";
 import { olderThan77, resolveRojo, rojoSpec } from "../service/tools";
 import { collectPaths, missingRoots, planTree, redirectPaths, slotProject, verbatim } from "../service/project";
@@ -36,6 +37,11 @@ import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type Pla
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
 import { CLOSE_OFF_MESSAGE, type CloseAnswer, OFF_MESSAGE, placeInCommandLine, placeLink, Places, type PlaceSystem, type StudioProcess } from "../service/places";
+
+// ensure's versions step reads VS Code's extension lists (spec 015): point it at an empty folder, never the real ones.
+const noVsCode = mkdtempSync(join(tmpdir(), "rojo-hub-vscode-"));
+process.env.ROJO_HUB_VSCODE_USER = join(noVsCode, "User");
+process.env.ROJO_HUB_VSCODE_EXTENSIONS = join(noVsCode, "extensions");
 
 test("verbatim prefixes a Windows path once", { skip: process.platform !== "win32" }, () => {
 	assert.equal(verbatim("C:\\a\\b.json"), "\\\\?\\C:\\a\\b.json");
@@ -1417,7 +1423,9 @@ function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[];
 type EnsureResult = { content: { text: string }[]; structuredContent: any; isError?: boolean };
 const ensureCall = async (stub: ReturnType<typeof ensureStub>, args: object, protocol: string | undefined = "2025-06-18") =>
 	((await new Mcp(stub.hub as never).handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ensure", arguments: args } }, protocol)) as { result: EnsureResult }).result;
-const stepsOf = (result: EnsureResult) => result.structuredContent.steps.map((step: any) => `${step.step}:${step.outcome}`);
+const allStepsOf = (result: EnsureResult) => result.structuredContent.steps.map((step: any) => `${step.step}:${step.outcome}`);
+/** The steps without versions (spec 015), which the older ensure tests do not look at. */
+const stepsOf = (result: EnsureResult) => allStepsOf(result).filter((step: string) => !step.startsWith("versions:"));
 
 test("ensure: stopped project, unserved worktree, closed place: does everything, a second call finds it all done", async () => {
 	const repo = tempRepo();
@@ -2635,4 +2643,167 @@ test("close_place and reopen_place: refused while closePlaces is off (yolo does 
 	const forced = await callTool(claimed.mcp, "close_place", { path: repo, force: true });
 	assert.ok(!forced.isError, forced.content[0].text);
 	assert.deepEqual(claimed.done, ["close 111"]);
+});
+
+/* ---------- ensure: the versions step (spec 015) ---------- */
+
+type VersionsPlace = { key: string; placeId: number; placeName: string; unsaved: boolean; pluginVersion: string; projectId: string | null; syncedWith: string | null; confirming: boolean };
+const versionsPlace = (over: Partial<VersionsPlace> = {}): VersionsPlace => ({ key: "k111", placeId: 111, placeName: "Lobby", unsaved: false, pluginVersion: SERVICE_VERSION, projectId: "game", syncedWith: "Game", confirming: false, ...over });
+
+/** A running project with its place 111 open and synced; reopening a place brings it back with the current plugin after a moment (unless it is told to stay open). */
+function versionsStub(repo: string, places: VersionsPlace[], over: { closeOn?: boolean; claim?: { key: string; label: string; until: number } | null; stayOpen?: boolean; reopenFails?: boolean; yolo?: boolean } = {}) {
+	const stub = ensureStub(repo, { state: "running", openPlacesOn: false, listed: [{ placeId: 111, placeName: "Lobby", open: true }], claim: over.claim });
+	stub.slot.places = [{ placeId: 111, placeName: "Lobby", pluginVersion: SERVICE_VERSION }];
+	stub.slot.target = { kind: "worktree", path: repo };
+	stub.open.push(...places);
+	const reopened: number[] = [];
+	const hub = stub.hub as any;
+	hub.closePlacesOn = over.closeOn !== false;
+	hub.yoloOn = over.yolo === true;
+	hub.reopenPlace = async (_id: string, placeId: number) => {
+		if (over.reopenFails) throw new Error("Studio is not installed");
+		reopened.push(placeId);
+		if (over.stayOpen) return;
+		const index = stub.open.findIndex((entry) => entry.placeId === placeId);
+		const [gone] = stub.open.splice(index, 1);
+		setTimeout(() => stub.open.push({ ...gone, pluginVersion: SERVICE_VERSION }), 60);
+	};
+	return { ...stub, reopened };
+}
+const versionsCall = async (stub: ReturnType<typeof versionsStub>, args: object = {}, options: { lists?: string[]; connection?: string | null } = {}) =>
+	((await new Mcp(stub.hub as never, undefined, { extensionLists: () => options.lists ?? [], pollMs: 10 }).handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ensure", arguments: { path: stub.slot.repoPath, timeout: 5, ...args } } }, "2025-06-18", { connection: options.connection ?? null })) as { result: EnsureResult }).result;
+
+test("ensure versions: an older-plugin place of this project is reopened and reported reloaded once it is back", async () => {
+	const repo = tempRepo();
+	const stub = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0" }), versionsPlace({ key: "k2", placeId: 222, placeName: "Other", projectId: "other", syncedWith: "Other", pluginVersion: "0.21.0" })]);
+	const result = await versionsCall(stub);
+	assert.ok(!result.isError, result.content[0].text);
+	const versions = result.structuredContent.versions;
+	assert.deepEqual(check(result.structuredContent, TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema), []);
+	assert.deepEqual(stub.reopened, [111]);
+	assert.deepEqual(versions.reopened, [{ placeId: 111, name: "Lobby", outcome: "reloaded", detail: `plugin 0.21.0 to ${SERVICE_VERSION}` }]);
+	assert.deepEqual(versions.outdatedElsewhere, [{ placeId: 222, name: "Other", pluginVersion: "0.21.0" }], "another project's place is only listed (acceptance 4)");
+	assert.equal(versions.current, false);
+	assert.deepEqual(allStepsOf(result), ["start:already", "serve:already", "versions:done", "open_place:already", "wait_for_studio:already"]);
+	assert.equal(result.structuredContent.ready, true);
+	assert.match(result.content[0].text, /fixed: reopened Lobby \(place 111\)/);
+	const audit = readFileSync(join(stub.hub.home, AUDIT_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { action: string; args: { placeId: number; by: string } });
+	assert.deepEqual(audit.map((line) => [line.action, line.args.placeId, line.args.by]), [["reopen_place", 111, "ensure"]]);
+});
+
+test("ensure versions: closePlaces off lists the place with the step to take and closes nothing; ensure stays ready", async () => {
+	const repo = tempRepo();
+	const stub = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0" })], { closeOn: false });
+	const result = await versionsCall(stub);
+	assert.deepEqual(stub.reopened, []);
+	assert.equal(result.structuredContent.ready, true);
+	assert.ok(!result.isError);
+	assert.equal(allStepsOf(result)[2], "versions:skipped");
+	assert.deepEqual(result.structuredContent.versions.reopened, []);
+	assert.match(result.structuredContent.versions.needsUser[0], /Lobby \(place 111\) runs plugin 0\.21\.0.*rojoHub\.closePlaces/);
+	assert.match(result.content[0].text, /needs you: Lobby/);
+});
+
+test("ensure versions: a place whose project another agent claims is not reopened without force", async () => {
+	const repo = tempRepo();
+	const other = { key: "worktree:elsewhere", label: "Other", until: Date.now() + 120_000 };
+	// the place is synced with another project (Rival) that another agent claimed; this project's own claim is ensure's
+	const stub = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0", projectId: "game", syncedWith: "Rival" })]);
+	const hub = stub.hub as any;
+	const rival = { ...stub.slot, id: "rival", projectName: "Rival", repoPath: join(tmpdir(), "rojo-hub-rival-repo") };
+	hub.list = () => [stub.slot, rival];
+	hub.claimOf = (id: string) => (id === "rival" ? other : null);
+	const held = await versionsCall(stub);
+	assert.deepEqual(stub.reopened, []);
+	assert.equal(held.structuredContent.versions.reopened[0].outcome, "failed");
+	assert.match(held.structuredContent.versions.reopened[0].detail, /another agent claimed Rival/);
+	assert.equal(held.structuredContent.ready, true, "never changes ready");
+	const forced = await versionsCall(stub, { force: true });
+	assert.deepEqual(stub.reopened, [111], "force passes");
+	assert.equal(forced.structuredContent.versions.reopened[0].outcome, "reloaded");
+});
+
+test("ensure versions: a place still open when the time is up is reported waiting; a failed reopen reports its error; neither fails ensure", async () => {
+	const repo = tempRepo();
+	const waiting = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0" })], { stayOpen: true });
+	const slow = await versionsCall(waiting, { timeout: 0 });
+	assert.ok(!slow.isError, slow.content[0].text);
+	assert.equal(slow.structuredContent.versions.reopened[0].outcome, "waiting");
+	assert.match(slow.structuredContent.versions.reopened[0].detail, /waiting on you in Studio \(it may be asking about unsaved changes\)/);
+	assert.equal(allStepsOf(slow)[2], "versions:skipped");
+	assert.equal(slow.structuredContent.ready, true);
+
+	const broken = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0" })], { reopenFails: true });
+	const failed = await versionsCall(broken);
+	assert.ok(!failed.isError, failed.content[0].text);
+	assert.equal(failed.structuredContent.versions.reopened[0].outcome, "failed");
+	assert.equal(failed.structuredContent.versions.reopened[0].detail, "Studio is not installed");
+	assert.equal(failed.structuredContent.ready, true);
+});
+
+test("ensure versions: a newer Rojo-Hub in a profile's extensions.json is reported with the reload step; older, equal and unreadable lists are not", async () => {
+	const repo = tempRepo();
+	const folder = mkdtempSync(join(tmpdir(), "rojo-hub-ext-"));
+	const list = (name: string, version: string) => {
+		const file = join(folder, name);
+		writeFileSync(file, JSON.stringify([{ identifier: { id: "GreenViper126.rojo-hub" }, version }]));
+		return file;
+	};
+	const garbage = join(folder, "garbage.json");
+	writeFileSync(garbage, "{not json");
+	const files = [list("older.json", "0.1.0"), list("equal.json", SERVICE_VERSION), garbage, join(folder, "missing.json")];
+
+	const quiet = await versionsCall(versionsStub(repo, []), {}, { lists: files });
+	assert.deepEqual(quiet.structuredContent.versions.needsUser, []);
+	assert.equal(quiet.structuredContent.versions.current, true);
+
+	const newer = await versionsCall(versionsStub(repo, []), {}, { lists: [...files, list("newer.json", "99.0.0"), list("newest.json", "99.1.0")] });
+	assert.deepEqual(newer.structuredContent.versions.needsUser, [`Rojo-Hub 99.1.0 is installed but ${SERVICE_VERSION} is running; reload a VS Code window (Developer: Reload Window).`]);
+	assert.equal(newer.structuredContent.versions.current, false);
+	assert.equal(allStepsOf(newer)[2], "versions:skipped");
+	assert.equal(newer.structuredContent.ready, true);
+});
+
+test("extensionLists: the default profile's list and every profile folder, from the folders it is given", () => {
+	const user = mkdtempSync(join(tmpdir(), "rojo-hub-user-"));
+	mkdirSync(join(user, "profiles", "-abc"), { recursive: true });
+	mkdirSync(join(user, "profiles", "-def"), { recursive: true });
+	writeFileSync(join(user, "profiles", "stray.txt"), "");
+	const files = extensionLists({ ROJO_HUB_VSCODE_USER: user, ROJO_HUB_VSCODE_EXTENSIONS: join(user, "ext") });
+	assert.deepEqual(files.sort(), [join(user, "ext", "extensions.json"), join(user, "profiles", "-abc", "extensions.json"), join(user, "profiles", "-def", "extensions.json")].sort());
+	assert.deepEqual(extensionLists({ ROJO_HUB_VSCODE_USER: join(user, "nowhere"), ROJO_HUB_VSCODE_EXTENSIONS: join(user, "ext") }), [join(user, "ext", "extensions.json")], "no profiles folder");
+});
+
+test("ensure versions: an outdated chat connection is reported with the /mcp step", async () => {
+	const repo = tempRepo();
+	const result = await versionsCall(versionsStub(repo, []), {}, { connection: "0.22.5" });
+	assert.ok(!result.isError);
+	assert.equal(result.structuredContent.ready, true);
+	assert.match(result.structuredContent.versions.needsUser[0], /run \/mcp and reconnect rojohub, or start a new chat/);
+	assert.equal(allStepsOf(result)[2], "versions:skipped");
+});
+
+test("ensure versions: everything current is one 'all on' line, no reopen and no wait", async () => {
+	const repo = tempRepo();
+	const stub = versionsStub(repo, [versionsPlace()]);
+	const result = await versionsCall(stub);
+	assert.deepEqual(stub.reopened, []);
+	assert.deepEqual(result.structuredContent.versions, { service: SERVICE_VERSION, current: true, needsUser: [], reopened: [], outdatedElsewhere: [] });
+	assert.deepEqual(allStepsOf(result), ["start:already", "serve:already", "versions:already", "open_place:already", "wait_for_studio:already"]);
+	assert.equal(result.structuredContent.steps[2].detail, `all on ${SERVICE_VERSION}`);
+	assert.equal(result.structuredContent.ready, true);
+});
+
+test("ensure versions: a failed ensure carries versions null before the step ran, and the schema accepts it", async () => {
+	const stub = versionsStub(tempRepo(), []);
+	const result = await versionsCall(stub, { path: "" });
+	assert.equal(result.structuredContent.failure.reason, "no_project");
+	assert.equal(result.structuredContent.versions, null);
+	assert.deepEqual(check(result.structuredContent, TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema), []);
+});
+
+test("ensure and the instructions say ensure also brings Rojo-Hub's parts to the current version", async () => {
+	assert.match(TOOLS.find((tool) => tool.name === "ensure")!.description, /current version/);
+	const init = (await new Mcp({ claimMinutes: 15 } as never).handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })) as { result: { instructions: string } };
+	assert.match(init.result.instructions, /run ensure" is the whole setup/);
 });

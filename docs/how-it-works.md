@@ -1,7 +1,7 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.22.10,
+underneath, and the known limits. It is the source for user documentation. Version 0.22.11,
 2026-10-27. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
@@ -979,7 +979,7 @@ at once, so an agent should not need to ask you to click.
 |---|---|
 | `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open, a line for each place that is synced with another project or listed by several, and requests other projects made for its places; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
 | `version` | Which versions are running: the service, the Studio plugin it installs, the MCP launcher file (or "not installed"), this chat's own connection (the launcher version it sent in `x-rojo-hub-launcher`, with advice to run `/mcp` and reconnect when it is older than the service or missing), each serving project's Rojo, and each open Studio place's plugin, with a note to reopen the place when its plugin is older than the service. Reads only: it claims and renews nothing. Data: `service`, `plugin`, `launcher`, `connection`, `connectionOutdated`, `projects` (`id`, `name`, `rojoVersion`), `places` (`placeId`, `name`, `pluginVersion`, `outdated`). Optional `path` is ignored. |
-| `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
+| `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), brings Rojo-Hub's parts to the current version in a `versions` step (described below), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `versions`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
 | `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
 | `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait` and `then_return`. |
 | `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. Runs the repo's [setup commands](#setup-commands-spec-012) in the new worktree before the switch; if they fail it says so and does not switch; if they take over 40 seconds it answers `switched: false` and the agent calls `ensure`. |
@@ -1015,6 +1015,34 @@ about a second (a switch applies in that time) and adds any Rojo error and the c
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
 `new_branch` wait out another worktree's claim and take the project the moment it is released or
 expires; waiters are served in the order they asked.
+
+**ensure brings everything to the current version (`versions`, spec 015).** After `serve` and before
+`open_place`, `ensure` has a `versions` step, so "run ensure" is the whole instruction an agent needs
+after an update. It never makes `ensure` fail and never changes `ready`.
+
+- This project's Studio places (synced with it, or assigned or connecting to it) whose plugin is older
+  than the service are reopened with the same call as `reopen_place` (Studio is asked to close as if
+  the user closed its window; nothing is killed or saved). Only saved places, only with
+  `rojoHub.closePlaces` on, and not a place synced with a project another agent claimed (unless
+  `force`). Each reopen is audited (`reopen_place`, `by: "ensure"`) unless yolo is on. `ensure` then
+  waits, within its `timeout`, until each place says hello again with the current plugin
+  (`reloaded`). A place still open at the end is `waiting` (Studio may be asking about unsaved
+  changes), a reopen that errored is `failed`; either way the place keeps syncing with its old plugin.
+- With `rojoHub.closePlaces` off the places are only listed, with the step to take.
+- Other projects' places with an older plugin are listed in `outdatedElsewhere` and left alone.
+- The service reads each VS Code profile's `extensions.json` (`%APPDATA%\Code\User\profiles\*\` and
+  `~\.vscode\extensions\`). If one lists a newer Rojo-Hub than the running service, the step says to
+  reload a VS Code window. Unreadable lists are skipped. (`ROJO_HUB_VSCODE_USER` and
+  `ROJO_HUB_VSCODE_EXTENSIONS` replace the two folders; tests use them.)
+- If the chat's own connection is older than the service, the step says the user must run `/mcp`
+  and reconnect `rojohub`, or start a new chat: the one thing no tool can do.
+
+The step's outcome is `done` when places were reopened and nothing needs the user, `already` when
+everything is current, `skipped` when something needs the user. Its text has one line per item
+(`ok`, `fixed`, `needs you: <step>`), or "all on X". The structured `versions` is `{ service,
+current, needsUser, reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "failed", detail }],
+outdatedElsewhere: [{ placeId, name, pluginVersion }] }`; it is `null` when `ensure` stopped before
+the step.
 
 **Handing the project back (`then_return`, spec 013).** `serve_here`, `switch` and `ensure` take `then_return: true`: the claim remembers what the project served just before (a worktree or a branch). When the agent calls `release`, or the claim runs out (a once-a-second check in the service), the project switches back to it, live like any switch, never a restart. It returns only if the project is still serving, still serves what the agent took, no other claim holds it, and a worktree's folder still exists; otherwise it stays where it is and `release` says why. The remembered target is kept in `claims.json`, so a service restart does not lose it. The answer says what it will switch back to; `status` shows it as `claim.thenReturn`. Without `then_return` nothing changes.
 
