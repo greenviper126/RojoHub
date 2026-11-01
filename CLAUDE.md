@@ -39,8 +39,14 @@ type that older versions skip needs no bump (bumping makes every open place reop
 
 - Bump the version in every place at once: `package.json`, `package-lock.json` (its first two
   `version` fields), `SERVICE_VERSION` in `src/common/api.ts`, the install line above, the version
-  line at the top of `docs/how-it-works.md`, the version menu in `site/.vitepress/config.mts`, and a
-  new entry in both `CHANGELOG.md` and `site/changelog.md`.
+  line at the top of `docs/how-it-works.md`, the root label of the version menu
+  (`locales.root.label`) in `site/.vitepress/config.mts`, and a new entry in both `CHANGELOG.md` and
+  `site/changelog.md`.
+- Freeze the docs of the version being replaced (spec 017): copy its pages from its tag
+  (`git archive vX.Y.Z site`, not `.vitepress` or `public`) into `site/vX.Y/`, change only their
+  `/guide`, `/reference`, `/troubleshooting` and `/changelog` links to start with `/vX.Y/`, add the
+  folder to `locales` in `site/.vitepress/config.mts` and to `frozen` in `site/.vitepress/theme/index.ts`.
+  Never edit a frozen copy afterwards.
 - Merge to `main`, then push a tag `vX.Y.Z` on `main`. The Release workflow checks the tag matches
   `package.json`, packages the `.vsix` and makes the GitHub release. It also publishes to the VS Code
   Marketplace and Open VSX when the `VSCE_PAT` / `OVSX_PAT` secrets are set.

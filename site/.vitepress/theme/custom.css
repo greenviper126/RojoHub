@@ -48,3 +48,18 @@
 		max-width: 360px;
 	}
 }
+
+/* The bar on the frozen docs of an older release (spec 017). */
+.frozen-docs {
+	padding: 8px 16px;
+	text-align: center;
+	font-size: 14px;
+	color: var(--vp-c-text-1);
+	background: var(--vp-c-brand-soft);
+	border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.frozen-docs a {
+	font-weight: 600;
+	color: var(--vp-c-brand-1);
+}

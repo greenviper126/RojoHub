@@ -27,6 +27,58 @@ const mediaFiles: Plugin = {
 	},
 };
 
+/*
+	Versioned docs (spec 017). The root pages describe the current release; each older release is a
+	frozen copy under its own folder (site/v0.21/) with its own nav and sidebar, and the nav's
+	"Version" menu switches between them (VitePress locales). At a release: copy the previous
+	release's pages from its tag into a new folder, add it to `locales`, and set the root label.
+*/
+const releases = "https://github.com/greenviper126/RojoHub/releases";
+
+const nav = (prefix: string) => [
+	{ text: "Guide", link: `${prefix}/guide/getting-started`, activeMatch: `${prefix}/guide/` },
+	{ text: "Reference", link: `${prefix}/reference/settings`, activeMatch: `${prefix}/reference/` },
+	{ text: "Troubleshooting", link: `${prefix}/troubleshooting` },
+	{
+		text: "Releases",
+		items: [
+			{ text: "Changelog", link: `${prefix}/changelog` },
+			{ text: "GitHub releases", link: releases },
+		],
+	},
+];
+
+const sidebar = (prefix: string) => [
+	{
+		text: "Guide",
+		items: [
+			{ text: "Get started", link: `${prefix}/guide/getting-started` },
+			{ text: "Projects", link: `${prefix}/guide/projects` },
+			{ text: "Connecting Studio", link: `${prefix}/guide/connecting-studio` },
+			{ text: "Switching branches", link: `${prefix}/guide/switching` },
+			{ text: "Groups", link: `${prefix}/guide/groups` },
+			{ text: "Agents", link: `${prefix}/guide/agents` },
+		],
+	},
+	{
+		text: "Reference",
+		items: [
+			{ text: "Settings", link: `${prefix}/reference/settings` },
+			{ text: "Commands", link: `${prefix}/reference/commands` },
+			{ text: "Files on disk", link: `${prefix}/reference/files` },
+			{ text: "Background service", link: `${prefix}/reference/service` },
+			{ text: "Local API", link: `${prefix}/reference/api` },
+		],
+	},
+	{
+		text: "Help",
+		items: [
+			{ text: "Troubleshooting", link: `${prefix}/troubleshooting` },
+			{ text: "Changelog", link: `${prefix}/changelog` },
+		],
+	},
+];
+
 export default defineConfig({
 	title: "Rojo-Hub",
 	description: "Serve many Rojo projects on fixed ports and switch any of them between branches without Studio disconnecting. Built for agents.",
@@ -41,50 +93,15 @@ export default defineConfig({
 	buildEnd(site) {
 		for (const name of fromMedia) copyFileSync(join(media, name), join(site.outDir, name));
 	},
+	locales: {
+		root: { label: "0.22.13 (latest)", lang: "en-US" },
+		"v0.21": { label: "0.21.0", lang: "en-US", link: "/v0.21/", themeConfig: { nav: nav("/v0.21"), sidebar: sidebar("/v0.21") } },
+	},
 	themeConfig: {
 		logo: "/icon.png",
-		nav: [
-			{ text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
-			{ text: "Reference", link: "/reference/settings", activeMatch: "/reference/" },
-			{ text: "Troubleshooting", link: "/troubleshooting" },
-			{
-				text: "0.22.13",
-				items: [
-					{ text: "Changelog", link: "/changelog" },
-					{ text: "Releases", link: "https://github.com/greenviper126/RojoHub/releases" },
-				],
-			},
-		],
-		sidebar: [
-			{
-				text: "Guide",
-				items: [
-					{ text: "Get started", link: "/guide/getting-started" },
-					{ text: "Projects", link: "/guide/projects" },
-					{ text: "Connecting Studio", link: "/guide/connecting-studio" },
-					{ text: "Switching branches", link: "/guide/switching" },
-					{ text: "Groups", link: "/guide/groups" },
-					{ text: "Agents", link: "/guide/agents" },
-				],
-			},
-			{
-				text: "Reference",
-				items: [
-					{ text: "Settings", link: "/reference/settings" },
-					{ text: "Commands", link: "/reference/commands" },
-					{ text: "Files on disk", link: "/reference/files" },
-					{ text: "Background service", link: "/reference/service" },
-					{ text: "Local API", link: "/reference/api" },
-				],
-			},
-			{
-				text: "Help",
-				items: [
-					{ text: "Troubleshooting", link: "/troubleshooting" },
-					{ text: "Changelog", link: "/changelog" },
-				],
-			},
-		],
+		nav: nav(""),
+		sidebar: sidebar(""),
+		langMenuLabel: "Version",
 		outline: { level: [2, 3] },
 		search: { provider: "local" },
 		socialLinks: [{ icon: "github", link: "https://github.com/greenviper126/RojoHub" }],
