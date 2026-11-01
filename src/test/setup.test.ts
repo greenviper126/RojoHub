@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
+import { pathKey } from "../common/paths";
 import { fromEditor, parseSetupText, splitLine, toEditor } from "../common/setupText";
 import { AUDIT_FILE, AUDIT_MAX_BYTES, AUDIT_OLD_FILE, writeAudit } from "../service/audit";
 import { Hub, SetupFailed } from "../service/hub";
@@ -357,7 +358,7 @@ test("hub: worktreeRead follows what a running rojo was pointed at, and forgets 
 		assert.equal(hub.worktreeRead(worktree), false);
 		assert.equal(await hub.setupRefusal(slot, worktree), null, "a stopped project may be set up in any linked worktree");
 		runtime.state = "starting";
-		runtime.served.add(pathOf(worktree));
+		runtime.served.add(pathKey(worktree)); // the service expands short Windows names (RUNNER~1) in its keys; so must the test
 		assert.equal(hub.worktreeRead(worktree), true, "starting counts too");
 	} finally {
 		await hub.shutdown(false);
@@ -545,7 +546,7 @@ test("hub: what a running rojo has read is kept in served.json, restored, and un
 		runtime.state = "running";
 		await hub.switch(id, { kind: "worktree", path: worktree });
 		assert.ok(existsSync(join(home, "slots", id, "served.json")));
-		assert.ok(inner.loadServed(id)!.has(pathOf(worktree)), "a restarted service would read it back");
+		assert.ok(inner.loadServed(id)!.has(pathKey(worktree)), "a restarted service would read it back");
 		// adoption without a saved history
 		runtime.servedUnknown = true;
 		assert.match((await hub.setupRefusal(slot, fresh)) ?? "", /adopted from an older service/);
