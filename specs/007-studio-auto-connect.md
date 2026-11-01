@@ -343,6 +343,16 @@ profiles for that), the plugin's read-only line after reopening the places, and 
 - [x] `docs/how-it-works.md`, the site (Connecting Studio, Studio places, troubleshooting) and the
       README describe it.
 
+## Update, 0.22.5: a handoff is not a takeover
+
+The plugin still never takes over a session by itself: a live session with a project is left alone.
+The one exception is a handoff (spec 014): when the user moves the place to another project (Move,
+the panel's Studio places, `request_place`), the answer carries `target.handoff`, a number that is
+new each time, and a plugin that is synced with a different project switches once and remembers the
+number. The first sync of a place with a project is still confirmed (`accepted`). The field is
+optional, so there is no `STUDIO_PROTOCOL` change. The Connected page also shows the served branch
+(`target.branch`, `target.targetLabel`), under the project name.
+
 ## Non-goals
 
 - Switching branches, or starting and stopping projects, from Studio. The plugin connects; the panel

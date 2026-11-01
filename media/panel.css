@@ -706,6 +706,17 @@ code {
 	--tone: var(--bad);
 }
 
+/* Yolo mode is on (spec 012): louder than an ordinary error notice. */
+.notice.yolo {
+	margin-bottom: 8px;
+	border-color: var(--bad);
+	background: color-mix(in srgb, var(--bad) 24%, transparent);
+}
+
+.notice.yolo .row {
+	margin-top: 6px;
+}
+
 /* ---------- buttons and inputs ---------- */
 
 .btn {
@@ -1407,6 +1418,68 @@ button:focus-visible {
 	line-height: 1.45;
 }
 
+/* ---------- Setup commands editor (spec 012) ---------- */
+
+.setup-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px 6px 6px;
+	animation: drop-in 0.08s var(--ease);
+}
+
+.setup-editor p {
+	margin: 0;
+	line-height: 1.45;
+}
+
+.setup-editor label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.setup-editor textarea {
+	width: 100%;
+	box-sizing: border-box;
+	resize: vertical;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: var(--vscode-editor-font-size, 12px);
+	color: var(--vscode-input-foreground);
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 2px;
+	padding: 4px 6px;
+}
+
+.setup-editor textarea:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.setup-preview {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.setup-line {
+	display: flex;
+	gap: 6px;
+	align-items: baseline;
+	overflow-wrap: anywhere;
+}
+
+.setup-line.bad {
+	color: var(--vscode-errorForeground);
+}
+
+.setup-line code {
+	background: var(--vscode-textCodeBlock-background);
+	padding: 0 3px;
+	border-radius: 2px;
+}
+
 /* ---------- Projects filter ---------- */
 
 .filter {
@@ -1706,6 +1779,12 @@ button:focus-visible {
 	padding: 0 2px;
 }
 
+/* Release claim (spec 004): never squeezed out by a long worktree name */
+.claim .link {
+	flex: none;
+	text-decoration: underline;
+}
+
 .claim-icon {
 	display: inline-flex;
 	color: var(--info);
@@ -1738,6 +1817,23 @@ button:focus-visible {
 }
 
 .studio-place .pill {
+	flex: none;
+}
+
+.studio-place .shared {
+	margin-left: 4px;
+}
+
+/* An agent's ask for a shared place (spec 014) */
+.studio-places .place-request {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	padding: 2px 4px 4px 7px;
+}
+
+.studio-places .place-request .btn {
 	flex: none;
 }
 

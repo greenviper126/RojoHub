@@ -2,8 +2,10 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { SERVICE_PORT } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION } from "../common/api";
+import { installLauncher } from "../common/launcher";
 import { longPath } from "../common/paths";
+import { AgentRegistrar } from "./agentConfig";
 import { gitProblem } from "./git";
 import { Hub } from "./hub";
 import { eventSubscribers, serve } from "./server";
@@ -56,6 +58,7 @@ process.on("unhandledRejection", (reason) => log(`unhandled rejection: ${reason 
 async function main(): Promise<void> {
 	const hub = new Hub(home);
 	hub.studio.log = log;
+	hub.requests.log = log;
 	hub.places.log = log;
 	if (hub.registry.recovered) log(hub.registry.recovered);
 	let exiting = false;
@@ -67,10 +70,16 @@ async function main(): Promise<void> {
 			process.exit(0);
 		});
 	};
-	const server = await serve(hub, port, (stopServing) => {
-		log(`shutdown requested (stopServing=${stopServing})`);
-		exit(stopServing);
-	});
+	const agents = new AgentRegistrar();
+	const server = await serve(
+		hub,
+		port,
+		(stopServing) => {
+			log(`shutdown requested (stopServing=${stopServing})`);
+			exit(stopServing);
+		},
+		agents,
+	);
 	let lastRequest = Date.now();
 	server.on("request", () => (lastRequest = Date.now()));
 	setInterval(() => {
@@ -79,6 +88,21 @@ async function main(): Promise<void> {
 		exit(false);
 	}, 60_000).unref();
 	log(`service ${process.pid} listening on 127.0.0.1:${port}, home ${home}`);
+	/*
+		The stdio launcher agents' configs point at (spec 011): copied here, where it
+		outlives the extension's versioned folder. Then Rojo-Hub's old URL entries
+		and entries whose program is gone are rewritten to it. Not with
+		ROJO_HUB_HOME set, which only tests do: they must never touch the real
+		agent configs.
+	*/
+	const installed = installLauncher(home, join(__dirname, "mcp-stdio.js"), SERVICE_VERSION);
+	if (installed !== "same") log(`launcher ${installed}`);
+	if (!process.env.ROJO_HUB_HOME) {
+		void agents.reconcile().then(
+			(statuses) => log(`agent entries: ${statuses.map((status) => `${status.id} ${status.state}`).join(", ")}`),
+			(error) => log(`agent entries not reconciled: ${error instanceof Error ? error.message : error}`),
+		);
+	}
 	const problem = await gitProblem();
 	if (problem) log(problem);
 	await hub.restore();

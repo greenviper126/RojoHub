@@ -19,6 +19,7 @@ const builds = [
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/extension.ts"], outfile: "dist/extension.js", external: ["vscode"] },
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/service/main.ts"], outfile: "dist/service.js" },
 	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/extension/uninstall.ts"], outfile: "dist/uninstall.js" },
+	{ ...shared, platform: "node", target: "node20", format: "cjs", entryPoints: ["src/launcher/main.ts"], outfile: "dist/mcp-stdio.js" },
 	{ ...shared, platform: "browser", target: "es2022", format: "iife", entryPoints: ["src/webview/main.ts"], outfile: "dist/webview.js" },
 ];
 

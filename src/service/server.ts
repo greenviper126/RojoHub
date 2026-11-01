@@ -3,9 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { SERVICE_VERSION, STUDIO_PATH, type AgentId, type AgentWishes, type Health, type Snapshot, type Target } from "../common/api";
 import { isProjectFileName } from "../common/projectFiles";
 import { AGENTS, AgentRegistrar } from "./agentConfig";
+import { writeAudit } from "./audit";
 import { Groups } from "./groups";
 import type { Hub } from "./hub";
-import { Mcp } from "./mcp";
+import { Mcp, staleConnection } from "./mcp";
+import { parseClaimMinutes, settingsToken, tokenMatches } from "./ports";
 import { Conflict, NotFound } from "./registry";
 import { acceptWebSocket } from "./websocket";
 
@@ -16,6 +18,7 @@ import { acceptWebSocket } from "./websocket";
 	GET    /events                                   a stream (text/event-stream) of the panel's whole Snapshot, sent on every change
 	GET    /slots
 	POST   /slots                 { path, projectFile? }
+	POST   /slots/:id/relocate { path }               point a stopped project at its moved folder (keeps port and assignments)
 	PUT    /slots/:id/project-file { projectFile }    serve another *.project.json (restarts a serving rojo)
 	DELETE /slots/:id
 	POST   /slots/:id/start
@@ -26,6 +29,7 @@ import { acceptWebSocket } from "./websocket";
 	POST   /slots/:id/build       { output }         rojo build of what the slot serves
 	POST   /slots/:id/sourcemap                      write the served worktree's sourcemap.json once
 	POST   /slots/:id/switch      { target }             a user's switch, which also clears an agent's claim
+	POST   /slots/:id/release                        the user releases an agent's claim (then_return hands back, place asks end; audited)
 	GET    /groups
 	POST   /groups                { name, slotIds?, groupIds? }
 	PUT    /groups/:id            { name?, slotIds?, groupIds? }   groupIds that would loop are refused (409)
@@ -35,18 +39,22 @@ import { acceptWebSocket } from "./websocket";
 	GET    /order                                    the panel's display order
 	PUT    /order                 { projects?, groups? }   (never changes ports)
 	POST   /stop-all                                 stop every serving project, mark every group stopped
-	PUT    /settings              { portRange?, excludedPorts?, sourcemaps? }
+	PUT    /settings              { portRange?, excludedPorts?, sourcemaps?, ... }   yolo and setupCommands only with header X-Rojo-Hub-Token (<hub home>/settings-token); else ignored, and named in `ignored`
 	POST   /shutdown              { stopServing? }
 	GET    /agents                                   Claude Code's and Codex's MCP registration (spec 004)
 	PUT    /agents                { claudeCode?, codex? }   true adds Rojo-Hub to that agent's config, false takes it out
 	POST   /mcp                                      the Model Context Protocol, for agents (src/service/mcp.ts)
 	GET    /studio                                   WebSocket for the Studio plugin (spec 007, src/service/studio.ts)
 	PUT    /studio/places/:key    { slotId }         assign a project to an open Studio place (null: back to its project files)
+	GET    /studio/requests                          agents' pending asks to move a place to their project (spec 014)
+	POST   /studio/requests/:id/move                 the user agrees: saves the assignment the panel makes, ends the ask
+	POST   /studio/requests/:id/decline              the user refuses: ends the ask (both 409 when it is already answered or ended;
+	                                                 header x-rojo-hub-answered-in: chat marks an answer given in the agent's own prompt, for the audit log)
 	POST   /slots/:id/places/:placeId/open           open one of the project's places in Studio, unless it is open (spec 009)
 	POST   /slots/:id/places/:placeId/close          ask that place's Studio to close (never killed)
 	POST   /slots/:id/places/:placeId/reopen         close it, wait for Studio to exit, open it again
 	POST   /slots/:id/places/open-all                open every one of the project's places that is not open
-	(all four refused with 409 while rojoHub.openPlaces is off)
+	(open ones refused with 409 while rojoHub.openPlaces is off, close and reopen while rojoHub.closePlaces is off)
 
 	Only programs on this machine may use it, never a web page:
 	- Host must name the loopback address and this port. A DNS-rebinding page
@@ -72,8 +80,8 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
 	return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-function send(response: ServerResponse, status: number, payload: unknown): void {
-	response.writeHead(status, { "content-type": "application/json" });
+function send(response: ServerResponse, status: number, payload: unknown, extra: Record<string, string> = {}): void {
+	response.writeHead(status, { "content-type": "application/json", ...extra });
 	response.end(JSON.stringify(payload));
 }
 
@@ -101,13 +109,13 @@ const HEARTBEAT_MS = 15000;
 const subscribers = new Set<ServerResponse>();
 export const eventSubscribers = (): number => subscribers.size;
 
-export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void) {
+export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean) => void, agents: AgentRegistrar = new AgentRegistrar()) {
+	settingsToken(hub.home); // created now, so the extension can read it before its first PUT /settings
 	const groups = new Groups(hub);
 	const mcp = new Mcp(hub, groups);
-	const agents = new AgentRegistrar();
 
 	let lastSent = "";
-	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studio.places(), openPlaces: hub.openPlacesOn } satisfies Snapshot);
+	const snapshot = (): string => JSON.stringify({ slots: hub.snapshot(), groups: groups.list(), order: hub.registry.order, studioPlugin: hub.studioPlugin, studioPlaces: hub.studioPlaces(), openPlaces: hub.openPlacesOn, closePlaces: hub.closePlacesOn, placeRequests: hub.requestViews() } satisfies Snapshot);
 	const publish = (force = false): void => {
 		if (subscribers.size === 0) return;
 		let now: string;
@@ -139,12 +147,17 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					response.writeHead(405, { allow: "POST" });
 					return response.end();
 				}
-				const answer = await mcp.handle(await body(request).catch(() => null));
+				const protocol = request.headers["mcp-protocol-version"];
+				// The launcher says its client can put a question to the user (MCP elicitation, spec 014).
+				// Which launcher the call came through (or none), so a chat that kept an older one is told (staleConnection).
+				const connection = staleConnection(request.headers["x-rojo-hub-launcher"]);
+				const answer = await mcp.handle(await body(request).catch(() => null), typeof protocol === "string" ? protocol : undefined, { elicit: request.headers["x-rojo-hub-elicit"] === "1", connection, launcher: typeof request.headers["x-rojo-hub-launcher"] === "string" ? request.headers["x-rojo-hub-launcher"].trim() || null : null });
+				// Every answer names the service, so a launcher notices a replacement between two calls and tells its agent the tools may have changed.
 				if (!answer) {
-					response.writeHead(202);
+					response.writeHead(202, { "x-rojo-hub-version": SERVICE_VERSION });
 					return response.end();
 				}
-				return send(response, 200, answer);
+				return send(response, 200, answer, { "x-rojo-hub-version": SERVICE_VERSION });
 			}
 			if (url.pathname === "/agents") {
 				if (method === "GET") return send(response, 200, await agents.status());
@@ -169,6 +182,9 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				response.on("close", () => subscribers.delete(response));
 				return;
 			}
+			if (method === "GET" && url.pathname === "/setup") {
+				return send(response, 200, hub.setupJobs.all().map((job) => ({ path: job.path, state: job.state, step: job.step, of: job.of, text: job.text })));
+			}
 			if (method === "GET" && url.pathname === "/health") {
 				const health: Health = { ok: true, version: SERVICE_VERSION, pid: process.pid, home: hub.home };
 				return send(response, 200, health);
@@ -192,13 +208,29 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 				const input = await body(request);
 				if (input.slotId !== null && typeof input.slotId !== "string") return send(response, 400, { error: "slotId must be a project id or null" });
 				if (typeof input.slotId === "string") hub.registry.get(input.slotId);
-				hub.studio.assign(parts[2], input.slotId as string | null);
-				return send(response, 200, hub.studio.places());
+				hub.studio.assign(parts[2], input.slotId as string | null, "panel");
+				return send(response, 200, hub.studioPlaces());
+			}
+			if (method === "GET" && url.pathname === "/studio/requests") return send(response, 200, hub.requestViews());
+			if (method === "POST" && parts[0] === "studio" && parts[1] === "requests" && parts.length === 4 && (parts[3] === "move" || parts[3] === "decline")) {
+				const raw = request.headers["x-rojo-hub-elicit-result"];
+				const where = request.headers["x-rojo-hub-answered-in"] === "chat" ? `the agent's chat${typeof raw === "string" && raw ? ` (client answered ${raw})` : ""}` : "VS Code";
+				const answered = hub.requests.answer(parts[2], parts[3], where);
+				if (!answered) throw new Conflict("That request was already answered, or it ended.");
+				// The user answered the agent's own prompt (MCP elicitation, through the launcher): the audit log says where.
+				if (request.headers["x-rojo-hub-answered-in"] === "chat") {
+					const nameOf = (id: string | null) => hub.registry.slots.find((slot) => slot.id === id)?.projectName ?? null;
+					writeAudit(hub.home, { actor: "user", action: parts[3] === "move" ? "move_place" : "decline_place", project: nameOf(answered.askerId), args: { placeId: answered.placeId, from: nameOf(answered.holderId) }, approvedIn: "chat", yolo: false, lifted: false, outcome: "ok" });
+				}
+				return send(response, 200, hub.requestViews());
 			}
 			if (method === "POST" && url.pathname === "/stop-all") return send(response, 200, await groups.stopAll());
 			if (method === "PUT" && url.pathname === "/settings") {
 				const input = await body(request);
 				const excludedPorts = Array.isArray(input.excludedPorts) ? (input.excludedPorts as (number | string)[]) : [];
+				// yolo and setupCommands run programs: only a caller that can read the hub home's token may change them.
+				const trusted = tokenMatches(hub.home, request.headers["x-rojo-hub-token"]);
+				const ignored = trusted ? [] : ["yolo", "setupCommands"].filter((name) => input[name] !== undefined);
 				hub.setPortSettings({
 					portRange: typeof input.portRange === "string" ? input.portRange : "",
 					excludedPorts,
@@ -206,8 +238,13 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					studioPlugin: input.studioPlugin !== false,
 					studioAutoConnect: input.studioAutoConnect === "listed" ? "listed" : "remembered",
 					openPlaces: input.openPlaces === true,
+					closePlaces: input.closePlaces === undefined ? undefined : input.closePlaces === true,
+					claimMinutes: input.claimMinutes === undefined ? undefined : parseClaimMinutes(input.claimMinutes),
+					placeMoves: input.placeMoves === undefined ? undefined : input.placeMoves === "auto" ? "auto" : "ask",
+					yolo: trusted && input.yolo !== undefined ? input.yolo === true : undefined,
+					setupCommands: trusted ? input.setupCommands : undefined,
 				});
-				return send(response, 200, { ok: true });
+				return send(response, 200, { ok: true, setupProblems: hub.setupProblems(), ...(ignored.length > 0 ? { ignored } : {}) });
 			}
 			if (method === "POST" && url.pathname === "/shutdown") {
 				const input = await body(request);
@@ -298,10 +335,23 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					return send(response, 200, { ...made, slot: { ...made.slot, claim: null } });
 				}
 				if (method === "POST" && action === "sourcemap") return send(response, 200, await hub.writeSourcemap(id));
+				if (method === "POST" && action === "release") {
+					// The user's release of an agent's claim (a crashed agent never calls release, and rojoHub.claimMinutes 0 never lets go): the same release as the MCP tool's.
+					hub.registry.get(id);
+					const released = await hub.releaseClaim(id);
+					if (released.kind !== "none") writeAudit(hub.home, { actor: "extension", action: "release_claim", project: id, holder: released.claim.label });
+					const back = released.kind === "none" ? null : released.back;
+					return send(response, 200, { released: released.kind !== "none", returned: back?.returned === true, ...(back && !back.returned ? { notReturned: back.why } : {}) });
+				}
 				if (method === "PUT" && action === "project-file") {
 					const input = await body(request);
 					if (!isProjectFileName(input.projectFile)) return send(response, 400, { error: "projectFile must be a *.project.json file name" });
 					return send(response, 200, await hub.setProjectFile(id, input.projectFile));
+				}
+				if (method === "POST" && action === "relocate") {
+					const input = await body(request);
+					if (typeof input.path !== "string" || input.path.length === 0) return send(response, 400, { error: "path is required" });
+					return send(response, 200, await hub.relocate(id, input.path));
 				}
 				if (method === "POST" && action === "build") {
 					const input = await body(request);

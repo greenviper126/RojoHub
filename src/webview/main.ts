@@ -15,8 +15,10 @@
 	of time, and the panel keeps them.
 */
 
-import { DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
+import { CLAIM_NEVER, DEFAULT_PORT_RANGE, type AgentStatus, type GroupView, type SlotView, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 import { pathBetween } from "../common/groups";
+import { compareVersions } from "../common/version";
+import { parseSetupText } from "../common/setupText";
 import type { Candidate, FromPanel, GroupMember, PanelState, ToPanel } from "../common/panel";
 import { morph } from "./morph";
 import * as pending from "./pending";
@@ -69,6 +71,8 @@ const ui = {
 	targets: new Map<string, TargetOption[]>(),
 	/** The project whose project file list is open; the files come with its status (spec 005). */
 	filePicker: null as null | { id: string },
+	/** The card whose Setup commands editor is open (spec 012); the text arrives from the extension. */
+	setupEditor: null as null | { id: string; text: string; loading: boolean; busy: boolean; error: string | null },
 	/** The project whose ⋯ menu is open, and whether it opens downward (more room below its button). */
 	menu: null as string | null,
 	menuDown: false,
@@ -262,6 +266,7 @@ function notices(slot: SlotView): string {
 }
 
 function claimText(claim: NonNullable<SlotView["claim"]>): string {
+	if (claim.until === CLAIM_NEVER) return `An agent working in ${claim.label} is using this project until it calls release (rojoHub.claimMinutes is 0). Other agents cannot switch it until then; switching it yourself still works, or release the claim here.`;
 	const until = new Date(claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 	return `An agent working in ${claim.label} is using this project until ${until}. Other agents cannot switch it until then; switching it yourself still works.`;
 }
@@ -269,8 +274,8 @@ function claimText(claim: NonNullable<SlotView["claim"]>): string {
 /* Who holds the project (spec 004): shown so a switch by hand is not a surprise to the agent's user. */
 function claimNote(slot: SlotView): string {
 	if (!slot.claim) return "";
-	const until = new Date(slot.claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-	return `<div class="claim muted small" title="${escape(claimText(slot.claim))}">${icon("robot")}<span class="grow ellipsis">Agent in <strong>${escape(slot.claim.label)}</strong> until ${escape(until)}</span></div>`;
+	const until = slot.claim.until === CLAIM_NEVER ? "it releases" : `${new Date(slot.claim.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+	return `<div class="claim muted small" title="${escape(claimText(slot.claim))}">${icon("robot")}<span class="grow ellipsis">Agent in <strong>${escape(slot.claim.label)}</strong> until ${escape(until)}</span><button class="link small" data-action="release-claim" data-id="${escape(slot.id)}" title="End the agent's claim now, so any agent can switch this project again">Release claim</button></div>`;
 }
 
 /** "3 days ago" for a unix time in seconds. */
@@ -395,6 +400,33 @@ function filePicker(slot: SlotView): string {
 }
 
 /*
+	The Setup commands editor (spec 012): one command per line, below it exactly
+	what each line will run, so nothing is a surprise.
+*/
+function setupEditor(slot: SlotView): string {
+	const open = ui.setupEditor;
+	if (!open || open.id !== slot.id) return "";
+	const lines = parseSetupText(open.text);
+	const preview = lines
+		.map((line) => {
+			if (line.fixed !== undefined) return `<div class="setup-line">${icon("lock-small")}<span class="muted">kept as set in settings.json</span></div>`;
+			if (!line.argv) return `<div class="setup-line bad">${icon("warning")}<span>${escape(line.error ?? "invalid")}</span></div>`;
+			return `<div class="setup-line">${icon("terminal")}<span><code>${escape(line.argv[0])}</code>${line.argv.slice(1).map((arg) => ` <code>${escape(arg)}</code>`).join("")}</span></div>`;
+		})
+		.join("");
+	return `<div class="setup-editor">
+		<div class="notice error">${icon("warning")}<span><strong>Dangerous.</strong> These programs run on your machine whenever Rojo-Hub makes a worktree for ${escape(slot.projectName)} (New branch, an agent's new_branch), before it is first served. <code>npm ci</code> runs the repo's install scripts: prefer <code>npm ci --ignore-scripts</code>.</span></div>
+		<label>Commands, one per line (a program, then its arguments; "double quotes" group words)
+			<textarea data-key="setup-text-${escape(slot.id)}" data-input="setup-text" rows="5" spellcheck="false" placeholder="rokit install&#10;wally install&#10;npm ci --ignore-scripts" value="${escape(open.text)}"${open.loading || open.busy ? " disabled" : ""}>${escape(open.text)}</textarea>
+		</label>
+		${open.loading ? `<p class="muted small">${icon("loading", "codicon-modifier-spin")} Reading your settings…</p>` : `<div class="setup-preview" aria-label="What will run">${preview || `<p class="muted small">Nothing will run.</p>`}</div>`}
+		<p class="muted small">No shell, no variables, no <code>&amp;&amp;</code>: each line is one program. A folder or timeout per command is set in settings.json (rojoHub.setupCommands). Saved to your user settings.</p>
+		${open.error ? `<div class="notice error">${icon("error")}<span>${escape(open.error)}</span></div>` : ""}
+		<div class="row">${button("save-setup", open.busy ? "Saving…" : "Save", { icon: open.busy ? "loading" : "save", kind: "primary", disabled: open.loading || open.busy || lines.some((line) => line.argv === null), data: { id: slot.id } })}${button("cancel-setup", "Cancel", { kind: "secondary", disabled: open.busy })}</div>
+	</div>`;
+}
+
+/*
 	A project card. Folded, it is one row (light, name, port, start/stop);
 	open, the full card. `list` is the drag list it belongs to.
 */
@@ -453,6 +485,7 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 		</button>`
 		}
 		${filePicker(slot)}
+		${setupEditor(slot)}
 		${claimNote(slot)}
 		${notices(slot)}
 		${cardPlaces(slot)}
@@ -467,13 +500,13 @@ function projectCard(slot: SlotView, list: string, foldedByDefault: boolean): st
 }
 
 /*
-	A project's places (spec 009), only while rojoHub.openPlaces is on: each
-	place its project file names, whether it is open, and Open, or Close and
-	Reopen. A place that is open is never opened a second time.
+	A project's places (spec 009), while rojoHub.openPlaces or rojoHub.closePlaces is
+	on: each place its project file names, whether it is open, and Open (openPlaces),
+	or Close and Reopen (closePlaces). A place that is open is never opened a second time.
 */
 function cardPlaces(slot: SlotView): string {
 	const places = slot.listedPlaces ?? [];
-	if (!state?.openPlaces || places.length === 0) return "";
+	if (!(state?.openPlaces || state?.closePlaces) || places.length === 0) return "";
 	const rows = places
 		.map((place) => {
 			const key = `place:${slot.id}:${place.placeId}`;
@@ -483,8 +516,12 @@ function cardPlaces(slot: SlotView): string {
 			const actions = busyText
 				? `<span class="pill info">${icon("loading", "codicon-modifier-spin")}<span class="ellipsis">${busyText}</span></span>`
 				: place.open
-					? `${iconButton("place-reopen", "refresh", `Reopen ${name}: close it (Studio asks about unsaved changes), then open it again`, data)}${iconButton("place-close", "close", `Close ${name} (Studio asks about unsaved changes)`, data)}`
-					: button("place-open", "Open", { icon: "link-external", data, kind: "secondary", title: `Open ${name} in Studio` });
+					? !state?.closePlaces
+						? ""
+						: `${iconButton("place-reopen", "refresh", `Reopen ${name}: close it (Studio asks about unsaved changes), then open it again`, data)}${iconButton("place-close", "close", `Close ${name} (Studio asks about unsaved changes)`, data)}`
+					: !state?.openPlaces
+						? ""
+						: button("place-open", "Open", { icon: "link-external", data, kind: "secondary", title: `Open ${name} in Studio` });
 			return `<div class="member card-place">
 				${icon("device-desktop")}
 				<span class="grow two-line">
@@ -566,9 +603,11 @@ function cardMenu(slot: SlotView): string {
 							: ""
 					}
 					${state?.openPlaces && (slot.listedPlaces ?? []).some((place) => !place.open) ? item("open-all-places", "link-external", "Open all places in Studio") : ""}
+					${item("setup-commands", "terminal", "Setup commands…")}
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
+					${slot.state === "running" || slot.state === "starting" ? "" : item("relocate", "folder-opened", "Locate folder…")}
 					${item("remove", "trash", "Remove from Rojo-Hub…", " danger")}
 				</div>`
 				: ""
@@ -763,6 +802,8 @@ function agentsBody(): string {
 	const chip = (agent: AgentStatus) =>
 		agent.state === "connected"
 			? { text: "Connected", tone: "ok", title: `Rojo-Hub is in ${agent.label}'s user config. Turn off to take it out.` }
+			: agent.state === "legacy" || agent.state === "stale"
+				? { text: "Updating", tone: "info", title: `Rojo-Hub's entry in ${agent.label}'s user config is an old one; the service rewrites it to the launcher that starts Rojo-Hub by itself. Turn off to take it out.` }
 			: agent.state === "other"
 				? { text: "Set up by you", tone: "info", title: `${agent.label}'s config already has a rojohub entry pointing elsewhere; Rojo-Hub leaves it alone.` }
 				: agent.state === "unknown"
@@ -772,7 +813,7 @@ function agentsBody(): string {
 					: { text: "Not installed", tone: "", title: `${agent.label} was not found on PATH.` };
 	const rows = [
 		row("vscode", "VS Code agents", agents.vscode, agents.vscode ? { text: "Connected", tone: "ok", title: "Copilot and other agents in VS Code. Nothing is written to disk." } : { text: "Off", tone: "", title: "Turn on to let Copilot and other agents in VS Code use Rojo-Hub." }, false, null),
-		...agents.list.map((agent) => row(agent.id, agent.label, agent.state === "connected", chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && agent.state !== "connected"), agent.error)),
+		...agents.list.map((agent) => row(agent.id, agent.label, ["connected", "legacy", "stale"].includes(agent.state), chip(agent), agent.state === "other" || agent.state === "unknown" || (!agent.installed && !["connected", "legacy", "stale"].includes(agent.state)), agent.error)),
 	].join("");
 	const manual = ui.agentsManual
 		? `<div class="agents-manual">
@@ -786,6 +827,13 @@ function agentsBody(): string {
 		<button class="link small agents-more" data-action="toggle-agents-manual" aria-expanded="${ui.agentsManual}">${icon(ui.agentsManual ? "chevron-down" : "chevron-right")}Other agents and manual setup</button>
 		${manual}
 	</div>`;
+}
+
+/* Yolo mode (spec 012): a red box above everything while rojoHub.yolo is on. */
+function yoloBanner(): string {
+	if (!state!.yolo) return "";
+	return `<div class="notice error yolo">${icon("warning")}<div class="grow"><strong>YOLO MODE IS ON.</strong> Agents may open Studio places and stop projects Studio is using. Claims still hold; everything they do is logged.
+		<div class="row">${button("yolo-off", "Turn off", { icon: "close", kind: "primary" })}</div></div></div>`;
 }
 
 /*
@@ -850,9 +898,25 @@ function studioPlaces(): string {
 				.map((slot) => `<option value="${escape(slot.id)}"${place.assigned === slot.id ? " selected" : ""}>${escape(slot.projectName)}  :${slot.port}${slot.state === "running" ? "" : " (stopped)"}</option>`)
 				.join("");
 			const title = `${place.placeName} (${place.unsaved ? "not saved to Roblox" : place.placeId}) · plugin ${place.pluginVersion}`;
+			/* A plugin loads when a place opens, so an update reaches it only after the place is reopened. */
+			const serviceVersion = state!.service.version;
+			const older = serviceVersion && compareVersions(place.pluginVersion, serviceVersion) < 0 ? ` <span class="pill info shared" title="${escape(`Plugin ${place.pluginVersion} is older than Rojo-Hub ${serviceVersion}. Reopen this place to update.`)}">Older plugin: reopen to update</span>` : "";
+			/* A place several projects list syncs with one at a time (spec 014); an agent's ask to move it shows with its answer buttons. */
+			const listedBy = place.listedBy ?? [];
+			const shared = listedBy.length > 1 ? ` <span class="pill info shared" title="${escape(`Listed by ${listedBy.join(", ")}. It syncs with one project at a time.`)}">Shared</span>` : "";
+			const asks = (state!.placeRequests ?? [])
+				.filter((request) => !place.unsaved && request.placeId === place.placeId)
+				.map(
+					(request) => `<div class="place-request">
+						<span class="grow" title="${escape(`${request.asker} asks to move this place from ${request.holder ?? "its project"}.`)}">${icon("question")} <b>${escape(request.asker)}</b> asks for this place, now synced with ${escape(request.holder ?? "another project")}${request.holderClaimed ? ` <span class="muted">(an agent is using it)</span>` : ""}</span>
+						${button("request-move", "Move", { data: { id: request.id }, kind: "primary", title: `Sync this place with ${request.asker}` })}
+						${button("request-decline", "Decline", { data: { id: request.id }, kind: "secondary", title: "Keep the place where it is" })}
+					</div>`,
+				)
+				.join("");
 			return `<div class="member studio-place">
 				<span class="grow two-line">
-					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}</span>
+					<span class="ellipsis" title="${escape(title)}">${escape(place.placeName)}${place.unsaved ? ` <span class="muted">· unsaved</span>` : ""}${shared}${older}</span>
 					<span class="sub ellipsis" title="${escape(place.message)}">${escape(place.message)}</span>
 				</span>
 				<span class="pill ${status.kind}" title="${escape(place.message)}">${icon(status.icon, status.icon === "loading" ? "codicon-modifier-spin" : "")}<span class="ellipsis">${escape(status.label)}</span></span>
@@ -860,7 +924,7 @@ function studioPlaces(): string {
 					<option value=""${place.assigned ? "" : " selected"}>Automatic</option>
 					${options}
 				</select>
-			</div>${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
+			</div>${asks}${place.status === "choose" || place.status === "none" || place.status === "unsaved" ? byHand : ""}`;
 		})
 		.join("");
 	return `<div class="card studio-places">${rows}</div>`;
@@ -1058,6 +1122,7 @@ function render(): void {
 	morph(
 		app,
 		`
+		${yoloBanner()}
 		${banner}
 		${agentNudge()}
 		${studioPluginNotice()}
@@ -1502,6 +1567,22 @@ document.addEventListener("click", (event) => {
 			return;
 		case "create-branch":
 			return createBranch();
+		case "setup-commands":
+			ui.setupEditor = { id, text: "", loading: true, busy: false, error: null };
+			send({ type: "openSetupEditor", id });
+			return render();
+		case "save-setup":
+			if (!ui.setupEditor) return;
+			ui.setupEditor.busy = true;
+			ui.setupEditor.error = null;
+			send({ type: "setSetupCommands", id, text: ui.setupEditor.text });
+			return render();
+		case "cancel-setup":
+			ui.setupEditor = null;
+			return render();
+		case "release-claim":
+			sendTracked(`slot:${id}`, { type: "releaseClaim", id });
+			return render();
 		case "sourcemap":
 			sendTracked(`slot:${id}`, { type: "sourcemap", id });
 			return render();
@@ -1542,6 +1623,10 @@ document.addEventListener("click", (event) => {
 		case "open-all-places":
 			ui.menu = null;
 			sendTracked(`places:${id}`, { type: "openAllPlaces", id });
+			return render();
+		case "relocate":
+			ui.menu = null;
+			sendTracked(`slot:${id}`, { type: "relocate", id });
 			return render();
 		case "remove":
 			return send({ type: "remove", id });
@@ -1692,6 +1777,11 @@ document.addEventListener("click", (event) => {
 		case "toggle-agents-manual":
 			ui.agentsManual = !ui.agentsManual;
 			return render();
+		case "yolo-off":
+			return send({ type: "yoloOff" });
+		case "request-move":
+		case "request-decline":
+			return send({ type: "answerPlaceRequest", id, answer: action === "request-move" ? "move" : "decline" });
 		case "nudge-setup":
 			ui.collapsed.agents = false;
 			persist();
@@ -1757,6 +1847,12 @@ document.addEventListener("input", (event) => {
 		case "filter":
 			ui.filter = input.value;
 			return render();
+		case "setup-text":
+			if (ui.setupEditor) {
+				ui.setupEditor.text = input.value;
+				ui.setupEditor.error = null;
+			}
+			return render();
 		case "rename":
 			if (ui.renaming) ui.renaming.name = input.value;
 			return;
@@ -1777,6 +1873,7 @@ document.addEventListener("keydown", (event) => {
 	if (event.key === "Escape") {
 		if (ui.menu) ui.menu = null;
 		else if (ui.filePicker) ui.filePicker = null;
+		else if (kind === "setup-text") ui.setupEditor = null;
 		else if (kind === "search") ui.picker = null;
 		else if (kind === "branch-name" && ui.picker) ui.picker.create = null;
 		else if (kind === "filter") ui.filter = null;
@@ -1934,6 +2031,20 @@ window.addEventListener("message", (event: MessageEvent<ToPanel>) => {
 					ui.picker.create.busy = false;
 					ui.picker.create.error = message.error;
 				} else ui.picker = null;
+				render();
+			}
+			return;
+		case "setupEditor":
+			if (ui.setupEditor?.id === message.id) {
+				if (message.saved) ui.setupEditor = null;
+				else if (message.error) {
+					ui.setupEditor.busy = false;
+					ui.setupEditor.loading = false;
+					ui.setupEditor.error = message.error;
+				} else {
+					ui.setupEditor.text = message.text ?? "";
+					ui.setupEditor.loading = false;
+				}
 				render();
 			}
 			return;

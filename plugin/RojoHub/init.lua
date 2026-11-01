@@ -9,7 +9,10 @@
 
 	It never takes over a session the user started, never reconnects a session
 	the user disconnected from or declined to sync, and does nothing outside edit
-	mode.
+	mode. The one exception is a handoff (spec 014): when the user moves the place
+	to another project in VS Code (Move, the panel's Studio places, request_place),
+	the service sends a new `target.handoff` number, and a plugin synced with a
+	different project disconnects from it and connects to the new one, once.
 
 	When the project's rojo restarts (a crash, a port move, an agent's stop and
 	start), the session it was synced to ends. That loss is held for a moment:
@@ -33,6 +36,7 @@ local Settings = require(Plugin.Settings)
 local ServeSession = require(Plugin.ServeSession)
 local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local HubVersion = require(script.Version)
+local UpdateNote = require(script.UpdateNote)
 
 local SERVICE_URL = "ws://127.0.0.1:34870/studio"
 -- Must match STUDIO_PROTOCOL in Rojo-Hub's src/common/api.ts.
@@ -82,6 +86,10 @@ function Hub.new(app)
 		holdOffUntil = 0,
 		-- The session whose patches are watched for changes that could not be applied.
 		hookedSession = nil,
+		-- The last handoff number acted on (or found moot), so each handoff switches once (spec 014).
+		handoffSeen = nil,
+		-- A handoff is ending the session: that is not a loss to hold and resume (spec 010).
+		handingOver = false,
 		-- The place's name on Roblox; Studio names every DataModel "Place1".
 		placeName = nil,
 		stopped = false,
@@ -304,6 +312,38 @@ function Hub:currentSession()
 	}
 end
 
+--[[
+	The branch line for the Connected page, or nil: the branch Rojo-Hub is serving,
+	with the worktree's name when that differs from it ("feat/theme-ui (my-wt)"),
+	or just the worktree's name when no branch is known (a detached head). Only
+	while the service's answer is about the project this place is synced with, so
+	a stale answer never names the wrong branch. A live switch sends a new answer,
+	which redraws the page.
+]]
+function Hub:branchText()
+	local match = self.match
+	local target = match and match.status == "connect" and match.target
+	local session = target and self:currentSession()
+	if not session or session.port ~= target.port then
+		return nil
+	end
+	local branch = if type(target.branch) == "string" and target.branch ~= "" then target.branch else nil
+	local label = if type(target.targetLabel) == "string" and target.targetLabel ~= "" then target.targetLabel else nil
+	if label and string.find(label, [=[^%a:[\/]]=]) then
+		-- The service falls back to the folder's path: only its last part is worth showing.
+		label = string.match(label, [=[([^\/]+)[\/]*$]=])
+	end
+	if branch and label and label ~= branch then
+		return string.format("%s (%s)", branch, label)
+	end
+	return branch or label
+end
+
+-- "Reopen this place to update" when the service is newer than this plugin; else nil.
+function Hub:updateNote()
+	return UpdateNote(self.match)
+end
+
 -- Tells the service what this place is synced to, when that changed.
 function Hub:report()
 	local connected = self:currentSession()
@@ -365,8 +405,14 @@ function Hub:evaluate()
 	end
 	local app = self.app
 	if app.serveSession ~= nil then
-		-- Connecting, confirming or synced: never take over a session.
+		-- Connecting, confirming or synced: never take over a session, unless the user handed
+		-- this place to another project just now.
+		self:handOverIfAsked(match.target)
 		return
+	end
+	if match.target.handoff ~= nil then
+		-- Nothing to take over: the normal rules below connect. Not a handoff to act on later.
+		self.handoffSeen = match.target.handoff
 	end
 	local page = app.state.appStatus
 	if page == "Settings" or page == "Confirming" then
@@ -391,6 +437,47 @@ function Hub:evaluate()
 	end
 	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = tries + 1 }
 
+	self:connect(target)
+end
+
+--[[
+	A handoff (spec 014): the service sends `target.handoff`, a number that is new
+	each time the user moves this place to a project (Move, the panel, request_place).
+	If a session is live with a different project, it is ended the way Rojo's
+	Disconnect ends it and the new project is connected, once: the number is
+	remembered, so a user who connects by hand afterwards is not fought. Nothing
+	happens without a number, while connecting or confirming, on the Settings page,
+	or outside edit mode (evaluate returns before this); a number that arrives
+	while the session is the target's own is just remembered.
+]]
+function Hub:handOverIfAsked(target)
+	local token = target.handoff
+	if token == nil or token == self.handoffSeen then
+		return
+	end
+	local current = self:currentSession()
+	local app = self.app
+	local page = app.state.appStatus
+	if current == nil or page == "Confirming" or page == "Settings" or self.resuming then
+		-- Still connecting, or the user is busy in a dialog: look again on the next tick.
+		return
+	end
+	self.handoffSeen = token
+	if current.port == target.port then
+		-- The place is already with the project it was handed to (a restart gives a new session, same port).
+		return
+	end
+	Log.info("Rojo-Hub: handing over from {} to {}", current.projectName, target.projectName)
+	self.handingOver = true
+	local ok, err = pcall(app.endSession, app)
+	self.handingOver = false
+	if not ok then
+		Log.warn("Rojo-Hub could not end the session to hand over: {}", err)
+		return
+	end
+	-- Record the ended session now, so the report that follows does not mark the new one as tried.
+	self:report()
+	self.attempt = { sessionId = target.sessionId, at = os.clock(), tries = 1 }
 	self:connect(target)
 end
 
@@ -438,7 +525,7 @@ function Hub:holdLoss(details)
 		return true
 	end
 	local lost = self.reportedSession
-	if not self.active or lost == nil or self.declined == lost then
+	if self.handingOver or not self.active or lost == nil or self.declined == lost then
 		return false
 	end
 	if not Settings:get("hubAutoConnect") or not RunService:IsEdit() then

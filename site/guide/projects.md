@@ -36,7 +36,8 @@ A project's port, in order:
 
 1. **`servePort`** in the project file, if set. It wins over every setting.
 2. Otherwise a hash of the repo's **first commit**, in `rojoHub.portRange` (default `34873-35872`).
-   Same on every machine; renaming changes nothing.
+   Every clone shares that commit, so the port is the same on every machine unless something else is
+   in the way; renaming the repo or project changes nothing.
 3. If that port is taken or excluded, the next free one. The card says so.
 
 34870 (Rojo-Hub's service) and 34872 (Rojo's default) are never hashed to. A `servePort` of 34870, or
@@ -56,6 +57,13 @@ Commit a `servePort` in the project file: `"servePort": 35100`.
 
 **Build place file…** (⋯ menu) runs `rojo build` on exactly what the project serves and saves a
 `.rbxl` where you choose.
+
+## Moved folder
+
+If you move or re-clone a repo, **Locate folder…** (⋯ menu, while stopped) points the project at
+the new folder and keeps its port, groups and Studio place assignments, which removing and re-adding
+would lose. The new folder must be the same repo (same first commit) with the same project `name`.
+Agents have `relocate_project`.
 
 ## Remove
 

@@ -7,7 +7,15 @@
 export const SERVICE_PORT = 34870;
 /** The port range when rojoHub.portRange is not set; package.json's setting default must match. */
 export const DEFAULT_PORT_RANGE = "34873-35872";
-export const SERVICE_VERSION = "0.21.0";
+/** rojoHub.claimMinutes when unset or invalid (spec 004). */
+export const DEFAULT_CLAIM_MINUTES = 15;
+/*
+	A claim's `until` when rojoHub.claimMinutes is 0: a time no clock reaches, so
+	every "has it run out" check, and claims.json, work unchanged. Only wording
+	and the panel need to know it.
+*/
+export const CLAIM_NEVER = Number.MAX_SAFE_INTEGER;
+export const SERVICE_VERSION = "0.22.13";
 /** Where the service answers MCP (spec 004). */
 export const MCP_URL = `http://127.0.0.1:${SERVICE_PORT}/mcp`;
 
@@ -61,12 +69,14 @@ export interface SlotView {
 	targetsAt: number;
 	/** Whether the service keeps the served worktree's sourcemap.json current, and why not (spec 003). */
 	sourcemap: { state: "watching" | "off" | "error"; detail: string };
-	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. */
+	/** An agent that switched this project and asked to keep it for a while (spec 004); null when none. `until` is CLAIM_NEVER when rojoHub.claimMinutes is 0. */
 	claim: { label: string; until: number } | null;
 	/** Studio places whose Rojo-Hub plugin is synced to this project now (spec 007). */
 	places: StudioPlace[];
 	/** The places its project file names (servePlaceIds, placeId; not blockedPlaceIds), for opening them (spec 009). Missing from services older than 0.20.0. */
 	listedPlaces?: ListedPlace[];
+	/** The Rojo that serves it, once it has answered; null when it has not (the `version` tool reads it). Missing from services older than 0.22.3. */
+	rojoVersion?: string | null;
 }
 
 /* One of a project's places on its card, for opening it in Studio (spec 009). */
@@ -86,6 +96,10 @@ export interface PlaceOpened {
 	placeId: number;
 	placeName: string | null;
 	outcome: "opened" | "already-open";
+	/** For already-open: what said so. A plugin is connected; a process only means a Studio's command line names the place (it may be loading, closing or on its start page). */
+	evidence?: "plugin" | "process";
+	/** For process evidence: the Studio process IDs. */
+	pids?: number[];
 }
 
 /*
@@ -152,6 +166,15 @@ export interface StudioProject {
 	reason: "assigned" | "servePlaceIds" | "placeId" | "remembered";
 	/** This place has synced with this project before, so its first-sync confirmation was already accepted. */
 	accepted: boolean;
+	/*
+		Set when the user handed this place to this project on purpose (Move on a
+		request, the panel's Studio places, request_place's own assignment, yolo): a
+		number that is new for each handoff. A plugin that is synced with another
+		project then switches once, by itself, and remembers the number; without
+		one it never takes over a live session (spec 014). Optional, so older
+		plugins, which skip unknown fields, need no protocol bump.
+	*/
+	handoff?: number;
 }
 
 /*
@@ -200,6 +223,28 @@ export interface StudioPlaceView {
 	syncedWith: string | null;
 	/** Rojo's first-sync confirmation is open in the place, waiting for the user. */
 	confirming: boolean;
+	/** The names of the registered projects whose project files list this place; more than one makes it shared (spec 014). Missing from services older than 0.22.2. */
+	listedBy?: string[];
+}
+
+/*
+	An agent's ask to move a Studio place to its project, waiting for the user
+	(spec 014). Move saves the assignment the panel makes; Decline ends the ask.
+	Kept in the service's memory only.
+*/
+export interface PlaceRequestView {
+	id: string;
+	placeId: number;
+	/** From the open place or the project's file; null until known. */
+	placeName: string | null;
+	askerId: string;
+	asker: string;
+	/** The project that holds the place now; null when none does (the place closed meanwhile). */
+	holderId: string | null;
+	holder: string | null;
+	/** Another agent has claimed the holding project. */
+	holderClaimed: boolean;
+	since: number;
 }
 
 /*
@@ -236,6 +281,10 @@ export interface Snapshot {
 	studioPlaces?: StudioPlaceView[];
 	/** rojoHub.openPlaces (spec 009); missing from services older than 0.20.0, which cannot open places. */
 	openPlaces?: boolean;
+	/** rojoHub.closePlaces: Close and Reopen; missing from services older than 0.22.6. */
+	closePlaces?: boolean;
+	/** Agents' pending asks for Studio places (spec 014); missing from services older than 0.22.2. */
+	placeRequests?: PlaceRequestView[];
 }
 
 /** What POST /slots/:id/branch made. */
@@ -245,6 +294,14 @@ export interface BranchResult {
 	branch: string;
 	/** "orca" when Orca made the worktree, "git" for a git worktree beside the repo. */
 	via: "orca" | "git";
+	/** The start point actually used: the base, or its remote ref when the local base was behind. */
+	from: string;
+	/** Fetch or divergence notes for the answer. */
+	notes: string[];
+	/** False when the worktree's setup commands are still running (the MCP call waits only so long): nothing was switched (spec 012). */
+	switched: boolean;
+	/** One line per setup command that ran, or the note that setup is still running. */
+	setupNotes: string[];
 }
 
 export interface TargetOption {
@@ -300,8 +357,18 @@ export interface PortSettings {
 		last synced with.
 	*/
 	studioAutoConnect?: "listed" | "remembered";
-	/** rojoHub.openPlaces: open, close and reopen a project's places from the panel and agents (spec 009); missing means off. */
+	/** rojoHub.openPlaces: open a project's places from the panel and agents (spec 009); missing means off. */
 	openPlaces?: boolean;
+	/** rojoHub.closePlaces: close and reopen them (Studio still asks about unsaved changes); missing keeps the saved value. */
+	closePlaces?: boolean;
+	/** rojoHub.claimMinutes (spec 004): how long an agent's claim lasts after its last call; 0 never runs out. Missing keeps the saved value; invalid means 15. */
+	claimMinutes?: number;
+	/** rojoHub.placeMoves (spec 014): "auto" moves a place an agent asks for at once when no other agent claimed the project holding it; "ask" (missing) asks the user. Missing keeps the saved value. */
+	placeMoves?: "ask" | "auto";
+	/** rojoHub.yolo (spec 012, design 4): the user lifted the guards. Only pushed once the user accepted the warning; missing means off. */
+	yolo?: boolean;
+	/** rojoHub.setupCommands: repo path -> commands run in a new worktree before it is first served (spec 012); the service validates it. */
+	setupCommands?: unknown;
 }
 
 /*
@@ -339,8 +406,12 @@ export interface AgentStatus {
 	label: string;
 	/** Its CLI was found on PATH. */
 	installed: boolean;
-	/** "connected": its user config has Rojo-Hub's entry; "other": an entry named rojohub with another URL, which is the user's own. */
-	state: "connected" | "absent" | "other" | "unknown";
+	/**
+	 * "connected": its user config has Rojo-Hub's launcher entry; "legacy": the old URL entry, rewritten to the launcher by the service;
+	 * "stale": a launcher entry whose program or script is gone, rewritten likewise; "other": an entry named rojohub that is
+	 * neither, which is the user's own.
+	 */
+	state: "connected" | "legacy" | "stale" | "absent" | "other" | "unknown";
 	/** The last add or remove that failed, until the next one. */
 	error: string | null;
 }

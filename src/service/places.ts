@@ -7,7 +7,8 @@ import { Conflict } from "./registry";
 
 /*
 	Opening a project's Studio places from VS Code and from agents (spec 009).
-	Off unless rojoHub.openPlaces is on. A place is opened through the link the
+	Opening is off unless rojoHub.openPlaces is on; closing and reopening are off unless
+	rojoHub.closePlaces is on (a reopen's own open step needs only that). A place is opened through the link the
 	website's Edit in Studio uses, which needs the place's universe ID (M1),
 	looked up once and kept. A place already open is never opened again: Studio
 	would open a second copy (M4). Closing asks the window to close, as its X
@@ -15,6 +16,7 @@ import { Conflict } from "./registry";
 */
 
 export const OFF_MESSAGE = "Opening Studio places is turned off in Rojo-Hub's settings (rojoHub.openPlaces). The user can turn it on in VS Code.";
+export const CLOSE_OFF_MESSAGE = "Closing and reopening Studio places is turned off in Rojo-Hub's settings (rojoHub.closePlaces). The user can turn it on in VS Code.";
 
 /** How long a launched place counts as opening, until its plugin reports it. */
 const OPENING_MS = 2 * 60 * 1000;
@@ -39,13 +41,25 @@ export function placeInCommandLine(commandLine: string): number | null {
 	return found ? Number(found[1]) : null;
 }
 
+/** A close request's outcome: asked, or why not ("failed: ..." when asking itself failed). */
+export type CloseAnswer = "asked" | "gone" | "no-window" | "dialog" | `failed${string}`;
+
+export function closeReason(answer: CloseAnswer): string {
+	if (answer === "gone") return "it had already exited";
+	if (answer === "no-window") return "Windows shows no window for it";
+	if (answer === "dialog") return "its window is not taking input, as while a dialog is open";
+	return answer === "asked" ? "asked to close" : `asking failed (${answer.replace(/^failed:? ?/, "") || "no reason given"})`;
+}
+
 /** What Places needs from the machine and from Roblox; replaced in tests, which never open Studio. */
 export interface PlaceSystem {
 	lookup(placeId: number): Promise<{ universeId: number; name: string | null }>;
 	launch(link: string): void;
 	processes(): Promise<StudioProcess[]>;
-	/** Asks a Studio window to close, as its X does. False when it has no window to ask. */
-	close(pid: number): Promise<boolean>;
+	/** Asks a Studio window to close, as its X does; else why it could not be asked. */
+	close(pid: number): Promise<CloseAnswer>;
+	/** A description of the process's windows, for the log; tests leave it out. */
+	windows?(pid: number): Promise<string>;
 	alive(pid: number): boolean;
 }
 
@@ -94,9 +108,35 @@ export const windowsSystem: PlaceSystem = {
 			})
 			.filter((entry) => Number.isInteger(entry.pid) && entry.pid > 0);
 	},
+	/*
+		CloseMainWindow posts WM_CLOSE, and returns false without posting when the
+		window is disabled: Windows disables it while Studio shows a modal dialog
+		(a save prompt, publishing, a plugin's permission prompt).
+	*/
 	async close(pid) {
-		const out = await powershell(`$p = Get-Process -Id ${Math.trunc(pid)} -ErrorAction SilentlyContinue; if ($p) { $p.CloseMainWindow() } else { $false }`);
-		return /true/i.test(out);
+		let out: string;
+		try {
+			out = await powershell(
+				`$p = Get-Process -Id ${Math.trunc(pid)} -ErrorAction SilentlyContinue; if (-not $p) { "gone" } elseif ($p.MainWindowHandle -eq 0) { "no-window" } elseif ($p.CloseMainWindow()) { "asked" } else { "dialog" }`,
+			);
+		} catch (error) {
+			const failure = error as Error & { killed?: boolean; stderr?: string };
+			return failure.killed ? "failed: timed out" : `failed: ${(failure.stderr ?? "").trim().split(/\r?\n/)[0] || "PowerShell failed"}`;
+		}
+		const answer = out.trim();
+		return answer === "asked" || answer === "gone" || answer === "no-window" || answer === "dialog" ? answer : `failed: unexpected answer "${answer.slice(0, 80)}"`;
+	},
+	/* For the log when a close was not taken: which window .NET took for the main one, and every visible top-level window of the process. */
+	async windows(pid) {
+		const out = await powershell(
+			`Add-Type -Namespace RojoHub -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint c); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n); public delegate bool Each(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(Each f, IntPtr l);'
+$target = ${Math.trunc(pid)}; $p = Get-Process -Id $target -ErrorAction SilentlyContinue
+if ($p) { "main $($p.MainWindowHandle) '$($p.MainWindowTitle)'" }
+$found = New-Object System.Collections.ArrayList
+[void][RojoHub.W]::EnumWindows({ param($h, $l) $o = [uint32]0; [void][RojoHub.W]::GetWindowThreadProcessId($h, [ref]$o); if ($o -eq $target -and [RojoHub.W]::IsWindowVisible($h)) { $s = New-Object System.Text.StringBuilder 256; [void][RojoHub.W]::GetWindowText($h, $s, 256); [void]$found.Add("$h '$s' enabled=$([RojoHub.W]::IsWindowEnabled($h)) owner=$([RojoHub.W]::GetWindow($h, 4))") }; $true }, [IntPtr]::Zero)
+$found`,
+		);
+		return out.trim().split(/\r?\n/).join("; ");
 	},
 	alive(pid) {
 		try {
@@ -134,6 +174,8 @@ export class Places {
 		private readonly reported: () => { placeId: number; placeName: string }[],
 		private readonly system: PlaceSystem = windowsSystem,
 		public log: (message: string) => void = () => undefined,
+		/** rojoHub.closePlaces: Close and Reopen. Never implied by openPlaces or yolo. */
+		private readonly closeEnabled: () => boolean = () => false,
 	) {
 		try {
 			this.known = JSON.parse(readFileSync(this.file, "utf8")) as Record<string, Known>;
@@ -157,6 +199,10 @@ export class Places {
 
 	private check(): void {
 		if (!this.enabled()) throw new Conflict(OFF_MESSAGE);
+	}
+
+	private checkClose(): void {
+		if (!this.closeEnabled()) throw new Conflict(CLOSE_OFF_MESSAGE);
 	}
 
 	private serial<T>(placeId: number, work: () => Promise<T>): Promise<T> {
@@ -226,19 +272,29 @@ export class Places {
 		return found.universeId;
 	}
 
-	/** Whether the place is open: its plugin reports it, or a Studio's command line names it (M5). */
-	private async openNow(placeId: number): Promise<"plugin" | "process" | null> {
-		if (this.reportedName(placeId) !== null) return "plugin";
+	/** Whether the place is open, and what says so: its plugin reports it, or a Studio's command line names it (M5). */
+	private async openNow(placeId: number): Promise<{ evidence: "plugin" } | { evidence: "process"; pids: number[] } | null> {
+		if (this.reportedName(placeId) !== null) return { evidence: "plugin" };
 		const processes = await this.system.processes().catch(() => []);
-		return processes.some((entry) => entry.placeId === placeId) ? "process" : null;
+		const pids = processes.filter((entry) => entry.placeId === placeId).map((entry) => entry.pid);
+		return pids.length > 0 ? { evidence: "process", pids } : null;
 	}
 
 	/** Opens a place in Studio unless it is open already. `gameId`: the project file's, when it sets one. */
 	async open(placeId: number, gameId: number | null = null): Promise<PlaceOpened> {
 		this.check();
+		return this.launch(placeId, gameId);
+	}
+
+	/** The open itself, without the openPlaces check: a reopen is allowed by closePlaces alone. */
+	private launch(placeId: number, gameId: number | null): Promise<PlaceOpened> {
 		return this.serial(placeId, async () => {
 			this.errors.delete(placeId);
-			if (await this.openNow(placeId)) return { placeId, placeName: this.name(placeId), outcome: "already-open" as const };
+			const open = await this.openNow(placeId);
+			if (open) {
+				if (open.evidence === "process") this.log(`places: ${this.label(placeId)} looks open (Studio pid ${open.pids.join(", ")}, plugin not connected); not opened`);
+				return { placeId, placeName: this.name(placeId), outcome: "already-open" as const, ...open };
+			}
 			try {
 				const universeId = await this.universe(placeId, gameId);
 				this.system.launch(placeLink(placeId, universeId));
@@ -264,14 +320,23 @@ export class Places {
 		);
 	}
 
-	private async askToClose(placeId: number, processes: StudioProcess[]): Promise<void> {
-		const asked = await Promise.all(processes.map((entry) => this.system.close(entry.pid).catch(() => false)));
-		if (!asked.some(Boolean)) throw new Conflict(`Studio did not take the request to close ${this.label(placeId)}; close it in Studio.`);
+	/** Asks each of the place's Studios to close; returns the ones that were asked (none when all had exited). */
+	private async askToClose(placeId: number, processes: StudioProcess[]): Promise<StudioProcess[]> {
+		const answers = await Promise.all(processes.map((entry) => this.system.close(entry.pid).catch((error): CloseAnswer => (error instanceof Error ? `failed: ${error.message}` : "failed"))));
+		const asked = processes.filter((_, index) => answers[index] === "asked");
+		if (asked.length > 0 || answers.every((answer) => answer === "gone")) return asked;
+		const why = answers.map((answer, index) => `Studio pid ${processes[index].pid}: ${closeReason(answer)}`).join("; ");
+		const message = `Studio did not take the request to close ${this.label(placeId)} (${why}).`;
+		this.log(`places: ${message}`);
+		for (const [index, entry] of processes.entries()) {
+			if (answers[index] !== "gone" && this.system.windows) this.log(`places: Studio pid ${entry.pid} windows: ${await this.system.windows(entry.pid).catch((error) => String(error))}`);
+		}
+		throw new Conflict(answers.includes("dialog") ? `${message} Close the dialog in Studio, then try again.` : `${message} Close it in Studio.`);
 	}
 
 	/** Asks the place's Studio to close; Studio may ask about unsaved changes first. Never kills it. */
 	async close(placeId: number): Promise<void> {
-		this.check();
+		this.checkClose();
 		return this.serial(placeId, async () => {
 			this.errors.delete(placeId);
 			await this.askToClose(placeId, await this.processesOf(placeId));
@@ -286,14 +351,14 @@ export class Places {
 		rest goes on in the background, shown on the card.
 	*/
 	async reopen(placeId: number, gameId: number | null = null, waitMs = REOPEN_WAIT_MS): Promise<void> {
-		this.check();
+		this.checkClose();
 		const processes = await this.serial(placeId, async () => {
 			this.errors.delete(placeId);
-			const found = await this.processesOf(placeId);
-			await this.askToClose(placeId, found);
+			// Only the Studios asked to close are waited for: one that was not asked may never exit.
+			const asked = await this.askToClose(placeId, await this.processesOf(placeId));
 			this.busy.set(placeId, { kind: "reopening", since: Date.now() });
 			this.log(`places: reopening ${this.label(placeId)}`);
-			return found;
+			return asked;
 		});
 		void (async () => {
 			const deadline = Date.now() + waitMs;
@@ -306,7 +371,7 @@ export class Places {
 				await new Promise((done) => setTimeout(done, 500));
 			}
 			this.busy.delete(placeId);
-			await this.open(placeId, gameId).catch((error) => this.errors.set(placeId, error instanceof Error ? error.message : String(error)));
+			await this.launch(placeId, gameId).catch((error) => this.errors.set(placeId, error instanceof Error ? error.message : String(error)));
 		})();
 	}
 }

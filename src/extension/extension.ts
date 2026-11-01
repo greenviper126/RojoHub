@@ -5,9 +5,12 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import * as vscode from "vscode";
 
-import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView } from "../common/api";
+import { MCP_URL, SERVICE_VERSION, type AgentStatus, type DisplayOrder, type GroupResult, type GroupView, type SlotView, type Snapshot, type TargetOption, type StudioPluginStatus, type StudioPlaceView, type PlaceRequestView } from "../common/api";
+import { newerInstalled, profileExtensionsFile } from "./reload";
 import { pathBetween } from "../common/groups";
 import { pathKey } from "../common/paths";
+import { fromEditor, toEditor, type RawCommand } from "../common/setupText";
+import { parseSetupCommands } from "../service/setup";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
 import { compareVersions } from "../common/version";
 import type { Candidate, FromPanel, GroupMember, WorkspaceInfo } from "../common/panel";
@@ -47,6 +50,7 @@ let starting: Promise<void> | null = null;
 /** The service's state folder: from its /health once seen, else where it puts it by default. */
 let hubHome = expectedHome();
 let statusItem: vscode.StatusBarItem;
+let yoloItem: vscode.StatusBarItem;
 let workspaceRepos: string[] = [];
 let lastSlots: SlotView[] = [];
 let lastGroups: GroupView[] = [];
@@ -54,8 +58,11 @@ let lastGroups: GroupView[] = [];
 let lastStudioPlugin: StudioPluginStatus | null = null;
 /** Open Studio places, from the last snapshot (spec 007). */
 let lastStudioPlaces: StudioPlaceView[] = [];
+/** Agents' pending asks for Studio places, from the last snapshot (spec 014). */
+let lastPlaceRequests: PlaceRequestView[] = [];
 /** rojoHub.openPlaces as the service has it (spec 009). */
 let lastOpenPlaces = false;
+let lastClosePlaces = false;
 let lastOrder: DisplayOrder = { projects: [], groups: [] };
 let lastAgents: AgentStatus[] = [];
 /** The event stream is connected and has sent a snapshot, so projects, groups and order need no polling. */
@@ -155,6 +162,49 @@ function checkOutdated(serviceVersion: string | undefined): void {
 		});
 }
 
+/*
+	Reloads this window when a newer Rojo-Hub is installed in this profile
+	(rojoHub.reloadOnUpdate), after a notification with ten seconds to say no.
+	Each window does it for itself; the first one to start up starts the new
+	service. Never in a development host. Asked again for a still newer version,
+	not for one the user said "Not Now" to.
+*/
+const RELOAD_AFTER_MS = 10_000;
+let reloadFor: string | null = null;
+const declinedReload = new Set<string>();
+function checkInstalledUpdate(): void {
+	try {
+		if (extensionContext.extensionMode === vscode.ExtensionMode.Development) return;
+		if (vscode.workspace.getConfiguration("rojoHub").get<boolean>("reloadOnUpdate", true) !== true) return;
+		const workspace = (vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri)?.toString();
+		const list = profileExtensionsFile(extensionContext.globalStorageUri.fsPath, extensionContext.extensionPath, workspace);
+		const newer = list ? newerInstalled(list, SERVICE_VERSION) : null;
+		if (!newer || reloadFor === newer || declinedReload.has(newer)) return;
+		// A reload that did not bring that version up is not repeated (per workspace, so other windows still reload): never a loop.
+		if (extensionContext.workspaceState.get<string>("rojoHub.reloadedFor") === newer) return;
+		reloadFor = newer;
+		let done = false;
+		const reload = () => {
+			if (done) return;
+			done = true;
+			void Promise.resolve(extensionContext.workspaceState.update("rojoHub.reloadedFor", newer)).finally(() => void vscode.commands.executeCommand("workbench.action.reloadWindow"));
+		};
+		const timer = setTimeout(reload, RELOAD_AFTER_MS);
+		void vscode.window.showInformationMessage(`Rojo-Hub ${newer} is installed. Reloading this window in 10 seconds so it takes effect.`, "Reload Now", "Not Now").then((choice) => {
+			if (choice === "Reload Now") {
+				clearTimeout(timer);
+				reload();
+			} else if (choice === "Not Now") {
+				clearTimeout(timer);
+				done = true;
+				declinedReload.add(newer);
+			}
+		});
+	} catch {
+		// the stub vscode of the smoke test, or a host without these parts: no reload
+	}
+}
+
 async function refresh(): Promise<void> {
 	let health = await client.health();
 	if (!health && !serviceHealth.error) {
@@ -186,7 +236,9 @@ async function refresh(): Promise<void> {
 	}
 	lastAgents = health ? await client.agents().catch(() => lastAgents) : lastAgents;
 	if (!health) ({ slots: lastSlots, groups: lastGroups, order: lastOrder } = savedState(hubHome, lastSlots));
+	if (health && !streaming) lastPlaceRequests = await client.placeRequests().catch(() => lastPlaceRequests);
 	noticeDisconnects(health ? lastSlots : []);
+	noticePlaceRequests(health ? lastPlaceRequests : []);
 	if (health) {
 		noticePortMoves(lastSlots);
 		prefetch();
@@ -207,9 +259,12 @@ async function applySnapshot(snapshot: Snapshot): Promise<void> {
 	lastOrder = snapshot.order;
 	lastStudioPlugin = snapshot.studioPlugin ?? null;
 	lastStudioPlaces = snapshot.studioPlaces ?? [];
+	lastPlaceRequests = snapshot.placeRequests ?? [];
 	lastOpenPlaces = snapshot.openPlaces === true;
+	lastClosePlaces = snapshot.closePlaces === true;
 	noticeDisconnects(lastSlots);
 	noticePortMoves(lastSlots);
+	noticePlaceRequests(lastPlaceRequests);
 	render();
 	prefetch();
 	await refreshWorkspaces();
@@ -302,8 +357,11 @@ function render(): void {
 		agentNudge: serviceHealth.running && showAgentNudge(hubHome, lastSlots.length, lastAgents),
 		studioPlugin: serviceHealth.running ? lastStudioPlugin : null,
 		studioPlaces: serviceHealth.running ? lastStudioPlaces : [],
+		placeRequests: serviceHealth.running ? lastPlaceRequests : [],
 		// The service's copy of rojoHub.openPlaces decides; a service older than 0.20.0 cannot open places.
 		openPlaces: serviceHealth.running && lastOpenPlaces,
+		closePlaces: serviceHealth.running && lastClosePlaces,
+		yolo: yoloSetting(),
 	});
 	updateStatus();
 }
@@ -330,6 +388,45 @@ function noticePortMoves(slots: SlotView[]): void {
 			.then(async (choice) => {
 				if (choice === "Copy Port") await vscode.env.clipboard.writeText(String(slot.port));
 				if (choice === "Show Project") void panel.focus(slot.id);
+			});
+	}
+}
+
+/** The asks (id and when it began) this window already showed a notification for (spec 014). */
+const shownRequests = new Set<string>();
+
+/*
+	An agent asked for a Studio place that another project holds (spec 014). Like
+	noticeDisconnects, only a window with the asking or the holding project open,
+	or else the focused window, shows it, and each ask once per window. A
+	dismissed notification leaves the ask pending, answerable in the panel; an
+	answer in any window ends it everywhere, and a click here afterwards does
+	nothing.
+*/
+function noticePlaceRequests(requests: PlaceRequestView[]): void {
+	const live = new Set(requests.map((request) => `${request.id}@${request.since}`));
+	for (const key of shownRequests) if (!live.has(key)) shownRequests.delete(key);
+	for (const request of requests) {
+		const key = `${request.id}@${request.since}`;
+		if (shownRequests.has(key)) continue;
+		const here = [request.askerId, request.holderId].some((id) => {
+			const repo = lastSlots.find((slot) => slot.id === id)?.repoPath;
+			return repo !== undefined && workspaceRepos.includes(pathKey(repo));
+		});
+		if (!here && !vscode.window.state.focused) continue;
+		shownRequests.add(key);
+		const place = request.placeName ? `${request.placeName} (${request.placeId})` : `place ${request.placeId}`;
+		const busy = request.holderClaimed && request.holder ? ` (an agent is using ${request.holder})` : "";
+		void vscode.window
+			.showInformationMessage(`Rojo-Hub: ${request.asker} asks for ${place}, now synced with ${request.holder ?? "another project"}${busy}.`, "Move", "Decline")
+			.then(async (choice) => {
+				if (choice !== "Move" && choice !== "Decline") return;
+				try {
+					lastPlaceRequests = await client.answerPlaceRequest(request.id, choice === "Move" ? "move" : "decline");
+					render();
+				} catch {
+					// Answered elsewhere or ended meanwhile: nothing to do.
+				}
 			});
 	}
 }
@@ -779,6 +876,24 @@ async function browseProjectFile(slot: SlotView): Promise<void> {
 	await useProjectFile(slot, file, `slot:${slot.id}`);
 }
 
+/* Asks for a moved project's new folder and re-points the project at it (spec 016). */
+async function locateFolder(slot: SlotView, busyKey: string): Promise<void> {
+	if (fileLocked(slot)) {
+		void vscode.window.showInformationMessage(`Stop ${slot.projectName} to locate its folder; moving it is a new Rojo session.`);
+		return;
+	}
+	const chosen = await vscode.window.showOpenDialog({
+		defaultUri: vscode.Uri.file(dirname(slot.repoPath)),
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: false,
+		openLabel: "Use This Folder",
+		title: `${slot.projectName}: pick its folder (any checkout of the same repo)`,
+	});
+	const path = chosen?.[0]?.fsPath;
+	if (path) await act(busyKey, () => client.relocate(slot.id, path));
+}
+
 /*
 	A running or starting project's project file is shown, not changed: stop it
 	first (spec 005). An erroring one can change it, e.g. to a file the branch has.
@@ -821,9 +936,88 @@ async function addProject(): Promise<void> {
 }
 
 /*
+	Yolo mode (spec 012, design 4). The setting is the user's; the service is
+	told true only once the user accepted the warning. While a window's prompt is
+	unanswered it keeps a timestamp in globalState, so no other window pushes the
+	value early (the stamp expires, in case that window died).
+*/
+const YOLO_PROMPT = "rojoHub.yoloPrompt";
+const YOLO_PROMPT_MS = 10 * 60 * 1000;
+
+function yoloSetting(): boolean {
+	return vscode.workspace.getConfiguration("rojoHub").get<boolean>("yolo", false) === true;
+}
+
+function yoloPrompting(): boolean {
+	const since = extensionContext.globalState.get<number>(YOLO_PROMPT);
+	return typeof since === "number" && Date.now() - since < YOLO_PROMPT_MS;
+}
+
+function yoloForService(): boolean {
+	return yoloSetting() && !yoloPrompting();
+}
+
+async function turnYoloOff(): Promise<void> {
+	await vscode.workspace.getConfiguration("rojoHub").update("yolo", false, vscode.ConfigurationTarget.Global);
+}
+
+/** The red status bar item, in every window while the setting is on (even with the service stopped). */
+function updateYoloItem(): void {
+	if (!yoloSetting()) {
+		yoloItem.hide();
+		return;
+	}
+	yoloItem.text = "$(warning) ROJO-HUB YOLO";
+	yoloItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+	yoloItem.tooltip = "Rojo-Hub yolo mode is on: agents may open Studio places and stop projects Studio is using. Claims still hold. Click to turn it off.";
+	yoloItem.command = "rojoHub.yoloMenu";
+	yoloItem.show();
+}
+
+async function yoloMenu(): Promise<void> {
+	const off = "Turn yolo mode off";
+	const picked = await vscode.window.showWarningMessage("Rojo-Hub yolo mode is on.", { modal: true, detail: "Agents may open Studio places and stop projects Studio is using. Everything they do is logged." }, off, "Keep it on");
+	if (picked === off) await turnYoloOff();
+}
+
+/*
+	The setting changed to true. The focused window asks; the others stay quiet
+	(they neither prompt nor push). Cancel puts the setting back to false.
+*/
+async function confirmYolo(): Promise<void> {
+	if (!vscode.window.state.focused || yoloPrompting()) return;
+	await extensionContext.globalState.update(YOLO_PROMPT, Date.now());
+	try {
+		const turnOn = "Turn on";
+		const picked = await vscode.window.showWarningMessage(
+			"Turn on Rojo-Hub yolo mode?",
+			{
+				modal: true,
+				detail:
+					"Agents may open Studio places, and stop or remove projects that Studio places are synced to (Studio disconnects). stop_all works without force. Other agents' claims still hold, and every agent action is logged to audit.jsonl in Rojo-Hub's folder. It stays on until you turn it off.",
+			},
+			turnOn,
+		);
+		if (picked !== turnOn) await turnYoloOff();
+	} finally {
+		await extensionContext.globalState.update(YOLO_PROMPT, undefined);
+	}
+	await pushSettings();
+}
+
+/*
 	Sends the user-level port settings to the service. They are application
 	scoped, so every window sends the same values.
 */
+/** What setupCommands problems were last shown, so an unchanged setting is not nagged about on every push. */
+let shownSetupProblems = "";
+function reportSetupProblems(problems: string[]): void {
+	const signature = problems.join("\n");
+	if (signature === shownSetupProblems) return;
+	shownSetupProblems = signature;
+	if (problems.length > 0) void vscode.window.showWarningMessage(`Rojo-Hub: rojoHub.setupCommands has problems, so those repos run no setup: ${problems.join(" ")}`);
+}
+
 async function pushSettings(): Promise<void> {
 	const config = vscode.workspace.getConfiguration("rojoHub");
 	await client
@@ -834,6 +1028,16 @@ async function pushSettings(): Promise<void> {
 			studioPlugin: config.get<boolean>("studioPlugin", true),
 			studioAutoConnect: config.get<string>("studioAutoConnect", "remembered") === "listed" ? "listed" : "remembered",
 			openPlaces: config.get<boolean>("openPlaces", false),
+			closePlaces: config.get<boolean>("closePlaces", false),
+			claimMinutes: config.get<number>("claimMinutes", 15),
+			placeMoves: config.get<string>("placeMoves", "ask") === "auto" ? "auto" : "ask",
+			yolo: yoloForService(),
+			// Only the user's own (global) value, never a workspace one: a repo cannot give itself commands to run (spec 012).
+			setupCommands: config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {},
+		})
+		.then((answer) => {
+			reportSetupProblems(answer?.setupProblems ?? []);
+			if (answer?.ignored?.length) void vscode.window.showWarningMessage(`Rojo-Hub: the service ignored ${answer.ignored.join(" and ")} (it did not accept the settings token in the hub home's settings-token file).`);
 		})
 		.catch((error) => void vscode.window.showErrorMessage(`Rojo-Hub: could not apply port settings: ${error instanceof Error ? error.message : error}`));
 }
@@ -889,10 +1093,26 @@ async function act<T>(key: string, work: () => Promise<T>): Promise<T | undefine
 */
 async function createBranch(id: string, name: string, base: string): Promise<void> {
 	try {
-		const result = await panel.progress(async () => {
-			await ensureRunning();
-			return client.createBranch(id, name, base);
-		});
+		// The notification follows the setup commands' progress (spec 012) while the service runs them before the switch.
+		const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Rojo-Hub: new branch ${name}` }, (progress) =>
+			panel.progress(async () => {
+				await ensureRunning();
+				const timer = setInterval(() => {
+					void client
+						.setupJobs()
+						.then((jobs) => {
+							const job = jobs.find((entry) => entry.state === "running");
+							if (job) progress.report({ message: `Setting up ${name}: ${job.text} (${job.step} of ${job.of})` });
+						})
+						.catch(() => undefined);
+				}, 1000);
+				try {
+					return await client.createBranch(id, name, base);
+				} finally {
+					clearInterval(timer);
+				}
+			}),
+		);
 		panel.post({ type: "branchCreated", id });
 		await refresh();
 		void panel.focus(id);
@@ -903,9 +1123,53 @@ async function createBranch(id: string, name: string, base: string): Promise<voi
 		);
 		if (choice) await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(result.path), { forceNewWindow: true });
 	} catch (error) {
-		panel.post({ type: "branchCreated", id, error: error instanceof Error ? error.message : String(error) });
+		const message = error instanceof Error ? error.message : String(error);
+		panel.post({ type: "branchCreated", id, error: message });
 		await refresh();
+		// A failed setup keeps the worktree: offer its folder and the audit log, where every command's output tail is (spec 012).
+		const kept = /^Setup failed at/.test(message) ? /The worktree (.+?) was kept/.exec(message)?.[1] : undefined;
+		if (kept) {
+			const choice = await vscode.window.showErrorMessage(`Rojo-Hub: ${message}`, "Open folder", "Show setup log");
+			if (choice === "Open folder") await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(kept));
+			else if (choice === "Show setup log") await vscode.window.showTextDocument(vscode.Uri.file(join(hubHome, "audit.jsonl")), { preview: true }).then(undefined, () => undefined);
+		}
 	}
+}
+
+/*
+	The card's Setup commands editor (spec 012): the repo's list in the user's
+	global rojoHub.setupCommands as one line per command. Commands the text
+	cannot hold (a folder, a timeout) stay in settings.json and come back as
+	`#fixed N` lines.
+*/
+const setupFixed = new Map<string, RawCommand[]>();
+
+function repoKey(path: string): string {
+	return pathKey(path.replace(/^\\\\\?\\/, ""));
+}
+
+async function openSetupEditor(slot: SlotView): Promise<void> {
+	const global = vscode.workspace.getConfiguration("rojoHub").inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {};
+	const key = Object.keys(global).find((entry) => repoKey(entry) === repoKey(slot.repoPath));
+	const { text, fixed } = toEditor(key === undefined ? [] : global[key]);
+	setupFixed.set(slot.id, fixed);
+	panel.post({ type: "setupEditor", id: slot.id, text });
+}
+
+async function saveSetupCommands(slot: SlotView, text: string): Promise<void> {
+	const merged = fromEditor(text, setupFixed.get(slot.id) ?? []);
+	if ("error" in merged) return void panel.post({ type: "setupEditor", id: slot.id, error: merged.error });
+	const config = vscode.workspace.getConfiguration("rojoHub");
+	const global = { ...(config.inspect<Record<string, unknown>>("setupCommands")?.globalValue ?? {}) };
+	for (const key of Object.keys(global)) if (repoKey(key) === repoKey(slot.repoPath)) delete global[key];
+	// Checked as the service will check it, so a mistake is shown here and not only as a warning later.
+	const check = parseSetupCommands({ [slot.repoPath]: merged.commands });
+	const problems = [...check.problems.values()].flat();
+	if (problems.length > 0) return void panel.post({ type: "setupEditor", id: slot.id, error: problems.join(" ") });
+	if (merged.commands.length > 0) global[slot.repoPath] = merged.commands;
+	await config.update("setupCommands", global, vscode.ConfigurationTarget.Global);
+	panel.post({ type: "setupEditor", id: slot.id, saved: true });
+	void vscode.window.showInformationMessage("Rojo-Hub: saved to your user settings (rojoHub.setupCommands). They run when Rojo-Hub makes a worktree for this project.");
 }
 
 const BUILD_FOLDER = "rojoHub.buildFolder";
@@ -989,7 +1253,9 @@ function trackedKey(message: FromPanel): { key: string; count: number } | null {
 		case "stop":
 		case "switch":
 		case "setProjectFile":
+		case "relocate":
 		case "sourcemap":
+		case "releaseClaim":
 			return { key: `slot:${message.id}`, count: 1 };
 		case "build":
 			return { key: `build:${message.id}`, count: 1 };
@@ -1113,9 +1379,20 @@ async function handlePanel(message: FromPanel): Promise<void> {
 		case "build":
 			if (slot) await buildPlace(slot);
 			return;
+		case "openSetupEditor":
+			if (slot) await openSetupEditor(slot);
+			return;
+		case "setSetupCommands":
+			if (slot) await saveSetupCommands(slot, message.text);
+			return;
 		case "sourcemap": {
 			const written = await act(`slot:${message.id}`, () => client.sourcemap(message.id));
 			if (written) void vscode.window.setStatusBarMessage(`$(check) Rojo-Hub wrote ${written.path}`, 4000);
+			return;
+		}
+		case "releaseClaim": {
+			const result = await act(`slot:${message.id}`, () => client.releaseClaim(message.id));
+			if (result?.notReturned) void vscode.window.showInformationMessage(`Rojo-Hub: released, but not switched back: ${result.notReturned}.`);
 			return;
 		}
 		case "copy":
@@ -1131,6 +1408,9 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			return;
 		case "browseProjectFile":
 			if (slot) await browseProjectFile(slot);
+			return;
+		case "relocate":
+			if (slot) await locateFolder(slot, `slot:${slot.id}`);
 			return;
 		case "remove":
 			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));
@@ -1196,6 +1476,9 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			return;
 		case "copyAgentSetup":
 			return copySetup(message.what);
+		case "yoloOff":
+			await turnYoloOff();
+			return;
 		case "agentNudge":
 			hideAgentNudge(hubHome, message.action);
 			return refresh();
@@ -1204,7 +1487,7 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			await act(`place:${message.id}:${message.placeId}`, async () => {
 				if (message.action === "open") {
 					const opened = await client.openPlace(message.id, message.placeId);
-					if (opened.outcome === "already-open") void vscode.window.showInformationMessage(`Rojo-Hub: ${opened.placeName ?? name} is already open in Studio.`);
+					if (opened.outcome === "already-open") void vscode.window.showInformationMessage(`Rojo-Hub: ${opened.placeName ?? name} is already open in Studio${opened.evidence === "process" ? " (its plugin has not connected yet)" : ""}.`);
 					else void vscode.window.setStatusBarMessage(`$(device-desktop) Rojo-Hub is opening ${opened.placeName ?? name} in Studio`, 5000);
 				} else if (message.action === "close") {
 					await client.closePlace(message.id, message.placeId);
@@ -1223,6 +1506,16 @@ async function handlePanel(message: FromPanel): Promise<void> {
 				void vscode.window.setStatusBarMessage(opened > 0 ? `$(device-desktop) Rojo-Hub is opening ${opened} place${opened === 1 ? "" : "s"} in Studio` : "Rojo-Hub: every place is already open", 5000);
 			});
 			return;
+		case "answerPlaceRequest":
+			await act(`request:${message.id}`, async () => {
+				try {
+					lastPlaceRequests = await client.answerPlaceRequest(message.id, message.answer);
+				} catch {
+					// Answered in another window, or it ended meanwhile: the next snapshot says so.
+				}
+				render();
+			});
+			return;
 		case "assignPlace":
 			await act(`place:${message.key}`, async () => {
 				lastStudioPlaces = await client.assignPlace(message.key, message.slotId);
@@ -1236,7 +1529,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	extensionContext = context;
 	panel = new HubPanel(context.extensionUri, onPanel);
 	statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem);
+	yoloItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	context.subscriptions.push(vscode.window.registerWebviewViewProvider(HubPanel.viewId, panel, { webviewOptions: { retainContextWhenHidden: true } }), statusItem, yoloItem);
+	updateYoloItem();
 
 	serviceScript = context.asAbsolutePath("dist/service.js");
 
@@ -1260,7 +1555,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			agentNudge: false,
 			studioPlugin: null,
 			studioPlaces: [],
+			placeRequests: [],
 			openPlaces: false,
+			closePlaces: false,
+			yolo: false,
 		});
 		void vscode.window.showWarningMessage(message);
 		return;
@@ -1305,6 +1603,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await vscode.env.clipboard.writeText(String(slot.port));
 			void vscode.window.setStatusBarMessage(`Copied port ${slot.port}`, 2000);
 		},
+		"rojoHub.yoloMenu": () => yoloMenu(),
 		"rojoHub.refresh": async () => {
 			await run("Connecting to Rojo-Hub", async () => {
 				await ensureService(serviceScript);
@@ -1358,11 +1657,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (!event.affectsConfiguration("rojoHub")) return;
+			updateYoloItem();
+			if (event.affectsConfiguration("rojoHub.yolo") && yoloSetting()) {
+				void confirmYolo().then(refresh);
+				return;
+			}
 			void pushSettings()
 				.then(() => (event.affectsConfiguration("rojoHub.agents") ? pushAgentChanges() : undefined))
 				.then(refresh);
 		}),
 	);
+	// An update installed in this profile: the event, every 30 s (an install from the command line may not fire it), and once now.
+	try {
+		if (typeof vscode.extensions?.onDidChange === "function") context.subscriptions.push(vscode.extensions.onDidChange(checkInstalledUpdate));
+		const every = setInterval(checkInstalledUpdate, 30_000);
+		context.subscriptions.push({ dispose: () => clearInterval(every) });
+	} catch {
+		// no extension events here
+	}
+	checkInstalledUpdate();
 	registerVsCodeAgents(context, ensureRunning);
 	await refresh();
 	// Agent entries are not re-added on start; a box whose entry was removed by hand is turned off instead.

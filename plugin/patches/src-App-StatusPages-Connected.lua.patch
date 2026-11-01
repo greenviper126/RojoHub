@@ -1,6 +1,14 @@
 --- a/src/App/StatusPages/Connected.lua
 +++ b/src/App/StatusPages/Connected.lua
-@@ -30,6 +30,9 @@ function ChangesViewer:init()
+@@ -18,6 +18,7 @@ local Tooltip = require(Plugin.App.Components.Tooltip)
+ local PatchVisualizer = require(Plugin.App.Components.PatchVisualizer)
+ local StringDiffVisualizer = require(Plugin.App.Components.StringDiffVisualizer)
+ local TableDiffVisualizer = require(Plugin.App.Components.TableDiffVisualizer)
++local HubBranchLine = require(Plugin.RojoHub.BranchLine) -- Rojo-Hub
+ 
+ local e = Roact.createElement
+ 
+@@ -30,6 +31,9 @@ function ChangesViewer:init()
  end
  
  function ChangesViewer:render()
@@ -10,3 +18,47 @@
  	if self.props.rendered == false or self.serveSession == nil or self.props.patchData == nil then
  		return nil
  	end
+@@ -208,7 +212,7 @@ local function ConnectionDetails(props)
+ 	return Theme.with(function(theme)
+ 		return e(BorderedContainer, {
+ 			transparency = props.transparency,
+-			size = UDim2.new(1, 0, 0, 70),
++			size = UDim2.new(1, 0, 0, 70 + (if props.hubBranch then 24 else 0) + (if props.hubNote then 22 else 0)), -- Rojo-Hub: room for the branch and update lines
+ 			layoutOrder = props.layoutOrder,
+ 		}, {
+ 			TextContainer = e("Frame", {
+@@ -229,6 +233,16 @@ local function ConnectionDetails(props)
+ 					BackgroundTransparency = 1,
+ 				}),
+ 
++				-- Rojo-Hub: the branch or worktree being served, under the project name
++				HubBranch = if props.hubBranch
++					then e(HubBranchLine, { text = props.hubBranch, transparency = props.transparency, layoutOrder = 2 })
++					else nil,
++
++				-- Rojo-Hub: this plugin is older than the Rojo-Hub installed (reopen the place)
++				HubNote = if props.hubNote
++					then e(HubBranchLine, { text = props.hubNote, transparency = props.transparency, layoutOrder = 4 })
++					else nil,
++
+ 				Address = e("TextLabel", {
+ 					Text = props.address,
+ 					FontFace = theme.Font.Code,
+@@ -239,7 +253,7 @@ local function ConnectionDetails(props)
+ 
+ 					Size = UDim2.new(1, 0, 0, theme.TextSize.Medium),
+ 
+-					LayoutOrder = 2,
++					LayoutOrder = 3, -- Rojo-Hub: after the branch line
+ 					BackgroundTransparency = 1,
+ 				}),
+ 
+@@ -436,6 +450,8 @@ function ConnectedPage:render()
+ 			ConnectionDetails = e(ConnectionDetails, {
+ 				projectName = self.state.projectName,
+ 				address = self.state.address,
++				hubBranch = self.props.hubBranch, -- Rojo-Hub
++				hubNote = self.props.hubNote, -- Rojo-Hub
+ 				transparency = self.props.transparency,
+ 				layoutOrder = 2,
+ 

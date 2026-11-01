@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { writeHint } from "../common/launcher";
 import { pathKey } from "../common/paths";
 import { compareVersions } from "../common/version";
-import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type PlaceOpened, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
+import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type BranchResult, type DisplayOrder, type GroupResult, type GroupView, type Health, type PortMove, type PortSettings, type PlaceOpened, type PlaceRequestView, type SlotView, type Snapshot, type Target, type TargetOption, type StudioPlaceView } from "../common/api";
 
 /*
 	The extension's side of the service API, and starting the service when
@@ -15,10 +17,19 @@ import { SERVICE_PORT, SERVICE_VERSION, type AgentStatus, type AgentWishes, type
 
 const base = `http://127.0.0.1:${SERVICE_PORT}`;
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** The service's per-install secret for PUT /settings (the service creates it on start); empty when unreadable. */
+function settingsToken(): string {
+	try {
+		return readFileSync(join(expectedHome(), "settings-token"), "utf8").trim();
+	} catch {
+		return "";
+	}
+}
+
+async function call<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
 	const response = await fetch(base + path, {
 		method,
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", ...headers },
 		body: body === undefined ? undefined : JSON.stringify(body),
 		signal: AbortSignal.timeout(method === "GET" ? 5000 : 120000),
 	});
@@ -80,6 +91,8 @@ export async function ensureService(serviceScript: string): Promise<Health> {
 		await call("POST", "/shutdown", { stopServing: false }).catch(() => undefined);
 		for (let i = 0; i < 40 && (await anyHealth()); i++) await sleep(100);
 	}
+	// So the stdio launcher (spec 011) can start this very script when a session begins while no window is open.
+	writeHint(expectedHome(), SERVICE_VERSION, serviceScript);
 	const child = spawn(process.execPath, [serviceScript], {
 		detached: true,
 		stdio: "ignore",
@@ -127,6 +140,7 @@ export const client = {
 	events,
 	slots: () => call<SlotView[]>("GET", "/slots"),
 	add: (path: string, projectFile?: string) => call<SlotView>("POST", "/slots", { path, projectFile }),
+	relocate: (id: string, path: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/relocate`, { path }),
 	setProjectFile: (id: string, projectFile: string) => call<SlotView>("PUT", `/slots/${encodeURIComponent(id)}/project-file`, { projectFile }),
 	remove: (id: string) => call<{ ok: true }>("DELETE", `/slots/${encodeURIComponent(id)}`),
 	portMovesOnRemove: (id: string) => call<PortMove[]>("GET", `/slots/${encodeURIComponent(id)}/port-moves-on-remove`),
@@ -135,6 +149,8 @@ export const client = {
 	targets: (id: string) => call<TargetOption[]>("GET", `/slots/${encodeURIComponent(id)}/targets`),
 	fetch: (id: string) => call<TargetOption[]>("POST", `/slots/${encodeURIComponent(id)}/fetch`),
 	createBranch: (id: string, name: string, base: string) => call<BranchResult>("POST", `/slots/${encodeURIComponent(id)}/branch`, { name, base }),
+	/** The user releases an agent's claim (a then_return goes back, place asks end). */
+	releaseClaim: (id: string) => call<{ released: boolean; returned: boolean; notReturned?: string }>("POST", `/slots/${encodeURIComponent(id)}/release`),
 	sourcemap: (id: string) => call<{ path: string }>("POST", `/slots/${encodeURIComponent(id)}/sourcemap`),
 	build: (id: string, output: string) => call<{ output: string; bytes: number }>("POST", `/slots/${encodeURIComponent(id)}/build`, { output }),
 	switch: (id: string, target: Target) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/switch`, { target }),
@@ -147,11 +163,16 @@ export const client = {
 	order: () => call<DisplayOrder>("GET", "/order"),
 	putOrder: (order: Partial<DisplayOrder>) => call<DisplayOrder>("PUT", "/order", order),
 	stopAll: () => call<{ stopped: string[]; failed: { id: string; error: string }[] }>("POST", "/stop-all"),
-	putSettings: (settings: PortSettings) => call<{ ok: true }>("PUT", "/settings", settings),
+	/** Setup commands under way or finished, per worktree (spec 012). */
+	setupJobs: () => call<{ path: string; state: "running" | "ok" | "failed"; step: number; of: number; text: string }[]>("GET", "/setup"),
+	putSettings: (settings: PortSettings) => call<{ ok: true; setupProblems?: string[]; ignored?: string[] }>("PUT", "/settings", settings, { "x-rojo-hub-token": settingsToken() }),
 	agents: () => call<AgentStatus[]>("GET", "/agents"),
 	putAgents: (wishes: AgentWishes) => call<AgentStatus[]>("PUT", "/agents", wishes),
 	/** Assigns a project to an open Studio place (spec 007); null: back to its project files. */
 	assignPlace: (key: string, slotId: string | null) => call<StudioPlaceView[]>("PUT", `/studio/places/${encodeURIComponent(key)}`, { slotId }),
+	/** Agents' pending asks for Studio places, and the user's answer to one (spec 014); an answer to one already answered or ended is refused (409). */
+	placeRequests: () => call<PlaceRequestView[]>("GET", "/studio/requests"),
+	answerPlaceRequest: (id: string, answer: "move" | "decline") => call<PlaceRequestView[]>("POST", `/studio/requests/${encodeURIComponent(id)}/${answer}`),
 	/** A project's places in Studio (spec 009); refused while rojoHub.openPlaces is off. */
 	openPlace: (id: string, placeId: number) => call<PlaceOpened>("POST", `/slots/${encodeURIComponent(id)}/places/${placeId}/open`),
 	closePlace: (id: string, placeId: number) => call<{ ok: true }>("POST", `/slots/${encodeURIComponent(id)}/places/${placeId}/close`),

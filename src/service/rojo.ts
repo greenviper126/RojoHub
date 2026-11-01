@@ -237,22 +237,35 @@ export class LogFollower {
 	}
 
 	tail(count: number): string {
+		return this.tailOf(count, true).text;
+	}
+
+	/*
+		The last `count` lines. Rojo's DEBUG and TRACE lines (a WebSocket pair per
+		sync, a "Loading project file" per package) bury the lines that matter, so
+		they are left out unless `verbose`; `hidden` says how many were.
+	*/
+	tailOf(count: number, verbose: boolean): { text: string; hidden: number } {
 		try {
-			return this.readTail(count);
+			return this.readTail(count, verbose);
 		} catch {
-			return "";
+			return { text: "", hidden: 0 };
 		}
 	}
 
-	private readTail(count: number): string {
-		if (!existsSync(this.file)) return "";
+	private readTail(count: number, verbose: boolean): { text: string; hidden: number } {
+		if (!existsSync(this.file)) return { text: "", hidden: 0 };
 		const fd = openSync(this.file, "r");
 		try {
 			const size = statSync(this.file).size;
-			const length = Math.min(size, 16384);
+			// Filtering drops most lines, so look much further back than a verbose tail needs.
+			const length = Math.min(size, verbose ? 16384 : 524288);
 			const buffer = Buffer.alloc(length);
 			readSync(fd, buffer, 0, length, size - length);
-			return buffer.toString("utf8").trim().split(/\r?\n/).slice(-count).join("\n");
+			const all = buffer.toString("utf8").trim().split(/\r?\n/);
+			if (verbose) return { text: all.slice(-count).join("\n"), hidden: 0 };
+			const kept = all.filter((line) => !/^\[(DEBUG|TRACE)\b/.test(line));
+			return { text: kept.slice(-count).join("\n"), hidden: all.length - kept.length };
 		} finally {
 			closeSync(fd);
 		}

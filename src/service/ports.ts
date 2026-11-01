@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEFAULT_PORT_RANGE, SERVICE_PORT, type PortSettings } from "../common/api";
+import { DEFAULT_CLAIM_MINUTES, DEFAULT_PORT_RANGE, SERVICE_PORT, type PortSettings } from "../common/api";
 import { git } from "./git";
 
 /*
@@ -70,6 +70,11 @@ export function parsePortSettings(settings: PortSettings): PortConfig {
 	return config;
 }
 
+/** rojoHub.claimMinutes: a finite number of minutes, 0 or more (0: never runs out); anything else is the default. */
+export function parseClaimMinutes(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : DEFAULT_CLAIM_MINUTES;
+}
+
 function settingsFile(home: string): string {
 	return join(home, "settings.json");
 }
@@ -82,7 +87,35 @@ export function loadPortSettings(home: string): PortSettings {
 	}
 }
 
+/*
+	The per-install secret that lets PUT /settings change yolo and setupCommands
+	(spec 012). Created once, kept. It stops programs and sandboxed agents that
+	only reach 127.0.0.1; anything running as this Windows user that can read
+	the hub home can read it too.
+*/
+export function settingsToken(home: string): string {
+	const file = join(home, "settings-token");
+	try {
+		const existing = readFileSync(file, "utf8").trim();
+		if (/^[0-9a-f]{64}$/.test(existing)) return existing;
+	} catch {
+		// created below
+	}
+	const token = randomBytes(32).toString("hex");
+	mkdirSync(home, { recursive: true });
+	writeFileSync(file, token + "\n");
+	return token;
+}
+
+export function tokenMatches(home: string, given: unknown): boolean {
+	if (typeof given !== "string") return false;
+	const want = Buffer.from(settingsToken(home));
+	const have = Buffer.from(given);
+	return have.length === want.length && timingSafeEqual(have, want);
+}
+
 export function savePortSettings(home: string, settings: PortSettings): void {
+	const saved = loadPortSettings(home);
 	const clean: PortSettings = {
 		portRange: settings.portRange ?? "",
 		excludedPorts: settings.excludedPorts ?? [],
@@ -90,6 +123,15 @@ export function savePortSettings(home: string, settings: PortSettings): void {
 		studioPlugin: settings.studioPlugin !== false,
 		studioAutoConnect: settings.studioAutoConnect === "listed" ? "listed" : "remembered",
 		openPlaces: settings.openPlaces === true,
+		// Omitted (an older extension) keeps the saved value.
+		closePlaces: settings.closePlaces === undefined ? saved.closePlaces === true : settings.closePlaces === true,
+		// Omitted (an older extension) keeps the saved value.
+		claimMinutes: settings.claimMinutes === undefined ? parseClaimMinutes(saved.claimMinutes) : parseClaimMinutes(settings.claimMinutes),
+		// Omitted (an older extension) keeps the saved value.
+		placeMoves: (settings.placeMoves === undefined ? saved.placeMoves : settings.placeMoves) === "auto" ? "auto" : "ask",
+		// Omitted (an older extension, or no token) keeps the saved value.
+		yolo: settings.yolo === undefined ? saved.yolo === true : settings.yolo === true,
+		setupCommands: settings.setupCommands === undefined ? (saved.setupCommands ?? {}) : settings.setupCommands !== null && typeof settings.setupCommands === "object" ? settings.setupCommands : {},
 	};
 	const temporary = settingsFile(home) + ".tmp";
 	writeFileSync(temporary, JSON.stringify(clean, null, "\t") + "\n");

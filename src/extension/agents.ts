@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 
-import { AGENT_CLIS, SETUP_COMMANDS, SETUP_PROMPT } from "../common/agents";
+import { AGENT_CLIS, setupCommands, setupPrompt } from "../common/agents";
 import { MCP_URL, SERVICE_VERSION, type AgentId, type AgentStatus, type AgentWishes } from "../common/api";
+import { hubHome, launcherScript } from "../common/launcher";
 import { hideAgentNudge } from "./nudge";
 
 /*
@@ -151,7 +152,9 @@ export async function askOnce(context: vscode.ExtensionContext, home: string, st
 }
 
 export async function copySetup(what: "commands" | "prompt"): Promise<void> {
-	await vscode.env.clipboard.writeText(what === "commands" ? SETUP_COMMANDS : SETUP_PROMPT);
+	// The entry runs this editor's own program as Node; the service keeps the launcher script at this path.
+	const launch = { command: process.execPath, script: launcherScript(hubHome()) };
+	await vscode.env.clipboard.writeText(what === "commands" ? setupCommands(launch) : setupPrompt(launch));
 	void vscode.window.setStatusBarMessage(
 		what === "commands" ? "$(copy) Copied Rojo-Hub's agent setup commands" : "$(copy) Copied a setup prompt: paste it into any agent's chat",
 		4000,

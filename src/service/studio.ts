@@ -227,6 +227,13 @@ export class StudioLinks {
 	rememberedAutoConnect = true;
 	/** Assignments of unsaved places, by window: they share place ID 0, so they are kept only while the window is open. */
 	private readonly unsavedAssigned = new Map<string, string>();
+	/*
+		The latest deliberate handoff per place key (see assign): the project it went
+		to and a number that is new each time. Memory only: a restart forgets it, and
+		a plugin that has not acted on it just connects as it always did.
+	*/
+	private readonly handoffs = new Map<string, { slotId: string; token: number }>();
+	private handoffSeq = Date.now();
 
 	constructor(
 		private readonly candidates: () => PlaceCandidate[],
@@ -251,6 +258,8 @@ export class StudioLinks {
 		link.onClose = () => {
 			this.studios.delete(studio);
 			this.unsavedAssigned.delete(studio.id);
+			this.handoffs.delete(`studio:${studio.id}`);
+			if (studio.hello) this.log(`studio: ${studio.hello.placeName} (${studio.hello.placeId}) disconnected`);
 		};
 		link.onMessage = (text) => {
 			let message: StudioToService;
@@ -297,8 +306,16 @@ export class StudioLinks {
 		Assigns a project to a place from VS Code (null: back to the project
 		files). `key` is StudioPlaceView.key: a place ID, stored for good, or
 		"studio:<id>" for an unsaved place's window, kept while it is open.
+
+		Every deliberate assignment (the panel, Move, request_place, yolo) also
+		records a handoff: a new number sent with the match, on which a plugin
+		synced with another project switches once (spec 014). Clearing an
+		assignment hands nothing over.
+
+		`source` says who made it (the panel, a Move on a request, request_place,
+		an automatic move), for service.log: nothing else records it.
 	*/
-	assign(key: string, slotId: string | null): void {
+	assign(key: string, slotId: string | null, source = "unknown"): void {
 		if (key.startsWith("studio:")) {
 			const id = key.slice("studio:".length);
 			if (slotId) this.unsavedAssigned.set(id, slotId);
@@ -308,6 +325,12 @@ export class StudioLinks {
 			if (!Number.isSafeInteger(placeId) || placeId <= 0) throw new Error(`"${key}" is not a place ID`);
 			this.memory.assign(placeId, slotId);
 		}
+		if (slotId) this.handoffs.set(key, { slotId, token: ++this.handoffSeq });
+		else this.handoffs.delete(key);
+		const place = this.studios.size > 0 ? [...this.studios].find((studio) => studio.hello && (key.startsWith("studio:") ? `studio:${studio.id}` === key : String(studio.hello.placeId) === key))?.hello : undefined;
+		const label = place ? `${place.placeName} (${key.startsWith("studio:") ? "unsaved" : key})` : key.startsWith("studio:") ? "an unsaved place" : `place ${key}`;
+		const project = slotId ? (this.candidates().find((candidate) => candidate.slotId === slotId)?.projectName ?? slotId) : null;
+		this.log(`studio: ${label} ${project ? `assigned to ${project}` : "assignment cleared"} (${source})`);
 		this.tick();
 	}
 
@@ -386,6 +409,8 @@ export class StudioLinks {
 			studio.answer = matchPlace({ ...hello, remembered }, candidates, this.assignedFor(studio), this.rememberedAutoConnect);
 			const target = studio.answer.target;
 			if (target && !hello.unsaved) studio.answer.target = { ...target, accepted: this.memory.accepted(hello.placeId, target.projectName) };
+			const handoff = this.handoffs.get(hello.unsaved ? `studio:${studio.id}` : String(hello.placeId));
+			if (studio.answer.target && handoff && handoff.slotId === studio.answer.target.slotId) studio.answer.target = { ...studio.answer.target, handoff: handoff.token };
 		}
 		const { projectId: _projectId, ...answer } = studio.answer;
 		match = { type: "match", serviceVersion: SERVICE_VERSION, ...answer };
@@ -394,6 +419,10 @@ export class StudioLinks {
 		const was = studio.lastSent ? (JSON.parse(studio.lastSent) as StudioMatch) : null;
 		if (was?.status !== match.status || was?.target?.sessionId !== match.target?.sessionId) {
 			this.log(`studio: ${hello.placeName} (${hello.placeId}): ${match.status}${match.target ? ` ${match.target.projectName}:${match.target.port}` : ""}`);
+		}
+		const handoffTo = match.target?.handoff;
+		if (handoffTo !== undefined && handoffTo !== was?.target?.handoff && studio.connected && studio.connected.projectName !== match.target?.projectName) {
+			this.log(`studio: ${hello.placeName} (${hello.placeId}): handing over from ${studio.connected.projectName} to ${match.target?.projectName}`);
 		}
 		studio.lastSent = text;
 		studio.link.send(text);

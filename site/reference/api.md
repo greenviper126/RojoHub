@@ -12,8 +12,9 @@ curl http://127.0.0.1:34870/health
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`, then again on every change |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings (sent by the extension). Replaces them all: a missing field goes back to its default. |
+| `GET /events` | | A stream (`text/event-stream`) of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces, closePlaces, placeRequests }`, then again on every change |
+| `GET /setup` | | Running or finished setup-command jobs: `[{ path, state, step, of, text }]` |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, closePlaces?, claimMinutes?, placeMoves?, yolo?, setupCommands? }` | Settings, sent by the extension. A missing `closePlaces`, `claimMinutes`, `yolo` or `setupCommands` keeps its saved value; any other missing field goes back to its default. `yolo` and `setupCommands` apply only with the `settings-token` file's contents in header `X-Rojo-Hub-Token`; otherwise they are listed in `ignored`. |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo processes too |
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | The panel's display order: `{ projects, groups }` |
@@ -30,14 +31,16 @@ In the API a project is a *slot*.
 | `DELETE /slots/:id` | | Remove a project |
 | `GET /slots/:id/port-moves-on-remove` | | Which projects would move back to their own port if this one were removed: `[{ id, projectName, from, to, serving }]` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder (a serving project is stopped and started again; the panel only offers it while stopped) |
+| `POST /slots/:id/relocate` | `{ path }` | Point a stopped project at its moved folder: the same repo and project name, keeping its port, groups and place assignments |
 | `POST /slots/:id/start` | | Start serving |
 | `POST /slots/:id/stop` | | Stop serving |
 | `GET /slots/:id/targets` | | Worktrees and branches it can serve, from the service's cache |
 | `POST /slots/:id/fetch` | | `git fetch --all --prune`, then the fresh list |
 | `POST /slots/:id/switch` | `{ target }` | `target` is `{ kind: "worktree", path }` or `{ kind: "branch", ref }`. Clears any agent claim. |
-| `POST /slots/:id/places/:placeId/open` | | Open one of the project's places in Studio, unless it is open (`outcome`: `opened` or `already-open`). Refused (409) while `rojoHub.openPlaces` is off |
-| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close; Studio still asks about unsaved changes |
-| `POST /slots/:id/places/:placeId/reopen` | | Close it, then open it again once that Studio has exited |
+| `POST /slots/:id/release` | | Release an agent's claim as the panel's **Release claim** does: `{ released, returned, notReturned? }` |
+| `POST /slots/:id/places/:placeId/open` | | Open one of the project's places in Studio, unless it is open (`outcome`: `opened` or `already-open`). Refused (409) while `rojoHub.openPlaces` is off, or for a place the project file does not list |
+| `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close; Studio still asks about unsaved changes. Needs `rojoHub.closePlaces` |
+| `POST /slots/:id/places/:placeId/reopen` | | Close it, then open it again once that Studio has exited. Needs `rojoHub.closePlaces` |
 | `POST /slots/:id/places/open-all` | | Open each of the project's places that is not open |
 | `POST /slots/:id/branch` | `{ name, base }` | A new branch in a worktree of its own (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` of what the project serves into `output`, an absolute `.rbxl` or `.rbxlx` path |
@@ -59,13 +62,15 @@ In the API a project is a *slot*.
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /studio` | WebSocket | The Studio plugin's link |
-| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place; `null` goes back to *Automatic* |
+| `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`); `null` goes back to *Automatic* |
+| `GET /studio/requests` | | Agents' pending requests for shared places: `id`, `placeId`, `placeName`, `asker`, `holder`, `holderClaimed`, `since` |
+| `POST /studio/requests/:id/move`, `.../decline` | | Your answer to a request; both end it. 409 when it was already answered or ended |
 
 ## Agents
 
 | Method and path | Body | Does |
 |---|---|---|
-| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected` / `absent` / `other` / `unknown` (config can't be read), last error |
+| `GET /agents` | | Claude Code's and Codex's registration: installed, state (`connected`, `legacy` or `stale` (an old entry the service rewrites), `absent`, `other`, `unknown` (config can't be read)), last error |
 | `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` takes it out; an agent that is not installed, `other` or `unknown` is left alone |
 | `POST /mcp` | JSON-RPC | The MCP server for agents (see [Agents](/guide/agents)): one request per POST, answered with plain JSON; a notification gets 202. Other HTTP methods get 405. |
 

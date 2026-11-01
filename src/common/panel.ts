@@ -4,7 +4,7 @@
 	itself; the extension does, and sends the panel the result.
 */
 
-import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption, StudioPluginStatus, StudioPlaceView } from "./api";
+import type { AgentId, AgentStatus, DisplayOrder, GroupView, SlotView, Target, TargetOption, StudioPluginStatus, StudioPlaceView, PlaceRequestView } from "./api";
 
 /*
 	Something to add to or take out of a group: a project, a nested group, or
@@ -55,8 +55,14 @@ export interface PanelState {
 	studioPlugin: StudioPluginStatus | null;
 	/** Open Studio places with Rojo-Hub's plugin, and what each syncs with (spec 007). */
 	studioPlaces: StudioPlaceView[];
+	/** Agents' pending asks to move a Studio place to their project (spec 014). */
+	placeRequests: PlaceRequestView[];
 	/** rojoHub.openPlaces (spec 009): cards list their places with Open, Close and Reopen only while it is on. */
 	openPlaces: boolean;
+	/** rojoHub.closePlaces: Close and Reopen on an open place appear only while it is on. */
+	closePlaces: boolean;
+	/** rojoHub.yolo (spec 012): the red banner above everything, with a Turn off button. */
+	yolo: boolean;
 }
 
 export type ToPanel =
@@ -75,7 +81,9 @@ export type ToPanel =
 	/** A picker's Fetch finished; `error` when it failed (the list is unchanged then). */
 	| { type: "fetched"; id: string; error?: string }
 	/** A picker's New branch finished; `error` keeps the form open with the reason. */
-	| { type: "branchCreated"; id: string; error?: string };
+	| { type: "branchCreated"; id: string; error?: string }
+	/** A card's Setup commands editor (spec 012): its text on open, or the outcome of a Save (`saved`, or `error`). */
+	| { type: "setupEditor"; id: string; text?: string; saved?: boolean; error?: string };
 
 export type FromPanel =
 	| { type: "ready" }
@@ -87,12 +95,18 @@ export type FromPanel =
 	| { type: "fetch"; id: string }
 	| { type: "createBranch"; id: string; name: string; base: string }
 	| { type: "build"; id: string }
+	| { type: "openSetupEditor"; id: string }
+	| { type: "setSetupCommands"; id: string; text: string }
 	| { type: "sourcemap"; id: string }
+	/** Release the agent's claim on the project (rojoHub.claimMinutes 0 never lets go by itself). */
+	| { type: "releaseClaim"; id: string }
 	| { type: "copy"; id: string }
 	| { type: "log"; id: string }
 	/** The card's project file list (spec 005): one of its files picked, or Browse…. */
 	| { type: "setProjectFile"; id: string; file: string }
 	| { type: "browseProjectFile"; id: string }
+	/** The project's folder moved: pick the new one (the service keeps its port and place assignments). */
+	| { type: "relocate"; id: string }
 	| { type: "remove"; id: string }
 	| { type: "candidates" }
 	| { type: "addProject"; path: string }
@@ -115,8 +129,12 @@ export type FromPanel =
 	| { type: "copyAgentSetup"; what: "commands" | "prompt" }
 	/** The notice above Projects: Later hides it for a while, never for good. */
 	| { type: "agentNudge"; action: "later" | "never" }
+	/** The yolo banner's Turn off button. */
+	| { type: "yoloOff" }
 	/** Studio places (spec 007): the project a place syncs with; null goes back to its project files. */
 	| { type: "assignPlace"; key: string; slotId: string | null }
+	/** The user's answer to an agent's ask for a shared place (spec 014). */
+	| { type: "answerPlaceRequest"; id: string; answer: "move" | "decline" }
 	/** A project's place in Studio (spec 009). */
 	| { type: "placeAction"; id: string; placeId: number; action: "open" | "close" | "reopen" }
 	| { type: "openAllPlaces"; id: string };

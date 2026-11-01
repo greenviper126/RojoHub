@@ -13,7 +13,7 @@ them to another branch or worktree **without Studio disconnecting**. Built so AI
 
 ## What it does
 
-- **A fixed port per project**, the same on every machine (from `servePort`, or the repo's first commit).
+- **A fixed port per project**, from `servePort`, or worked out from the repo's first commit so it is usually the same on every machine.
 - **Studio connects by itself.** Rojo-Hub's Studio plugin syncs each place with its project and
   reconnects after any Rojo restart.
 - **Live branch switching.** Pick a worktree or branch; Rojo keeps running and Studio gets the diff.

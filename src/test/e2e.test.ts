@@ -25,6 +25,14 @@ const repo = join(root, "Game");
 const featureTree = join(root, "wt-feature");
 const home = join(root, "home");
 const projectName = `HubE2E-${process.pid}`;
+/*
+	Test projects get their ports from a range of their own: in the default one a
+	test project's hashed port could be one a live Rojo of the user's projects
+	holds ("Port N is held by another Rojo"). Every PUT /settings carries it,
+	since one without portRange resets it to the default.
+*/
+const TEST_PORTS = { portRange: "45873-46872" };
+const withPorts = (body: unknown) => (body && typeof body === "object" && !("portRange" in body) ? { ...TEST_PORTS, ...body } : body);
 let service: ChildProcess;
 
 function gitIn(cwd: string, ...args: string[]): string {
@@ -39,8 +47,8 @@ function write(file: string, text: string): void {
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
 	const response = await fetch(api + path, {
 		method,
-		headers: { "content-type": "application/json" },
-		body: body === undefined ? undefined : JSON.stringify(body),
+		headers: { "content-type": "application/json", ...(path === "/settings" && existsSyncFile(join(home, "settings-token")) ? { "x-rojo-hub-token": readFileSync(join(home, "settings-token"), "utf8").trim() } : {}) },
+		body: body === undefined ? undefined : JSON.stringify(method === "PUT" && path === "/settings" ? withPorts(body) : body),
 	});
 	const payload = (await response.json()) as T & { error?: string };
 	if (!response.ok) throw new Error(`${method} ${path}: ${payload.error}`);
@@ -92,10 +100,11 @@ before(async () => {
 	gitIn(repo, "commit", "-q", "-m", "other");
 	gitIn(repo, "checkout", "-q", "main");
 	gitIn(repo, "worktree", "add", "-q", featureTree, "feature");
+	write(join(home, "settings.json"), JSON.stringify(TEST_PORTS));
 
 	service = spawn(process.execPath, [join(__dirname, "..", "service", "main.js")], {
 		// A throwaway plugins folder: the service installs its Studio plugin (spec 007), never into the real Studio here.
-		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT), ROJO_HUB_STUDIO_PLUGINS: join(root, "Plugins") },
+		env: { ...process.env, ROJO_HUB_HOME: home, ROJO_HUB_PORT: String(API_PORT), ROJO_HUB_STUDIO_PLUGINS: join(root, "Plugins"), ROJO_HUB_VSCODE_USER: join(root, "vscode-user"), ROJO_HUB_VSCODE_EXTENSIONS: join(root, "vscode-extensions") },
 		stdio: "inherit",
 	});
 	await until("service", () => fetch(api + "/health").then((r) => r.ok).catch(() => false));
@@ -116,7 +125,8 @@ test("one port, live switches, one session", async () => {
 	const slot = await call<SlotView>("POST", "/slots", { path: featureTree });
 	assert.equal(pathKey(slot.repoPath), pathKey(repo), "registering from a worktree registers the primary");
 	const root = gitIn(repo, "rev-list", "--max-parents=0", "HEAD").trim();
-	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings({})), "port hashed from the first commit");
+	assert.equal(slot.port, preferredPort(`commit:${root}`, parsePortSettings(TEST_PORTS)), "port hashed from the first commit");
+	assert.ok(slot.port >= 45873 && slot.port <= 46872, "in the tests' own range, away from the user's live projects");
 	assert.equal(slot.portSource, "hash");
 	await assert.rejects(call("POST", "/slots", { path: repo }), /already registered/);
 
@@ -419,6 +429,18 @@ async function tool(name: string, args: Record<string, unknown>): Promise<{ text
 	return { text: payload.result.content[0].text, isError: payload.result.isError === true };
 }
 
+/** Like tool, as a client of protocol 2025-06-18: also the structuredContent (spec 011). */
+async function structured(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+	const response = await fetch(api + "/mcp", {
+		method: "POST",
+		headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18" },
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+	});
+	const payload = (await response.json()) as { result: { structuredContent?: Record<string, any> } };
+	assert.ok(payload.result.structuredContent, `${name} gave structuredContent`);
+	return payload.result.structuredContent;
+}
+
 test("agents over MCP: serve_here switches live and claims, other worktrees wait, a user switch clears the claim", async () => {
 	const dir = await makeRepo("Agenty");
 	const alpha = join(root, "Agenty-alpha");
@@ -447,6 +469,21 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.match((await tool("status", { path: beta })).text, /NOT being served/);
 	assert.match((await tool("status", { path: alpha })).text, /your worktree is the one being served/);
 
+	// structured status of a served worktree (spec 011): path, branch, commit, claim
+	const data = await structured("status", { path: alpha });
+	const state = (data.projects as Record<string, any>[]).find((entry) => entry.id === slot.id)!;
+	assert.equal(state.served.kind, "worktree");
+	assert.equal(pathKey(state.served.path), pathKey(alpha));
+	assert.equal(state.served.branch, "alpha");
+	assert.equal(state.served.commit, gitIn(alpha, "rev-parse", "HEAD").trim(), "the served worktree's HEAD");
+	assert.equal(state.claim.holder, "Agenty-alpha");
+	assert.equal(state.claim.yours, true);
+	assert.ok(state.claim.secondsLeft > 0 && Date.parse(state.claim.until) > Date.now());
+	assert.equal(state.rojo.state, "running");
+	assert.equal(state.yourWorktreeServed, true);
+	assert.equal(data.yourProject, slot.id);
+	assert.equal((await structured("status", { path: beta })).projects.find((entry: Record<string, any>) => entry.id === slot.id).claim.yours, false);
+
 	const forced = await tool("serve_here", { path: beta, force: true });
 	assert.ok(!forced.isError, forced.text);
 	assert.equal((await view()).claim?.label, "Agenty-beta");
@@ -464,6 +501,77 @@ test("agents over MCP: serve_here switches live and claims, other worktrees wait
 	assert.equal((await view()).claim, null, "a switch by the user clears the claim");
 	assert.equal((await view()).sessionId, sessionId);
 	assert.ok((await tool("build", { project: slot.projectName, output: "out.rbxl" })).isError, "a relative output is refused");
+
+	await call("DELETE", `/slots/${slot.id}`);
+});
+
+test("rojoHub.claimMinutes 0: a claim never runs out, and the panel's release route ends it (with then_return)", async () => {
+	const dir = await makeRepo("Foreverly");
+	const alpha = join(root, "Foreverly-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "forever-alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	await call("POST", `/slots/${slot.id}/start`);
+	await call("PUT", "/settings", { claimMinutes: 0 });
+	try {
+		const first = await tool("serve_here", { path: alpha, then_return: true });
+		assert.ok(!first.isError, first.text);
+		assert.match(first.text, /You hold it until you call release \(claims don't run out: rojoHub\.claimMinutes is 0\)/);
+		assert.equal((await view()).claim?.until, Number.MAX_SAFE_INTEGER, "the card's claim never runs out");
+		const state = (await structured("status", { path: alpha })).projects.find((entry: Record<string, any>) => entry.id === slot.id);
+		assert.equal(state.claim.until, null);
+		assert.equal(state.claim.secondsLeft, null);
+		assert.match((await tool("status", { path: alpha })).text, /claimed by an agent in Foreverly-alpha until it calls release/);
+
+		// the user releases it from the panel: the same release as the tool's, so then_return hands back
+		const released = await call<{ released: boolean; returned: boolean }>("POST", `/slots/${slot.id}/release`);
+		assert.deepEqual(released, { released: true, returned: true });
+		const after = await view();
+		assert.equal(after.claim, null);
+		assert.equal(after.target.kind === "worktree" && pathKey(after.target.path), pathKey(dir), "it went back to what it served before");
+		assert.deepEqual(await call("POST", `/slots/${slot.id}/release`), { released: false, returned: false }, "nothing left to release");
+
+		// an N-minute setting claims with a clock time again
+		await call("PUT", "/settings", { claimMinutes: 20 });
+		assert.ok(!(await tool("serve_here", { path: alpha })).isError);
+		assert.ok((await view()).claim!.until < Date.now() + 21 * 60_000);
+		assert.deepEqual(await call("POST", `/slots/${slot.id}/release`), { released: true, returned: false });
+	} finally {
+		await call("PUT", "/settings", { claimMinutes: 15 });
+	}
+	await call("DELETE", `/slots/${slot.id}`);
+});
+
+test("ensure over MCP (spec 011): starts a stopped project and serves the worktree, then does nothing twice; with no Studio it says so at once", async () => {
+	const dir = await makeRepo("Ensurey");
+	const alpha = join(root, "Ensurey-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "ensure-alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	assert.equal((await view()).state, "stopped");
+
+	const first = await structured("ensure", { path: alpha });
+	assert.deepEqual(first.steps.slice(0, 2).map((step: Record<string, string>) => `${step.step}:${step.outcome}`), ["start:done", "serve:done"]);
+	assert.equal(first.ready, false);
+	assert.equal(first.failure.reason, "no_listed_places", "the project file names no places and no Studio is open");
+	assert.equal(first.project.rojo.state, "running");
+	assert.equal(first.project.yourWorktreeServed, true);
+	assert.deepEqual(first.placeIds, []);
+	const now = await view();
+	assert.equal(now.state, "running");
+	assert.equal(now.target.kind === "worktree" && pathKey(now.target.path), pathKey(alpha));
+	assert.equal(now.claim?.label, "Ensurey-alpha");
+	const { sessionId } = now;
+
+	const second = await structured("ensure", { path: join(alpha, "src") });
+	assert.deepEqual(second.steps.slice(0, 2).map((step: Record<string, string>) => `${step.step}:${step.outcome}`), ["start:already", "serve:already"]);
+	assert.equal(second.failure.reason, "no_listed_places");
+	assert.equal((await view()).sessionId, sessionId, "no restart");
+	assert.ok((await tool("ensure", { path: alpha })).isError, "a failure is an error result");
+	assert.equal((await structured("ensure", { path: dir, project: "nothing-like-this" })).failure.reason, "no_project");
+	const badPlace = await structured("ensure", { path: alpha, place: "abc" });
+	assert.equal(badPlace.failure.reason, "no_listed_places");
+	assert.match(badPlace.failure.message, /positive integer/);
 
 	await call("DELETE", `/slots/${slot.id}`);
 });
@@ -526,8 +634,159 @@ test("agents control Rojo-Hub over MCP (spec 008): add, start, log, groups, bran
 	assert.match(now.claim?.label ?? "", /agent-work/);
 	await tool("release", { project: name, force: true });
 
+	// a base is fetched first: behind its remote it starts from the remote's commit, diverged or ahead it stays local
+	assert.match(made, /could not fetch, used local main/, "no remote: carries on and says so");
+	const bare = join(root, "origin.git");
+	gitIn(root, "init", "-q", "--bare", "-b", "main", bare);
+	gitIn(dir, "remote", "add", "origin", bare);
+	gitIn(dir, "push", "-q", "-u", "origin", "main");
+	const clone = join(root, "origin-clone");
+	gitIn(root, "clone", "-q", bare, clone);
+	write(join(clone, "src", "Remote.server.luau"), 'print("remote")\n');
+	gitIn(clone, "add", "-A");
+	gitIn(clone, "commit", "-q", "-m", "remote ahead");
+	gitIn(clone, "push", "-q", "origin", "main");
+	const remoteTip = gitIn(clone, "rev-parse", "HEAD").trim();
+	const behind = await ok("new_branch", { path: dir, name: "from-remote", base: "main" });
+	assert.match(behind, /Made branch from-remote from origin\/main/);
+	assert.equal(gitIn(dir, "rev-parse", "from-remote").trim(), remoteTip, "started from the remote commit");
+	assert.throws(() => gitIn(dir, "config", "--get", "branch.from-remote.merge"), "a branch started from a remote ref does not track it (the key is unset)");
+	await tool("release", { project: name, force: true });
+	// local main now diverges from the remote's
+	write(join(dir, "src", "Local.server.luau"), 'print("local")\n');
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", "local only");
+	const localTip = gitIn(dir, "rev-parse", "main").trim();
+	const diverged = await ok("new_branch", { path: dir, name: "from-diverged", base: "main" });
+	assert.match(diverged, /Made branch from-diverged from main \(.*diverged/);
+	assert.equal(gitIn(dir, "rev-parse", "from-diverged").trim(), localTip);
+	await tool("release", { project: name, force: true });
+	// merged in, local main is ahead of the remote and is used as it is
+	gitIn(dir, "merge", "-q", "--no-edit", "origin/main");
+	const aheadTip = gitIn(dir, "rev-parse", "main").trim();
+	const ahead = await ok("new_branch", { path: dir, name: "from-ahead", base: "main" });
+	assert.match(ahead, /Made branch from-ahead from main in /);
+	assert.equal(gitIn(dir, "rev-parse", "from-ahead").trim(), aheadTip);
+	await tool("release", { project: name, force: true });
+
 	assert.match(await ok("remove_project", { path: dir }), /Removed .* files are untouched/);
 	assert.equal(await view(), undefined);
+});
+
+test("setup commands (spec 012): new_branch installs before the first switch, a failure keeps the worktree, ensure sets up an unserved worktree and skips a served one", async () => {
+	const dir = await makeRepo("Setupy");
+	write(join(dir, "wally.toml"), '[package]\nname = "a/b"\nversion = "0.1.0"\nregistry = "https://github.com/UpliftGames/wally-index"\nrealm = "shared"\n[dependencies]\nRoact = "a/roact@1.0.0"\n');
+	gitIn(dir, "add", "-A");
+	gitIn(dir, "commit", "-q", "-m", "wally");
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	const view = async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!;
+	const scripts = join(root, "setupy-scripts");
+	// Records where the project pointed while it ran, and installs a Packages folder like wally would.
+	write(
+		join(scripts, "install.cjs"),
+		`const fs=require("fs");
+fetch(${JSON.stringify(api + "/slots")}).then((r)=>r.json()).then((slots)=>{
+	const slot=slots.find((entry)=>entry.id===${JSON.stringify(slot.id)});
+	fs.mkdirSync("Packages",{recursive:true});
+	fs.writeFileSync("Packages/marker.txt",JSON.stringify({served:slot.target.path,branch:process.env.ROJO_HUB_BRANCH}));
+});`,
+	);
+	write(join(scripts, "fail.cjs"), `console.error("wally: registry unreachable");process.exit(5);`);
+	const configure = (commands: unknown[]) => call("PUT", "/settings", { setupCommands: { [dir]: commands } });
+	const node = (script: string) => ({ command: process.execPath, args: [join(scripts, script)] });
+	try {
+		await call("POST", `/slots/${slot.id}/start`);
+		const before = await view();
+		await configure([node("install.cjs")]);
+
+		// new_branch: the install ran in the new worktree while the project still served the old target
+		const made = await tool("new_branch", { path: dir, name: "setup-ok" });
+		assert.ok(!made.isError, made.text);
+		assert.match(made.text, /setup 1 of 1: .*install\.cjs.* ok/);
+		const path = / in ([A-Za-z]:\\.+?) \(a git worktree\)/.exec(made.text)![1];
+		const marker = JSON.parse(readFileSync(join(path, "Packages", "marker.txt"), "utf8"));
+		assert.equal(pathKey(marker.served), pathKey(dir), "setup ran before the project was switched to the new worktree");
+		assert.equal(marker.branch, "setup-ok");
+		const after = await view();
+		assert.equal(after.target.kind === "worktree" && pathKey(after.target.path), pathKey(path), "then it was switched");
+		assert.equal(after.sessionId, before.sessionId, "without restarting rojo");
+		await tool("release", { project: slot.projectName, force: true });
+
+		// a failing command: the worktree and branch stay, nothing is switched, nobody holds the project
+		await configure([node("install.cjs"), node("fail.cjs")]);
+		const failed = await tool("new_branch", { path: dir, name: "setup-bad" });
+		assert.ok(failed.isError);
+		assert.match(failed.text, /Setup failed at ".*fail\.cjs.*" \(step 2 of 2\): exited with code 5/);
+		assert.match(failed.text, /wally: registry unreachable/);
+		const kept = /The worktree (.+?) was kept/.exec(failed.text)![1];
+		assert.equal(readFileSync(join(kept, "Packages", "marker.txt"), "utf8").length > 0, true, "the first command's work is not undone");
+		assert.match(gitIn(dir, "branch", "--list", "setup-bad"), /setup-bad/);
+		const unchanged = await view();
+		assert.equal(unchanged.target.kind === "worktree" && pathKey(unchanged.target.path), pathKey(path), "not switched");
+		assert.equal(unchanged.claim, null);
+		const audit = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		assert.ok(audit.some((entry) => entry.action === "setup" && entry.exitCode === 5 && /registry unreachable/.test(entry.outputTail)), "the failure is in the audit log");
+
+		// ensure: an unserved worktree without Packages is set up, then served; a served one is only warned about
+		await configure([node("install.cjs")]);
+		const served = join(root, "Setupy-served");
+		const fresh = join(root, "Setupy-fresh");
+		gitIn(dir, "worktree", "add", "-q", "-b", "setup-served", served);
+		gitIn(dir, "worktree", "add", "-q", "-b", "setup-fresh", fresh);
+		await tool("serve_here", { path: served, force: true });
+		const skipped = await structured("ensure", { path: served, force: true });
+		const stepsOf = (data: Record<string, any>) => data.steps.map((step: Record<string, string>) => `${step.step}:${step.outcome}`);
+		assert.deepEqual(stepsOf(skipped).slice(0, 3), ["start:already", "setup:skipped", "serve:already"]);
+		assert.match(skipped.steps[1].detail, /being served/);
+		assert.ok(skipped.warnings.some((line: string) => line.startsWith("packages:")), "the missing Packages are a warning");
+		assert.equal(existsSyncFile(join(served, "Packages", "marker.txt")), false, "nothing was installed in a served worktree");
+		const ran = await structured("ensure", { path: fresh, force: true });
+		assert.deepEqual(stepsOf(ran).slice(0, 3), ["start:already", "setup:done", "serve:done"]);
+		assert.equal(JSON.parse(readFileSync(join(fresh, "Packages", "marker.txt"), "utf8")).served !== undefined, true);
+		assert.ok(!ran.warnings.some((line: string) => line.startsWith("packages:")), "checked again after setup");
+		const again = await structured("ensure", { path: fresh, force: true });
+		assert.ok(!stepsOf(again).includes("setup:done"), "a second ensure runs nothing");
+		assert.equal((await view()).sessionId, before.sessionId, "rojo was never restarted");
+	} finally {
+		await call("PUT", "/settings", { setupCommands: {} });
+		await call("DELETE", `/slots/${slot.id}`);
+	}
+});
+function existsSyncFile(file: string): boolean {
+	try {
+		readFileSync(file);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+test("settings token: yolo and setupCommands are applied only with the hub home's settings-token; other fields and omitted ones are kept", async () => {
+	const token = readFileSync(join(home, "settings-token"), "utf8").trim();
+	assert.match(token, /^[0-9a-f]{64}$/, "the service made the token on start");
+	const put = async (headers: Record<string, string>, body: unknown) =>
+		(await fetch(api + "/settings", { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(withPorts(body)) }).then((response) => response.json())) as { ok: boolean; ignored?: string[] };
+	const saved = () => JSON.parse(readFileSync(join(home, "settings.json"), "utf8"));
+	try {
+		const none = await put({}, { yolo: true, setupCommands: { x: [] }, sourcemaps: true });
+		assert.deepEqual(none.ignored, ["yolo", "setupCommands"]);
+		assert.equal(saved().yolo, false);
+		assert.deepEqual(saved().setupCommands, {});
+		const wrong = await put({ "x-rojo-hub-token": "0".repeat(64) }, { yolo: true });
+		assert.deepEqual(wrong.ignored, ["yolo"]);
+		assert.equal(saved().yolo, false);
+		const good = await put({ "x-rojo-hub-token": token }, { yolo: true, setupCommands: { x: [] } });
+		assert.equal(good.ignored, undefined);
+		assert.equal(saved().yolo, true);
+		assert.deepEqual(saved().setupCommands, { x: [] });
+		await put({}, { sourcemaps: true });
+		assert.equal(saved().yolo, true, "a push without the token or the fields keeps what was saved");
+		await put({ "x-rojo-hub-token": token }, { sourcemaps: true });
+		assert.equal(saved().yolo, true, "a push that omits yolo keeps it");
+		assert.deepEqual(saved().setupCommands, { x: [] }, "and setupCommands");
+	} finally {
+		await put({ "x-rojo-hub-token": token }, { yolo: false, setupCommands: {} });
+	}
 });
 
 test("project files: added by default or the only one, changed live with a restart, refused on a clash", async () => {
@@ -739,4 +998,157 @@ test("opening places (spec 009): off by default, only a project's own places, se
 		await call("PUT", "/settings", {});
 		await call("DELETE", `/slots/${slot.id}`);
 	}
+});
+
+test("place requests: a free place is assigned at once; a held one is a request the user moves or declines; release ends it; yolo moves from an unclaimed holder", async () => {
+	const placeId = 616161616;
+	const [one, two] = await Promise.all([makeRepo("ReqOne"), makeRepo("ReqTwo")]);
+	// both projects list the same place
+	for (const dir of [one, two]) {
+		const file = join(dir, "default.project.json");
+		writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), servePlaceIds: [placeId] }));
+	}
+	const a = await call<SlotView>("POST", "/slots", { path: one });
+	const b = await call<SlotView>("POST", "/slots", { path: two });
+	await call("POST", `/slots/${a.id}/start`);
+	await call("POST", `/slots/${b.id}/start`);
+
+	type Requests = { id: string; placeId: number; asker: string; holder: string | null; holderClaimed: boolean }[];
+	const requests = () => call<Requests>("GET", "/studio/requests");
+	const syncedWith = async () => ((await structured("status", {})).studioPlaces as { placeId: number; syncedWith: string | null }[]).find((place) => place.placeId === placeId)?.syncedWith ?? null;
+	const ask = (path: string, extra: Record<string, unknown> = {}) => structured("request_place", { path, place_id: placeId, ...extra });
+
+	let plugin: WebSocket | null = null;
+	// the handoff number of the latest answer the fake plugin got: a Move or an assignment sends a new one (spec 014)
+	let handoff: number | undefined;
+	try {
+		// the place is not open and nobody holds it: assigned straight away, no notification
+		assert.ok(!(await tool("serve_here", { path: one })).isError);
+		assert.match((await tool("request_place", { path: two, place_id: placeId })).text, /hold no claim/, "an agent without a claim cannot ask");
+		const free = await ask(one);
+		assert.equal(free.outcome, "assigned");
+		assert.deepEqual(await requests(), []);
+		// the panel's own route moves it to the other project, which the open place then syncs with
+		await call("PUT", `/studio/places/${placeId}`, { slotId: b.id });
+		plugin = new WebSocket(`ws://127.0.0.1:${API_PORT}${STUDIO_PATH}`);
+		const socket = plugin;
+		socket.onmessage = (event) => {
+			const message = JSON.parse(String(event.data)) as StudioMatch | { type: "welcome" | "ping" };
+			if (message.type === "welcome") {
+				socket.send(JSON.stringify({ type: "hello", protocol: STUDIO_PROTOCOL, pluginVersion: "e2e", placeId: String(placeId), gameId: "1", placeName: "Shared Lobby", unsaved: false, remembered: null }));
+			}
+			if (message.type === "match" && message.status === "connect" && message.target) {
+				handoff = message.target.handoff;
+				socket.send(JSON.stringify({ type: "state", connected: { port: message.target.port, projectName: message.target.projectName, sessionId: message.target.sessionId } }));
+			}
+		};
+		await until("the place to sync with ReqTwo", async () => (await syncedWith()) === b.projectName);
+		const panelHandoff = handoff;
+		assert.equal(typeof panelHandoff, "number", "the panel's assignment hands the place over (spec 014)");
+
+		// both sides see it: the losing project names the holder and suggests request_place
+		assert.ok(!(await tool("serve_here", { path: two })).isError, "ReqTwo's agent claims its project");
+		const status = await tool("status", { path: one });
+		assert.match(status.text, new RegExp(`Shared Lobby \\(${placeId}\\) is synced with ${b.projectName}, which also lists it\\. Call request_place`));
+
+		// one request, however often it is asked; the holder's side sees it, and its claim shows
+		assert.equal((await ask(one)).outcome, "pending");
+		assert.equal((await ask(one)).outcome, "pending");
+		const pending = await requests();
+		assert.equal(pending.length, 1, "a repeat call refreshes");
+		assert.equal(pending[0].asker, a.projectName);
+		assert.equal(pending[0].holder, b.projectName);
+		assert.equal(pending[0].holderClaimed, true);
+		assert.match((await tool("status", { path: two })).text, new RegExp(`${a.projectName} asked the user to move Shared Lobby \\(${placeId}\\) to it`));
+		// the panel's snapshot (the first event of the stream) carries it, and marks the place shared
+		const stream = await fetch(`${api}/events`);
+		const reader = stream.body!.getReader();
+		let text = "";
+		while (!text.includes("\n\n")) text += new TextDecoder().decode((await reader.read()).value);
+		await reader.cancel();
+		const snapshot = JSON.parse(text.slice(text.indexOf("data: ") + 6, text.indexOf("\n\n"))) as Snapshot;
+		assert.equal(snapshot.placeRequests?.length, 1, "the panel's snapshot carries it");
+		assert.deepEqual(snapshot.studioPlaces?.find((place) => place.placeId === placeId)?.listedBy?.sort(), [a.projectName, b.projectName].sort(), "and marks the place shared");
+
+		// Decline: the agent's next status says so, and a second answer finds nothing
+		await call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/decline`);
+		assert.deepEqual(await requests(), []);
+		assert.match((await tool("status", { path: one })).text, /The user declined moving it here\./);
+		await assert.rejects(call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/move`), /already answered/);
+		assert.equal(await syncedWith(), b.projectName, "declining moved nothing");
+
+		// Move, while the agent waits: the place reconnects to the asker and stays assigned
+		const waiting = ask(one, { wait: 20 });
+		await until("the request again", async () => (await requests()).length === 1);
+		await call("POST", `/studio/requests/${encodeURIComponent(pending[0].id)}/move`);
+		assert.equal((await waiting).outcome, "moved");
+		await until("the place to sync with ReqOne", async () => (await syncedWith()) === a.projectName);
+		assert.ok((handoff ?? 0) > (panelHandoff ?? 0), "Move sent a new handoff number, so a synced plugin switches once");
+		assert.deepEqual(await requests(), []);
+		assert.equal((await ask(one)).outcome, "already");
+
+		// the other agent asks back; releasing ends the request
+		assert.equal((await ask(two)).outcome, "pending");
+		assert.equal((await requests()).length, 1);
+		assert.match((await tool("release", { path: two })).text, /Released/);
+		assert.deepEqual(await requests(), [], "release ended it");
+
+		// yolo: ReqOne's agent still holds a claim, so the user is asked; once it lets go, the move is at once and audited
+		await call("PUT", "/settings", { yolo: true });
+		assert.ok(!(await tool("serve_here", { path: two })).isError);
+		assert.equal((await ask(two)).outcome, "pending", "an agent's claim holds under yolo");
+		assert.ok(!(await tool("release", { path: one })).isError);
+		assert.equal((await ask(two)).outcome, "moved");
+		assert.deepEqual(await requests(), []);
+		await until("the place to sync with ReqTwo again", async () => (await syncedWith()) === b.projectName);
+		const audit = readFileSync(join(home, "audit.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { action: string; args: Record<string, unknown>; lifted: boolean });
+		const move = audit.find((line) => line.action === "move_place");
+		assert.ok(move, "the move is in the audit log");
+		assert.deepEqual(move.args, { placeId, from: a.projectName });
+		assert.equal((move as { by?: string }).by, "yolo");
+		// rojoHub.placeMoves travels with the settings, shows in status, and is kept when a push leaves it out
+		assert.equal((await structured("status", {})).placeMoves, "ask");
+		await call("PUT", "/settings", { placeMoves: "auto", sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "auto");
+		assert.match((await tool("status", {})).text, /Place moves are on automatic/);
+		await call("PUT", "/settings", { sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "auto", "a push that omits it keeps it");
+		await call("PUT", "/settings", { placeMoves: "ask", sourcemaps: false });
+		assert.equal((await structured("status", {})).placeMoves, "ask");
+	} finally {
+		plugin?.close();
+		await call("PUT", "/settings", { yolo: false, sourcemaps: false });
+		await tool("release", { path: one });
+		await tool("release", { path: two });
+		await call("DELETE", `/slots/${a.id}`);
+		await call("DELETE", `/slots/${b.id}`);
+	}
+});
+
+test("agents over MCP: a checkout in a served folder is reported when the same folder is served again, once", async () => {
+	const dir = await makeRepo("Checkouty");
+	const alpha = join(root, "Checkouty-alpha");
+	gitIn(dir, "worktree", "add", "-q", "-b", "alpha", alpha);
+	const slot = await call<SlotView>("POST", "/slots", { path: dir });
+	await call<SlotView>("POST", `/slots/${slot.id}/start`);
+	const first = await tool("serve_here", { path: alpha });
+	assert.ok(!first.isError, first.text);
+	assert.doesNotMatch(first.text, /was checked out in/);
+
+	gitIn(alpha, "checkout", "-q", "-b", "swapped-under");
+	await until("the checkout note", async () => (await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.warnings.some((warning) => /swapped-under was checked out in Checkouty-alpha/.test(warning)));
+
+	// The same folder again is not a switch, so the note is still there for this answer, which tells the agent what to do instead.
+	const again = await tool("serve_here", { path: alpha });
+	assert.ok(!again.isError, again.text);
+	assert.match(again.text, /swapped-under was checked out in Checkouty-alpha while it was being served/);
+	assert.match(again.text, /never check out in a served folder; use new_branch/);
+
+	// Told once: the next serve_here from the folder, and the panel, no longer carry it.
+	const third = await tool("serve_here", { path: alpha });
+	assert.ok(!third.isError, third.text);
+	assert.doesNotMatch(third.text, /was checked out in/);
+	assert.ok(!(await call<SlotView[]>("GET", "/slots")).find((entry) => entry.id === slot.id)!.warnings.some((warning) => /was checked out in/.test(warning)));
+
+	await call("DELETE", `/slots/${slot.id}`);
 });

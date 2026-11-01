@@ -1,7 +1,7 @@
 {
   "name": "rojo-hub",
   "displayName": "Rojo-Hub",
-  "version": "0.21.0",
+  "version": "0.22.13",
   "private": true,
   "publisher": "greenviper126",
   "icon": "media/icon.png",
@@ -167,6 +167,11 @@
       {
         "command": "rojoHub.focusProject",
         "title": "Show Project in Panel",
+        "category": "Rojo-Hub"
+      },
+      {
+        "command": "rojoHub.yoloMenu",
+        "title": "Yolo Mode",
         "category": "Rojo-Hub"
       },
       {
@@ -413,6 +418,68 @@
           "default": false,
           "markdownDescription": "Let Rojo-Hub open a project's Studio places (the ones its project file lists in `servePlaceIds` or `placeId`): **Open**, **Close** and **Reopen** on each project card, and the `open_place` tool for agents. A place that is already open is never opened again. Off: none of these do anything."
         },
+        "rojoHub.closePlaces": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Lets Rojo-Hub close and reopen Studio places (the panel's **Close** and **Reopen**, and agents' `close_place` and `reopen_place`), e.g. to load an updated plugin. Studio is asked to close as if you closed its window, so it still asks about unsaved changes; nothing is ever killed or saved for you. A reopen's own open step needs only this setting, not `rojoHub.openPlaces`."
+        },
+        "rojoHub.reloadOnUpdate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "markdownDescription": "Reload this window by itself (after a notification with ten seconds to say no) when a newer Rojo-Hub is installed in this VS Code profile, so the new extension runs. Off: reload by hand."
+        },
+        "rojoHub.placeMoves": {
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "ask",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "You are asked (in the agent's client, else in VS Code) before a Studio place moves to another project.",
+            "A place an agent asks for moves at once, unless another agent has claimed the project that holds it."
+          ],
+          "default": "ask",
+          "markdownDescription": "What happens when an agent asks for a Studio place another project holds (`request_place`). `ask`: you are asked (in the agent's client, else in VS Code). `auto`: the place moves at once, unless another agent has claimed the project that holds it; then you are still asked. Moves made at once are logged in `audit.jsonl`."
+        },
+        "rojoHub.claimMinutes": {
+          "type": "number",
+          "scope": "application",
+          "default": 15,
+          "minimum": 0,
+          "markdownDescription": "How long an agent's claim on a project lasts after its last Rojo-Hub call, in minutes. 0: a claim never runs out; it lasts until the agent calls `release` (or you release it in the panel)."
+        },
+        "rojoHub.yolo": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "ignoreSync": true,
+          "markdownDescription": "**DANGEROUS:** lifts Rojo-Hub's guards for agents. They may open Studio places (as if `rojoHub.openPlaces` were on) and stop or remove projects that Studio places are synced to, and `stop_all` works without `force` (it still keeps projects other agents claimed). Claims still hold, and every agent action is logged to `audit.jsonl`. Turning it on from here asks you to confirm. Stays on until you turn it off."
+        },
+        "rojoHub.setupCommands": {
+          "type": "object",
+          "scope": "application",
+          "default": {},
+          "ignoreSync": true,
+          "markdownDescription": "**DANGEROUS: runs these programs on your machine whenever Rojo-Hub makes a worktree** (the panel's New branch, the `new_branch` tool), and from `ensure` for a worktree that lacks `Packages` or `node_modules` and that no running Rojo has read. `npm ci` runs the repo's install scripts, so prefer `--ignore-scripts`. Keys are a project's repo path (its primary checkout); each value is a list of up to 10 commands run in order, never through a shell: `{ \"command\": \"wally\", \"args\": [\"install\"], \"cwd\": \"tools\", \"timeoutSeconds\": 300 }` (`cwd` is relative to the worktree, default timeout 600 s). Agents can neither read nor change this setting. Empty: nothing runs. The panel's project menu has **Setup commands…** to edit one repo's list.",
+          "additionalProperties": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": ["command"],
+              "properties": {
+                "command": { "type": "string", "description": "A program name (looked up on PATH and in Rokit's tool folder) or an absolute path." },
+                "args": { "type": "array", "items": { "type": "string" } },
+                "cwd": { "type": "string", "description": "Relative to the worktree; no \"..\"." },
+                "timeoutSeconds": { "type": "number", "minimum": 1, "maximum": 3600, "default": 600 }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
         "rojoHub.notifyOnStudioDisconnect": {
           "type": "boolean",
           "scope": "application",
@@ -425,7 +492,7 @@
           "default": "34873-35872",
           "pattern": "^\\s*\\d+\\s*-\\s*\\d+\\s*$",
           "patternErrorMessage": "Write the range as first-last, for example 34873-35872.",
-          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is the same on every machine. A project whose project file sets `servePort` uses that instead."
+          "markdownDescription": "Ports Rojo-Hub picks from, as `first-last`. Each project gets a port worked out from its repo's first commit, so it is usually the same on every machine (a taken or excluded port moves it to the next free one). A project whose project file sets `servePort` uses that instead."
         },
         "rojoHub.agents": {
           "type": "object",
@@ -467,7 +534,7 @@
           {
             "id": "add",
             "title": "Add a project",
-            "description": "Pick a folder with a default.project.json (or another *.project.json). It gets its own port, the same on every machine.\n[Add Project](command:rojoHub.addProject)",
+            "description": "Pick a folder with a default.project.json (or another *.project.json). It gets its own fixed port.\n[Add Project](command:rojoHub.addProject)",
             "media": {
               "markdown": "media/walkthrough/add.md"
             },

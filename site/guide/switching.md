@@ -10,7 +10,8 @@ connected and gets the difference as one update.
 
 - **Fetch** (⟳ in the search box) runs `git fetch --all --prune`. It never prompts for a password.
 - **New branch…** (last row) makes a branch in its own worktree (Orca's, or `<repo>-worktrees/<name>`)
-  and switches to it.
+  and switches to it. A local base that is behind its remote is fetched first, so the branch starts
+  from the remote's commit; offline, the local one is used and the answer says so.
 - The list updates by itself when branches or worktrees change anywhere.
 
 ## How it works

@@ -1,8 +1,8 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.21.0,
-2026-10-04. Why each design choice was made, with measurements:
+underneath, and the known limits. It is the source for user documentation. Version 0.22.13,
+2026-10-27. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
 ## Contents
@@ -103,7 +103,9 @@ Windows user's Rojo-Hub (‹their folder›). Only one signed-in user can run Ro
 Rojo-Hub never uses or stops that service; it works again once that user signs out.
 
 **Uninstall** from every profile. On VS Code's next start, the uninstall step removes its Claude Code
-and Codex entries (if ticked), then stops the service and every Rojo it serves (only your own).
+and Codex entries (the launcher entry, or an old URL or stale one of Rojo-Hub's; never an entry of
+another shape), then stops the service and every Rojo it serves (only your own) and deletes the
+`launcher` folder.
 Delete `%LOCALAPPDATA%\RojoHub\` to remove state and views.
 
 ## 4. Where to find it in VS Code
@@ -183,15 +185,16 @@ workspaces, groups among groups). The order is saved in the service, so every wi
 - the **agent claim** while held: *Agent in ‹worktree› until 14:05* ([Agents](#10-agents));
 - **warnings** (yellow) and **errors** (red), in full. A Rojo error shows its first line, then up to
   the last five lines Rojo logged about it, with *Show full log*;
-- while `rojoHub.openPlaces` is on, its **places** (`servePlaceIds`, then `placeId`, not
-  `blockedPlaceIds`), whether each is open in Studio, and **Open**, or **Reopen** and **Close**
+- while `rojoHub.openPlaces` or `rojoHub.closePlaces` is on, its **places** (`servePlaceIds`, then
+  `placeId`, not `blockedPlaceIds`), whether each is open in Studio, and **Open** (`openPlaces`), or
+  **Reopen** and **Close** (`closePlaces`)
   ([Opening places](#opening-places-in-studio));
 - a bottom row: **status pill** (*Connected*, or *Connected · 2* with two Studios; *Serving*
   (waiting for Studio); *Starting…*; *Stopping…*; *Stopped*; *Error*; *Unavailable* (service not
   running)), a **⋯** menu, and **Start** or **Stop** (a project in error has both). The ⋯ menu,
   opening up or down as room allows: *Update sourcemap.json* with its status (worktree targets;
   [Sourcemaps](#sourcemaps)), *Open all places in Studio* (with `openPlaces` on and a place not
-  open), *Build place file…*, *Show Rojo log*, *Remove from Rojo-Hub…* (asks first).
+  open), *Build place file…*, *Show Rojo log*, *Locate folder…* (when the project is stopped and its folder moved: pick the new one; the project keeps its port and place assignments, spec 016), *Remove from Rojo-Hub…* (asks first).
 
 A folded card is one row: grip, arrow, light, name, a warning/error icon, a robot icon while an
 agent holds a claim, the port, and Start or Stop (both in error). A left rail shows state: green
@@ -233,8 +236,10 @@ group card folds and shows how many of its projects serve (green when all). Insi
 *Assign a project*, *Rojo too old*, *Reopen the place*), and a list to assign a project; *Automatic*
 follows project files and the last sync ([Connecting Studio](#7-connecting-studio)). A place that
 does not connect by itself (*Assign a project*) also gets *or connect by hand:* with every serving
-project's port to copy. With no place open it says so and how many projects serve. (0.19.3 removed
-the *Active ports* section this replaced.)
+project's port to copy. A place several projects list is marked *Shared*; an agent's pending request
+for it shows under it with **Move** and **Decline** ([Shared places](#shared-places-and-requests-spec-014)).
+With no place open it says so and how many projects serve. (0.19.3 removed the *Active ports* section
+this replaced.)
 
 **Agent access** (below Port settings, folded; header: how many agents can use Rojo-Hub): a switch
 per agent with a chip (*Connected*, *Off*, *Not installed*, *Set up by you*, *Can't read config*),
@@ -460,6 +465,28 @@ a minute; otherwise (someone pressed stop, then start) it lasts five seconds. On
 of the same project comes is the disconnect shown, as Rojo would have shown it. **Disconnect** during
 a hold ends it, and nothing connects by itself for a minute.
 
+**Handoff: moving a synced place** (spec 014). A plugin never takes over a session you started, so a
+place synced with one project did not follow when you moved it to another. Every deliberate
+assignment (**Move** on a request, the panel's Studio places list, `request_place`'s own assignment,
+a move under yolo or `rojoHub.placeMoves` `auto`) now records a *handoff* for the place: a number, new
+each time, sent in the answer as `target.handoff` (optional; older plugins skip it, so the Studio
+protocol is unchanged). A plugin that is **synced** (not connecting, not on Rojo's confirmation or
+settings page, in edit mode, never in play) with a *different* project and sees a handoff it has not
+acted on ends the session the way **Disconnect** does (not a lost session, so nothing is held or
+resumed), connects to the new project, and remembers the number: it switches once per handoff, and a
+project you connect by hand afterwards is left alone. The first sync of a place with a project still
+asks Rojo's confirmation. Without a handoff the old rule stands. The plugin logs "handing over from X
+to Y" in Studio's output and the service logs `studio: <place>: handing over from X to Y`. With
+*Rojo-Hub Auto Connect* off the plugin does not hand over. Open places must be reopened to get this.
+
+**The branch in Studio.** On Rojo's *Connected* page, under the project name, the plugin shows what
+the project serves: the branch, with the worktree's name after it when that differs
+(`feat/theme-ui (my-worktree)`), or just the worktree's name when it has no branch (detached). It
+reads the service's answer (`target.branch`, `target.targetLabel`), which is sent again whenever
+either changes, so a live switch changes the line within a tick. It shows only while the answer is
+about the project the place is synced with. A read-only branch copy shows its branch. The *Not
+Connected* page keeps its status line.
+
 **Changes Studio could not apply.** When a switch adds a node Studio cannot create but already has
 (`StarterCharacterScripts`, `StarterPlayerScripts`, a service), the plugin uses the existing one, as
 a first sync does, and syncs everything under it; under such a node, an existing child of the same
@@ -473,6 +500,61 @@ once. Assignments are kept per place ID (`placeChoices` in `registry.json`; remo
 forgets them). An unsaved place (`PlaceId` 0, or a template's ID such as a new Baseplate's) shares
 its ID with other unsaved places, so its assignment lasts only while that Studio window is open.
 Studio's Rojo window only shows the service's answer, in a line under its buttons.
+
+### Shared places and requests (spec 014)
+
+A place syncs with exactly one project at a time, because two owners would overwrite each other. When
+two registered projects list the same place (`servePlaceIds`, `placeId`; not `blockedPlaceIds`), it is
+*shared* and stays with the project it last synced with. Moving it is yours to allow:
+
+- **Seeing it.** The panel marks the place *Shared*. Agents' `status`, `serve_here`, `switch` and
+  `ensure` say, for each place of their project, which other project it is synced with (and that it
+  also lists the place), the other projects listing it, and any pending request, for example
+  "DL Game - Dev (106807032284628) is synced with VluxyBuildingTools, which also lists it. Call
+  request_place to ask the user to move it here." The holding project's `status` lists requests from
+  other projects for its places, so its agent finishes up and releases.
+- **Asking.** `request_place` (`place_id`, optional `wait`; see [Agents](#10-agents)) needs the
+  caller's claim on its project (`serve_here` first) and renews it. A place nobody holds (not open, or
+  open and synced with no project) is assigned to the asker at once, and nothing is taken from anyone.
+  A place another project holds becomes one pending request; asking again only refreshes it.
+- **Asked in the agent's own client.** If the agent's client declared the MCP `elicitation`
+  capability (Claude Code does), the launcher marks `request_place` calls with `x-rojo-hub-elicit: 1`,
+  and the answer for a held place carries `_meta["rojo-hub/elicit"]` (the request, the question
+  "Move Lobby from Other to Game? Studio switches it over at once.", and the wording for each
+  outcome). The launcher puts that to you with `elicitation/create` and sends your answer to the
+  service (`POST /studio/requests/:id/move` or `decline`, with `x-rojo-hub-answered-in: chat`, which
+  the audit log records as `approvedIn: "chat"`, and the client's own answer, which the service log
+  shows). The model never sees the form and cannot answer it: there is no `approved` argument. The
+  buttons are the answer: Accept moves the place and Decline declines, whatever the form's one field
+  (there because a form needs one) says; cancel, an error or ten minutes without an answer leave the request pending
+  (still answerable in VS Code). If it was answered elsewhere first, the agent is told so. In such a
+  call `wait` has nothing to wait for and is ignored. A client without elicitation is asked in VS Code
+  only, as before, and agents are told not to ask in chat either way. `wait` is capped at 60 seconds.
+- **Stale chats.** A chat keeps the launcher it started with until it reconnects (`/mcp`) or restarts, so
+  an update's new launcher behaviour (this question included) does not reach it. From 0.22.6 the
+  launcher sends `x-rojo-hub-launcher: <version>`; when that is missing or older than the service,
+  every tool result ends with a note asking the user to reconnect, and `version` reports it.
+- **A handover still pending.** A place assigned to one project but still synced with another is said
+  so in `status` (the place's line and the shared-place lines; `studioPlaces[].assignedTo` in the
+  data) and in `request_place`'s answer after a move: its plugin switches over by itself from 0.22.5 on;
+  with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.
+- **Deciding.** VS Code shows "Rojo-Hub: FolderThemes asks for DL Game - Dev, now synced with
+  VluxyBuildingTools. [Move] [Decline]" (with "(an agent is using VluxyBuildingTools)" when another
+  agent claimed the holder). Like the disconnect notice, only a window with the asking or the holding
+  project open shows it, else the focused window, once per request per window. **Move** saves the same
+  assignment as the panel's list: the place reconnects to the asker within a tick and stays with it
+  across reconnects and restarts (a place synced with the old project is handed over, see
+  [Connecting Studio](#7-connecting-studio)). **Decline** ends the request. Dismissing the notification leaves it
+  pending, answerable in the panel. An answer in one window ends it everywhere; the agent's prompt and
+  VS Code are two ways to give the same answer, and the first one wins.
+- **Moving at once.** With `rojoHub.placeMoves` `auto`, or under [yolo mode](#yolo-mode), when no
+  other agent has claimed the holding project, the move happens at once and is written to
+  `audit.jsonl` (`move_place`, `by`: `placeMoves` or `yolo`). A claimed holder still asks you. The
+  default is `ask`. `status` carries `placeMoves` and, when `auto`, says so in one line.
+- **Ending.** A request ends when it is moved or declined, the asker calls `release` or its claim runs
+  out, either project is removed, the asker stops listing the place, or the place is assigned to the
+  asker in the panel. Requests live in memory only: a service restart drops them and the agent asks
+  again. The Studio protocol is unchanged.
 
 **Connect to `<project>`.** While the place's project serves, a green button under Rojo's Connect
 names it. It connects to Rojo-Hub's port for it whatever the address boxes say, and works after
@@ -522,10 +604,49 @@ project file.
 Rojo-Hub counts them for the filled/outlined icon and tooltip. Rojo-Hub's plugin also reports which
 place it is, so the *Connected* pill's tooltip names them.
 
+### Yolo mode
+
+`rojoHub.yolo` (spec 012, design 4) is one master switch for users who trust their agents. Off by
+default, application scope (a repo's `.vscode/settings.json` cannot set it), and no MCP tool or API
+call from an agent can change it. With it on:
+
+- Agents may open places as if `rojoHub.openPlaces` were on (the panel shows Open too). Yolo does not turn on `rojoHub.closePlaces`.
+- `request_place` moves a shared place at once from a project no other agent has claimed (as
+  `rojoHub.placeMoves` `auto` does), instead of asking you ([Shared places](#shared-places-and-requests-spec-014)); it is logged.
+- `stop`, `remove_project`, `stop_group` and `start_group` with `only` are no longer refused because a
+  Studio place is synced; Studio disconnects.
+- `stop_all` works without `force`, but skips every project another agent has claimed and names them.
+- **Still in force:** claims (a stop of a claimed project is refused), `force` meaning what it did,
+  setup commands (not gated), and nothing deletes worktrees or branches.
+
+**Turning it on** from the settings UI shows a modal warning in the focused window; Cancel puts the
+setting back to `false`, and the service is told `true` only after **Turn on**. Editing settings.json
+by hand has no hook before the file is read, so the modal appears when the change is noticed.
+While it is on, every window shows a red status bar item (**ROJO-HUB YOLO**; click to turn it off)
+and the panel a red banner with **Turn off**. It never turns itself off.
+
+**Agents are told.** `status` begins with "Yolo mode is ON: ..." and `status` and `ensure` data carry
+`yolo: boolean`.
+
+**Audit.** While on, each state-changing MCP call appends to `audit.jsonl` in the hub folder:
+`time`, `actor`, `action`, `project`, `args`, `yolo: true`, `outcome`, and `lifted`, which is true
+when yolo is what allowed it (a stop that would have been refused, an open that `openPlaces` alone
+would have refused). A place moved at once by `request_place` is logged as `move_place` (`args`: `placeId`, `from`; `by`: `yolo` or `placeMoves`), and a move or decline you gave in the agent's own prompt as `move_place` or `decline_place` with `approvedIn: "chat"`. Turning yolo on or off is logged too (`yolo_on`, `yolo_off`). Reads (`status`,
+`version`, `branches`, `log`, `project_files`, `wait_for_studio`) are not logged.
+
 ### Opening places in Studio
 
 Off by default: turn on `rojoHub.openPlaces` (spec 009). Then each card lists its places and agents
-get `open_place`. Off, the card shows none of it and the API and `open_place` say the setting is off.
+get `open_place`. Off, the card shows no Open button and the API and `open_place` say the setting is off.
+**Close** and **Reopen** (and agents' `close_place` and `reopen_place`) are a separate setting,
+`rojoHub.closePlaces`, also off by default: with it on, the card shows them without `openPlaces`, a
+reopen's own open step needs only `closePlaces`, and agents are refused while another agent claims the
+project (or the one the place is synced with) unless `force`. Close and Reopen ask the place's Studio to
+close as if you closed its window, so it still asks about unsaved changes; nothing is killed or saved.
+They are what load an updated plugin into an open place. Windows refuses the request while Studio's
+window is not taking input, as while a dialog is open in it; the error then says so per Studio
+process (a dialog, no window, already exited, or asking failed), and the service log lists that
+process's windows. A reopen waits only for the Studio that was asked to close.
 
 - **Open** opens the place for editing, like the website's *Edit in Studio* (a `roblox-studio:` link
   with the universe ID). The plugin connects it as usual. *Open all places in Studio* (⋯ menu) opens
@@ -533,7 +654,12 @@ get `open_place`. Off, the card shows none of it and the API and `open_place` sa
 - **An open place is never opened again** (Studio would open a second copy). A place counts as open
   when its plugin reports it, or a running Studio's command line names it (covering the seconds before
   the plugin connects). Two simultaneous opens open it once. A place opened another way (Studio's
-  start page) with its plugin off is not seen.
+  start page) with its plugin off is not seen. The answer says which evidence was used (`evidence`:
+  `plugin` or `process`, with the Studio `pids` for a process). For a process alone, agents are told
+  the place looks open but its plugin has not connected (loading, or closing), that nothing was opened,
+  and to call `wait_for_studio`, or `open_place` again once that Studio has exited; `service.log` has
+  `places: ‹place› looks open (Studio pid N, plugin not connected); not opened`. The panel's message
+  says the plugin has not connected yet.
 - **The universe ID** is the project file's `gameId`, else looked up once from Roblox
   (`apis.roblox.com`, no sign-in) and kept in `universes.json` with the place's name. A failed lookup
   (no internet) says which place and why; try again.
@@ -544,7 +670,7 @@ get `open_place`. Off, the card shows none of it and the API and `open_place` sa
 - **Reopen** closes it, waits (up to 5 minutes, while you answer Studio's prompt) for that Studio to
   exit, then opens it: how an open place picks up a new plugin.
 
-Agents can open a place (`open_place`), never close or reopen one: that window may be yours.
+Agents can open a place (`open_place`, with `rojoHub.openPlaces`) and, with `rojoHub.closePlaces`, close or reopen one (`close_place`, `reopen_place`) unless another agent claims its project. Studio still asks about unsaved changes.
 
 ## 8. Switching branches
 
@@ -563,7 +689,7 @@ minute old. The picker opens drawn, and a newer list updates in place, keeping w
 
 **Fetch** (⟳ in the search box) runs `git fetch --all --prune`. It never asks for a password (git's
 prompt and Git Credential Manager's window are both off); a failure (offline, no access) shows in the
-picker. Rojo-Hub never fetches by itself.
+picker. Rojo-Hub never fetches by itself, except for the one remote a new branch's base tracks (below).
 
 **New branch.** The picker's last row is *New branch…*, or *New branch "‹typed›"* when the search
 text is not an existing branch. Its form has the name and **From** (current target, then local, then
@@ -573,8 +699,71 @@ remote branches). *Create* makes the branch in its own folder and switches to it
   `<your git user>/<name>`;
 - otherwise: a git worktree in `<repo>-worktrees/<name>` beside the repo.
 
+**A stale base.** Before a git worktree is made from a local branch (not HEAD or a commit), Rojo-Hub
+fetches just the remote that branch tracks (`origin` when it tracks none), waiting 10 seconds at
+most. If the local branch is strictly behind its remote branch, the new branch starts from the
+remote's commit (the answer says `from origin/main`); if the two have diverged it starts from the
+local branch and the answer warns; if the local branch is ahead or equal, it is used as is. A failed
+fetch (offline, no remote) is not an error: the branch starts from the local one and the answer says
+"could not fetch, used local ‹base›". Only refs are updated, nothing is checked out. In an Orca repo
+the base is passed to Orca as given, with no fetch.
+
 An invalid name, an existing branch or a missing base is pointed out before anything is made. Done,
 a message offers *Open in New Window*.
+
+### Setup commands (spec 012)
+
+A new worktree has no `Packages` or `node_modules`. **Setup commands** (`rojoHub.setupCommands`, a
+map from a repo's path to a list) install them right after the worktree exists and **before the
+project is first switched to it**, so Studio's first sight of the worktree is complete and Rojo 7.7
+never sees a folder appear under a watched tree. They run for *New branch* in the panel and for
+agents' `new_branch`, and for `ensure` in a worktree not yet served ([Agents](#10-agents)).
+
+```json
+"rojoHub.setupCommands": {
+  "C:/Games/Scary": [
+    { "command": "rokit", "args": ["install"] },
+    { "command": "wally", "args": ["install"] },
+    { "command": "npm", "args": ["ci", "--ignore-scripts"], "cwd": "tools", "timeoutSeconds": 300 }
+  ]
+}
+```
+
+- **Dangerous.** These programs run on your machine with your rights, on a branch name an agent
+  chose. The setting is application-scoped and not synced, so only you set it: neither a repo, a
+  workspace nor an agent can. `npm ci` runs the repo's install scripts; prefer `--ignore-scripts`.
+- **No shell.** Each entry is one program and its arguments (`spawn`, no shell). `.cmd` and `.bat`
+  files (`npm.cmd`) run through `cmd.exe`, so arguments containing `& | < > ^ % ! " ` ` or a newline are
+  refused when the setting is read. The key is the repo's path, matched without regard to case,
+  slash style, a trailing slash or `\\?\`.
+- **Environment.** Rokit's `bin` folder is put first on `PATH`. The branch name reaches commands only
+  as `ROJO_HUB_BRANCH` (never in the arguments); `ROJO_HUB_WORKTREE` is the worktree and
+  `ROJO_HUB_SETUP=1`. The working directory is the worktree, or its `cwd` (relative, no `..`).
+- **Limits.** At most 10 commands; `timeoutSeconds` 1-3600 (default 600); the whole list is capped at
+  30 minutes. A timeout kills the command and its child processes.
+- **Failure.** The first failing command stops the list. The worktree and branch stay (the work done
+  is not undone), nothing is switched, and the answer names the command, its exit code and the last
+  40 lines of its output. Fix the cause and call `ensure`.
+- **Never in a worktree Rojo has read.** Setup is refused in the primary checkout and in any worktree
+  a running or starting project has served since it started (installing there would add folders under
+  a watched tree).
+- **Audit log.** Every command, with who asked (`panel`, `mcp`), its time, exit code and output tail,
+  is appended to `audit.jsonl` in the Hub's folder; it rotates to `audit.old.jsonl` at 1 MB.
+  *Show setup log* in the failure message opens it.
+- **The panel.** The ⋯ menu's *Setup commands…* edits the list for that repo: one command per line,
+  "double quotes" group words, with a preview of exactly what will run. Commands with a folder or a
+  timeout show as `#fixed N` lines and are kept as they are; edit those in `settings.json`. Invalid
+  entries are shown on the card and the Hub ignores that repo's list until fixed.
+- **Waiting.** The panel waits for setup under a progress notification (*Setting up ‹name›: ‹command›
+  (2 of 3)*). An agent's `new_branch` waits 40 seconds, then answers `switched: false`; setup carries
+  on and the agent calls `ensure`, which joins the running job. A switch to a worktree still being set
+  up is refused until it finishes.
+
+Agents have no checkout or install verb, and none is planned: a checkout or an install inside a served worktree is what crashes Rojo 7.7.
+To change what a worktree serves, an agent makes a worktree (`new_branch`, which installs first) or
+switches to an existing one (`switch`, `serve_here`). To install packages, it lists the commands in
+`rojoHub.setupCommands` (you do) and calls `ensure`; in a worktree that is already served it runs
+the install itself and reads the `packages` warning.
 
 ### Sourcemaps
 
@@ -585,7 +774,9 @@ a window on that folder, or luau-lsp is open (so a windowless Orca agent gets it
 - **Same file as luau-lsp**: the same command (`sourcemap <project file> --include-non-scripts`, from
   the worktree), so both can run.
 - **Recovers**: a deleted folder crashes Rojo 7.7's watcher (same bug as below); it restarts a second
-  later, giving up with a note after five crashes in a minute. Studio is unaffected.
+  later. After five crashes in a minute it pauses for 30 s (the panel and `status` say *crashed 5 times
+  in a minute, retrying in 30 s* with Rojo's last error) and then tries again, for as long as the
+  project serves. Studio is unaffected.
 - **Never adds a file to git**: writes only where `sourcemap.json` is gitignored or exists. Otherwise
   the ⋯ menu says so, and *Update sourcemap.json* writes it once.
 - **Not for views**: nothing edits those.
@@ -595,7 +786,12 @@ a window on that folder, or luau-lsp is open (so a windowless Orca agent gets it
 served worktree (terminal, Source Control, Orca) sends Studio that branch, and the card says *‹branch›
 was checked out in ‹folder› while it was being served*. If it removed a folder, Rojo 7.7 crashes
 ([Known limits](#15-known-limits-and-troubleshooting)); Rojo-Hub restarts it on the same port and the
-card says the checkout caused it and Studio needs reconnecting.
+card says the checkout caused it and Studio needs reconnecting. The note also tells agents never to
+check out in a served folder (use `new_branch`) and users to pick the branch in the picker; it stays
+when `serve_here` serves the same folder again, and goes when the project serves something else. The
+MCP instructions say the same (no `git checkout`, `switch`, `reset --hard`, `rebase` or `stash` in a
+served folder, often the repo's main checkout), and `serve_here` from the main checkout adds a line
+to use `new_branch` for other work.
 
 ### What happens on a switch
 
@@ -695,17 +891,56 @@ make branches in their own worktrees, read Rojo's log and wait for Studio to syn
 an MCP server the service runs at `http://127.0.0.1:34870/mcp`; no extra files, scripts or
 instructions, since the server describes itself when the agent connects.
 
+**The launcher (spec 011).** Claude Code and Codex are pointed at a small program, not at that URL,
+so a session started while the service is down (no VS Code window open, or just after an update)
+still gets Rojo-Hub. The entry runs VS Code's own program as Node (`ELECTRON_RUN_AS_NODE=1`; no Node
+install needed) on `%LOCALAPPDATA%\RojoHub\launcher\rojohub-mcp.cjs`. That script speaks MCP over
+stdin/stdout and forwards each message to the service's `/mcp`:
+
+- **Starting the service.** Only when `/health` gets no answer, and only this Windows user's service
+  (another user's on the port is never started over or used). It starts the highest-version
+  `dist/service.js` it finds: `ROJO_HUB_SERVICE` (tests), else the hint file `launcher\service.json`
+  (written by the extension each time it starts a service, so development hosts and portable installs
+  work), else `greenviper126.rojo-hub-<version>` in `~\.vscode\extensions`, `.vscode-insiders`,
+  `.vscode-oss`, `.cursor`, `.windsurf` and `VSCODE_EXTENSIONS`. It never stops or replaces a running
+  service. Nothing found: calls say Rojo-Hub is not installed in VS Code.
+- **While it starts.** `initialize` and `tools/list` are always answered (live, else from
+  `launcher\cache.json`, else a placeholder `rojohub_starting` tool) and the agent gets
+  `notifications/tools/list_changed` once the real list is there or the service's version changed.
+  Every `/mcp` answer carries `x-rojo-hub-version`; the launcher compares it with the version it told
+  the agent, so a new service that took over the port between two calls is noticed on the next answer,
+  and `list_changed` follows that answer (a service without the header is checked through `/health`
+  instead). No timers.
+  A `tools/call` is held up to 20 s, then returns an error result saying to call again in a few seconds.
+- **A restart mid-session** (idle exit, an update). A refused connection never reached the service,
+  so the launcher starts it again and sends the request once more. A connection that dies after the
+  request was sent is not repeated, since the call may have happened: the result says the service
+  restarted and to call `status`.
+- It notes whether the agent's `initialize` declared `capabilities.elicitation`; if so it adds
+  `x-rojo-hub-elicit: 1` to `request_place` calls and puts the service's question to the user with
+  `elicitation/create` (see [Shared places](#shared-places-and-requests-spec-014)).
+- It sends the `MCP-Protocol-Version` it negotiated with the agent on every call. It ends when the
+  agent closes stdin and never stops the service.
+- The service copies the launcher there on every start (`// rojo-hub-launcher <version>` first line;
+  never replaces a newer one) because agents' configs cannot point into the extension's versioned
+  folder. The URL form still works for agents that only take a URL, and VS Code's own provider is
+  unchanged.
+
 **Turning it on**: a switch per agent in the panel's **Agent access**, or a checkbox per agent in
 `rojoHub.agents` (the same setting).
 
 | Agent | Default | Turning it on |
 |---|---|---|
 | VS Code agents | on | Registers the server with VS Code; nothing written to disk. |
-| Claude Code | off | `claude mcp add --scope user --transport http rojohub http://127.0.0.1:34870/mcp` |
-| Codex | off | `codex mcp add rojohub --url http://127.0.0.1:34870/mcp` |
+| Claude Code | off | `claude mcp add --transport stdio -e ELECTRON_RUN_AS_NODE=1 --scope user rojohub -- <Code.exe> <launcher>` |
+| Codex | off | `codex mcp add rojohub --env ELECTRON_RUN_AS_NODE=1 -- <Code.exe> <launcher>` |
 
-Turning off runs the matching `mcp remove`. Switches reflect each agent's own config, so a
-hand-removed entry shows off:
+(`-e` takes any number of values in `claude`, so options must follow it before the name.) Turning off
+runs the matching `mcp remove`. **Old entries are rewritten:** when the service starts, an old URL
+entry of Rojo-Hub's (*legacy*) and a launcher entry whose program or script is gone (*stale*, e.g.
+VS Code moved) are replaced with the current launcher entry (remove, then add), unless the switch is
+being turned off. Not when `ROJO_HUB_HOME` is set, which only tests do. Switches reflect each agent's
+own config, so a hand-removed entry shows off:
 
 - Claude Code: top-level `mcpServers` of `$CLAUDE_CONFIG_DIR/.claude.json` when `CLAUDE_CONFIG_DIR`
   is set **and that file exists**, else `~/.claude.json`;
@@ -713,10 +948,11 @@ hand-removed entry shows off:
 
 | Chip | Meaning |
 |---|---|
-| *Connected* | The config has Rojo-Hub's `rojohub` entry. |
+| *Connected* | The config has Rojo-Hub's launcher entry (`rojohub`, args ending in the launcher script under this hub home, program and script present). |
+| *Updating* | An old URL entry of Rojo-Hub's, or a launcher entry whose program or script is gone; the service rewrites it. The switch still works (off removes it). |
 | *Off* | Installed, no `rojohub` entry. |
 | *Not installed* | Its CLI (`claude`, `codex`) is not on `PATH`; switch greyed out. |
-| *Set up by you* | A `rojohub` entry with another URL. Never changed or removed; switch greyed out. |
+| *Set up by you* | A `rojohub` entry of any other shape (another URL, command or script). Never changed or removed; switch greyed out. |
 | *Can't read config* | The file exists but cannot be read or parsed (maybe mid-write). Left alone and rechecked; never taken for "no entry", so nothing is added, removed or switched off because of it. Switch greyed out. |
 
 While a change applies the chip reads *Working…*; a failure shows under the row.
@@ -730,7 +966,8 @@ made, it asks once: *Let … use Rojo-Hub's tools?* Yes turns them on; No turns 
 agent notice for 14 days.
 
 **Another agent?** Under *Other agents and manual setup*: *Copy commands* (**Rojo-Hub: Copy Agent
-Setup Commands**) copies both commands and a JSON entry for JSON-configured agents; *Copy prompt*
+Setup Commands**) copies the stdio commands and a JSON entry first, then the URL form for agents
+that only take a URL (the service must then be running); *Copy prompt*
 (**Rojo-Hub: Copy Agent Setup Prompt**) copies a paragraph to paste into any agent, which then adds
 Rojo-Hub to its own config.
 
@@ -739,24 +976,29 @@ at once, so an agent should not need to ask you to click.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
-| `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends. |
-| `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait`. |
-| `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. |
+| `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open, a line for each place that is synced with another project or listed by several, and requests other projects made for its places; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. `project` (or `path` with `mine: true`) narrows the whole answer to that project, its groups and its places. A place being reopened is listed as "reopening" (also in `version`). |
+| `version` | Which versions are running: the service, the Studio plugin it installs, the MCP launcher file (or "not installed"), this chat's own connection (the launcher version it sent in `x-rojo-hub-launcher`, with advice to run `/mcp` and reconnect when it is older than the service or missing), each serving project's Rojo, and each open Studio place's plugin, with a note to reopen the place when its plugin is older than the service. Reads only: it claims and renews nothing. Data: `service`, `plugin`, `launcher`, `connection`, `connectionOutdated`, `projects` (`id`, `name`, `rojoVersion`), `places` (`placeId`, `name`, `pluginVersion`, `outdated`). Optional `path` is ignored. |
+| `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), brings Rojo-Hub's parts to the current version in a `versions` step (described below), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `versions`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
+| `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
+| `switch` | Switches a project to a branch (its worktree if any, else a view) or worktree, and claims it. Takes `wait` and `then_return`. |
+| `new_branch` | Makes a branch in its own worktree (through Orca when Orca manages the repo), switches to it and claims it; answers the folder to work in. Runs the repo's [setup commands](#setup-commands-spec-012) in the new worktree before the switch; if they fail it says so and does not switch; if they take over 40 seconds it answers `switched: false` and the agent calls `ensure`. |
 | `branches` | Switch targets, newest first (`fetch` fetches first). |
-| `release` | Drops the agent's claim; the project keeps serving. |
+| `release` | Drops the agent's claim; the project keeps serving, unless the claim was taken with `then_return` (then it switches back). Says so when the claim had already run out. |
 | `start` | Starts a stopped project. |
 | `stop` | Stops a project. Guarded. |
-| `stop_all` | Stops every project. Always needs `force`. |
+| `stop_all` | Stops every project. Needs `force`; with [yolo mode](#yolo-mode) on it works without, but keeps projects another agent claimed and names them. |
 | `add_project` | Registers a folder's repo (optionally another `project_file`). |
 | `remove_project` | Unregisters a project; never deletes files. Guarded. |
+| `close_place` / `reopen_place` | Ask Studio to close one of the project's places (`reopen_place` also opens it again once Studio exited, within five minutes). `placeId` (optional with one place), `force`. Only with `rojoHub.closePlaces`; refused while another agent claims the project or the one the place is synced with, unless `force` (only when you ask). Yolo does not lift the setting. Audited as `close_place` / `reopen_place`. |
+| `request_place` | Asks you to move a shared Studio place to the agent's project ([Shared places](#shared-places-and-requests-spec-014)): in the agent's own client when it supports MCP elicitation, else in VS Code (Move or Decline). The agent cannot answer for you. `place_id` (one of the project's places), optional `wait` seconds (up to 60) for an answer given in VS Code. Needs the caller's claim (`serve_here` first). A place nobody holds is assigned at once; a held one becomes one pending request (repeat calls refresh it); with `rojoHub.placeMoves` `auto` or under yolo an unclaimed holder is moved at once. Returns `outcome`: `already`, `assigned`, `moved`, `pending`, `declined` or `ended`. Data: `outcome`, `placeId`, `name`, `project`, `holder`. |
 | `project_files` | The folder's `*.project.json` files and which is served. |
 | `set_project_file` | Serves another project file; only while stopped. |
+| `relocate_project` | Points a stopped project at its moved folder (`new_path`; pass `project`): keeps its port, groups, order and place assignments, which remove and add would lose. The new folder must be the same repo (same first commit) with the same project name (spec 016). |
 | `start_group` / `stop_group` | Starts or stops a group (`only` also stops everything outside). Stopping is guarded. |
 | `create_group` / `edit_group` / `delete_group` | Makes, renames, changes members of, or deletes a group. |
-| `log` | The last lines of a project's Rojo log. |
+| `log` | The last lines of a project's Rojo log, without Rojo's DEBUG and TRACE lines (it says how many it hid); `verbose: true` shows all. |
 | `wait_for_studio` | Waits until a Studio place syncs to the session, and names it. |
-| `open_place` | Opens a project's place (`placeId`, optional when it has one) unless open, then does nothing and says so. Only with `rojoHub.openPlaces` on; agents cannot close places. |
+| `open_place` | Opens a project's place (`placeId`, optional when it has one) unless open, then does nothing and says so. Only with `rojoHub.openPlaces` on. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |
 | `sourcemap` | Writes the served worktree's `sourcemap.json` once. |
 
@@ -764,33 +1006,92 @@ at once, so an agent should not need to ask you to click.
 worktree holds the claim, or while a Studio place is synced and the agent holds no claim; the claim
 holder may stop its own project. The refusal says who or what is affected. `force` overrides, and
 agents are told to pass it only when you ask. Starting, adding and group edits disturb no one.
-`set_project_file` works only on a stopped project. Which project a place syncs with, agent
-registration and settings stay yours (spec 008).
+`set_project_file` works only on a stopped project. Which project a place syncs with (agents can only
+ask, with `request_place`), agent registration and settings stay yours (spec 008, 014).
 
 **Rojo's errors come back.** After `serve_here`, `switch`, `new_branch` and `start`, the tool waits
-about a second (a switch applies in that time) and adds any Rojo error and the card's warnings. `serve_here` and `switch` also add what each synced Studio place reported it could not apply since the call began (spec 010), and say not to stop and start the project for it; the tool descriptions and instructions tell agents that stopping a project disconnects Studio and a switch never needs it.
+about a second (a switch applies in that time) and adds any Rojo error and the card's warnings. `serve_here` and `switch` also add what each synced Studio place reported it could not apply since the call began (spec 010), and say not to stop and start the project for it; the tool descriptions and instructions tell agents that stopping a project disconnects Studio and a switch never needs it. If rojo crashed and the Hub restarted it during that time, they say so too: a new Rojo session, Studio reconnects through the plugin, call `wait_for_studio`.
 
 **Waiting instead of polling.** With `wait` (seconds, up to 600), `serve_here`, `switch` and
 `new_branch` wait out another worktree's claim and take the project the moment it is released or
 expires; waiters are served in the order they asked.
 
+**ensure brings everything to the current version (`versions`, spec 015).** After `serve` and before
+`open_place`, `ensure` has a `versions` step, so "run ensure" is the whole instruction an agent needs
+after an update. It never makes `ensure` fail and never changes `ready`.
+
+- This project's Studio places (synced with it, or assigned or connecting to it) whose plugin is older
+  than the service are reopened with the same call as `reopen_place` (Studio is asked to close as if
+  the user closed its window; nothing is killed or saved). Only saved places, only with
+  `rojoHub.closePlaces` on, and not a place synced with a project another agent claimed (unless
+  `force`). Each reopen is audited (`reopen_place`, `by: "ensure"`) unless yolo is on. `ensure` then
+  waits, within its `timeout`, until each place says hello again with the current plugin
+  (`reloaded`). A place still open at the end is `waiting` (Studio may be asking about unsaved
+  changes), a reopen that errored is `failed`; either way the place keeps syncing with its old plugin.
+- With `rojoHub.closePlaces` off the places are only listed, with the step to take.
+- Other projects' places with an older plugin are listed in `outdatedElsewhere` and left alone.
+- The service reads each VS Code profile's `extensions.json` (`%APPDATA%\Code\User\profiles\*\` and
+  `~\.vscode\extensions\`). If one lists a newer Rojo-Hub than the running service, the step says to
+  reload a VS Code window. Unreadable lists are skipped. (`ROJO_HUB_VSCODE_USER` and
+  `ROJO_HUB_VSCODE_EXTENSIONS` replace the two folders; tests use them.)
+- If the chat's own connection is older than the service, the step says the user must run `/mcp`
+  and reconnect `rojohub`, or start a new chat: the one thing no tool can do.
+
+The step's outcome is `done` when places were reopened and nothing needs the user, `already` when
+everything is current, `skipped` when something needs the user. Its text has one line per item
+(`ok`, `fixed`, `needs you: <step>`), or "all on X". The structured `versions` is `{ service,
+current, needsUser, reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "skipped" | "failed", detail }],
+outdatedElsewhere: [{ placeId, name, pluginVersion }] }`; it is `null` when `ensure` stopped before
+the step.
+
+**Handing the project back (`then_return`, spec 013).** `serve_here`, `switch` and `ensure` take `then_return: true`: the claim remembers what the project served just before (a worktree or a branch). When the agent calls `release`, or the claim runs out (a once-a-second check in the service), the project switches back to it, live like any switch, never a restart. It returns only if the project is still serving, still serves what the agent took, no other claim holds it, and a worktree's folder still exists; otherwise it stays where it is and `release` says why. The remembered target is kept in `claims.json`, so a service restart does not lose it. The answer says what it will switch back to; `status` shows it as `claim.thenReturn`. Without `then_return` nothing changes.
+
 **Which Studio to look at.** `status`, `serve_here` and `switch` name the synced places with place IDs
 (from Rojo-Hub's plugin), and `status` ends with every open place and what it syncs with, so an agent
 with a Studio tool picks the right Studio. The server's instructions also say Rojo overwrites what it
 syncs (change files, not Studio), a switch reaches Studio within about a second, and agents cannot
-choose which project a place syncs with.
+choose which project a place syncs with on their own (they can ask with `request_place`).
+
+**Structured answers (spec 011).** `status`, `serve_here` and `switch` also return their facts as data,
+in the result's `structuredContent`, with an `outputSchema` in `tools/list`, so an agent reads a place
+ID, the claim's expiry or the served commit without parsing sentences. The text beside it is unchanged.
+Only clients that send the `MCP-Protocol-Version` header with 2025-06-18 or later get either; any other
+client gets exactly the text-only answers it always did. Each project is one *ProjectState*: `id`,
+`name`, `port`, `repoPath`, `projectFile`; `rojo` (`state`, `error`, `sessionId`, `connections`);
+`served` (`kind`, `label`, `path`, `branch`, `commit`: the full hash of the served worktree's HEAD or
+branch ref, `null` when git does not answer in 2 s); `claim` (`holder`, `until` as ISO 8601 UTC,
+`secondsLeft`, `yours`) or `null`; `places` (synced: `placeId`, `name`, `pluginVersion`, `reason`,
+`saved`; an unsaved place has ID 0), `connecting`, `listedPlaces`, `sourcemap`, `warnings`, and
+`yourWorktreeServed` (`null` without a `path`), `sharedPlaces` (each place of the project that another
+project lists or holds: `placeId`, `name`, `heldBy`, `alsoListedBy`, `request`: `none`, `pending`,
+`declined` or `moved`) and `incomingRequests` (`placeId`, `name`, `from`: asks for places this project
+holds). `status` returns `projects`, `groups`, `studioPlaces`
+and `yourProject`; `serve_here` and `switch` return `project`, `switched` (false when it already served
+the target), `problems` (Rojo's error lines and the card's warnings) and `unapplied`.
 
 **Claims.** Several agents can work in worktrees of one repo while one Studio shows one of them, so
-`serve_here` and `switch` claim the project for their target (worktree or branch) for 10 minutes.
-While another target holds it, they refuse, naming holder and expiry (`force` overrides, only when you
-say).
+`serve_here` and `switch` claim the project for their target (worktree or branch) for
+`rojoHub.claimMinutes` minutes (default 15). While another target holds it, they refuse, naming holder
+and expiry (`force` overrides, only when you say).
 
-- **Renewing**: a worktree claim is renewed for 10 minutes by `status`, `build` and `sourcemap` calls
+- **How long**: `rojoHub.claimMinutes` (a number, default 15, no upper limit, fractions allowed;
+  negative or invalid means 15). The service reads it whenever it sets or renews a claim, so a
+  changed value reaches a claim the next time it is renewed: from 15 to 0 it stops expiring at the
+  next renewal; from 0 to 30 it ends 30 minutes after the next renewal (until then it never runs out).
+  **0 means a claim never runs out**: it lasts until the agent calls `release`, or you release it (see
+  *Release claim* below). Answers then say *until you call release (claims don't run out:
+  rojoHub.claimMinutes is 0)* instead of a time, the MCP instructions state the same, and `status`
+  data has `until` and `secondsLeft` as `null`. The risk of 0 is an agent that crashed or was closed
+  holding the project for good.
+- **Renewing**: a worktree claim is renewed for `rojoHub.claimMinutes` minutes by `status`, `build` and `sourcemap` calls
   with a `path` inside it, and by `serve_here`/`switch` for it. `release` does not renew. A branch
   claim from `switch` is renewed only by switching to that branch again.
-- **`release`** drops it; with a `path` in another worktree than the holder it refuses; without a
+- **`release`** drops it (a claim that already ran out is not an error: it says so and what the project still serves); with a `path` in another worktree than the holder it refuses; without a
   `path` it needs `force` (no telling whose claim it is).
-- The card shows *Agent in new-ui until 14:05* (worktree folder name or branch); folded, a robot icon.
+- The card shows *Agent in new-ui until 14:05* (worktree folder name or branch; *until it releases*
+  when claims never run out); folded, a robot icon. **Release claim** on that line ends the claim
+  now with the same release as the tool: a `then_return` switches back and the agent's asks for shared
+  places end. It is written to the audit log (`release_claim`).
 - **Your own switches always go through** (picker, *Switch Branch…*, anything calling
   `POST /slots/:id/switch`) and, like *New branch*, clear the claim. Start, stop and group actions
   keep it.
@@ -846,7 +1147,7 @@ debugging.
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /health` | | Service version, pid, state folder |
-| `GET /events` | | `text/event-stream` of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces }`: once at once, then on every change, within 150 ms. Each slot's `listedPlaces` are its places, whether open, and what is being done to them |
+| `GET /events` | | `text/event-stream` of `{ slots, groups, order, studioPlugin, studioPlaces, openPlaces, closePlaces, placeRequests }`: once at once, then on every change, within 150 ms. Each slot's `listedPlaces` are its places, whether open, and what is being done to them |
 | `GET /slots` | | Every project with its state |
 | `POST /slots` | `{ path, projectFile? }` | Register the repo containing `path`; default: `default.project.json` or the only `*.project.json` |
 | `PUT /slots/:id/project-file` | `{ projectFile }` | Serve another `*.project.json` of the folder; restarts a serving Rojo |
@@ -858,7 +1159,8 @@ debugging.
 | `POST /slots/:id/branch` | `{ name, base }` | New branch in its own worktree (Orca's, else beside the repo), and switch to it |
 | `POST /slots/:id/build` | `{ output }` | `rojo build` into `output`, an absolute `.rbxl`/`.rbxlx` path |
 | `POST /slots/:id/sourcemap` | | Write the served worktree's `sourcemap.json` once |
-| `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open" }`. 409 while `openPlaces` is off, or for an unlisted place |
+| `POST /slots/:id/release` | | The user releases the project's claim (or the memory of one that ran out): `{ released, returned, notReturned? }` |
+| `POST /slots/:id/places/:placeId/open` | | Open a place unless open: `{ placeId, placeName, outcome: "opened" \| "already-open", evidence?: "plugin" \| "process", pids? }`. 409 while `openPlaces` is off, or for an unlisted place |
 | `POST /slots/:id/places/:placeId/close` | | Ask that place's Studio window to close (409 when its window is unknown) |
 | `POST /slots/:id/places/:placeId/reopen` | | Close, then open once that Studio exited; answers once the close was asked |
 | `POST /slots/:id/places/open-all` | | Open each place not open: one result (or `{ placeId, error }`) each |
@@ -872,11 +1174,13 @@ debugging.
 | `POST /stop-all` | | Stop every serving project and mark every group stopped |
 | `GET /order` | | Display order: `{ projects, groups }` |
 | `PUT /order` | `{ projects?, groups? }` | Save display order (never changes a port) |
-| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces? }` | Settings from the extension. Replaces all: a missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
+| `PUT /settings` | `{ portRange?, excludedPorts?, sourcemaps?, studioPlugin?, studioAutoConnect?, openPlaces?, closePlaces?, claimMinutes?, placeMoves?, yolo?, setupCommands? }` | Settings from the extension. `yolo` and `setupCommands` are applied only with header `X-Rojo-Hub-Token` (the `settings-token` file in the state folder); without it they are ignored and the answer lists them in `ignored`. A missing `yolo`, `setupCommands`, `closePlaces` or `claimMinutes` keeps its saved value; any other missing field reverts to its default (`""`, `[]`, `true`, `true`, `"remembered"`, `false`, `false`). A port change moves ports at once; turning `studioPlugin` on installs the plugin |
 | `POST /shutdown` | `{ stopServing? }` | Stop the service, optionally its Rojo too |
 | `GET /studio` | WebSocket | The plugin's link (spec 007): `welcome` → `hello` (place) → `match` (which project, re-pushed on change); `state` (what it is synced to). Protocol 2. Browser `Origin` refused, like every route |
+| `GET /studio/requests` | | Agents' pending requests for shared places (spec 014): `id`, `placeId`, `placeName`, `asker`, `holder`, `holderClaimed`, `since` |
+| `POST /studio/requests/:id/move`, `.../decline` | | The user's answer: Move saves the assignment the panel makes (`PlaceMemory.assign`, which also hands a synced place over); both end the request. 409 when it was already answered or ended. Header `x-rojo-hub-answered-in: chat` (the launcher's, for an answer given in the agent's prompt) is recorded in `audit.jsonl` |
 | `PUT /studio/places/:key` | `{ slotId }` | Assign a project to an open place (`key` from `studioPlaces`: a place ID, or `studio:<id>` for an unsaved place's window); `null` = *Automatic*. Answers the new `studioPlaces` |
-| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`absent`/`other`/`unknown` (unreadable), last error |
+| `GET /agents` | | Claude Code's and Codex's registration: installed, `connected`/`legacy`/`stale`/`absent`/`other`/`unknown` (unreadable), last error |
 | `PUT /agents` | `{ claudeCode?, codex? }` | `true` adds Rojo-Hub to that agent's user config, `false` removes it (installed agents only; never on `other` or `unknown`) |
 | `POST /mcp` | JSON-RPC | The MCP server ([Agents](#10-agents)): one request per POST, plain JSON answer; a notification gets 202 with no body. Other methods on `/mcp`: 405 |
 
@@ -899,11 +1203,15 @@ Everything lives in `%LOCALAPPDATA%\RojoHub\`:
 | `registry.json` | Projects (repo, port, target, whether to serve), groups (members, nested groups, running), display order, Studio place assignments (`placeChoices`), each place's last project (`placeSynced`), accepted first syncs (`placeAccepted`) |
 | `registry.json.bak` | The previous save, for recovery |
 | `registry.corrupt-<time>.json` | A damaged `registry.json`, set aside when started from the `.bak` |
-| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces` |
+| `settings-token` | A random secret the service makes once. `PUT /settings` applies `yolo` and `setupCommands` only with it in header `X-Rojo-Hub-Token`; the extension reads it from here. It keeps out other programs and sandboxed agents that can only reach 127.0.0.1; a process running as you that can read this folder can read it too |
+| `slots/<id>/served.json` | The worktrees the slot's running rojo has read, so a restarted service that adopts the rojo still refuses setup in them; removed when the rojo stops |
+| `settings.json` | Settings last sent by VS Code: port range, excluded ports, `sourcemaps`, `studioPlugin`, `studioAutoConnect`, `openPlaces`, `closePlaces`, `claimMinutes`, `placeMoves`, `yolo`, `setupCommands` |
+| `audit.jsonl` | One JSON line per setup command run (time, who asked, command, exit code, output tail), per state-changing agent call while yolo is on, and for yolo being turned on or off ([Yolo mode](#yolo-mode)); rotated to `audit.old.jsonl` at 1 MB |
 | `universes.json` | Opened places' universe IDs and names ([Opening places](#opening-places-in-studio)); safe to delete |
 | `claims.json` | Agents' claims (spec 004), kept across restarts until they expire |
 | `agent-notice.json` | Until when the agent notice stays hidden |
-| `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and every change of what it is told to sync with |
+| `launcher\rojohub-mcp.cjs` | The stdio launcher agents run ([Agents](#10-agents)), copied by every service start; `service.json` is the hint to the newest service script, `cache.json` what the service last said (`instructions`, tool list, version). Deleted on uninstall |
+| `service.log` | Start and stop, recovered errors, a damaged registry, git problems, each Studio place's hello and disconnect, opens refused because a Studio process names the place, and every change of what it is told to sync with, place requests (asked, put to the agent's client, answered and where, ended, moved at once) and every place assignment with its source (`studio: <place> assigned to <project> (panel)`) |
 | `slots\<id>\slot.project.json` | The generated file Rojo serves; its root points at the served tree's project file |
 | `slots\<id>\borrowed.project.json` | The borrowed-mode copy |
 | `slots\<id>\rojo.log` | Rojo's log (*Show Rojo Log*); `rojo.previous.log` is the run before |
@@ -938,7 +1246,13 @@ All are **user settings for every project and window**; workspaces cannot overri
 | `rojoHub.excludedPorts` | `[]` | Ports never hashed to: numbers (`35000`) or ranges (`"35000-35010"`). 34872 and 34870 always excluded. A `servePort` still wins ([Ports](#6-ports)). Invalid entries ignored with a warning on every card. |
 | `rojoHub.sourcemaps` | `true` | Keep `sourcemap.json` current in each served worktree ([Sourcemaps](#sourcemaps)). |
 | `rojoHub.studioAutoConnect` | `"remembered"` | Which places connect by themselves: `"listed"` only places a project file lists (`servePlaceIds`, `placeId`) or assigned in Studio places; `"remembered"` also a place's last project ([Connecting Studio](#7-connecting-studio)). |
-| `rojoHub.openPlaces` | `false` | Open, close and reopen places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. |
+| `rojoHub.openPlaces` | `false` | Open places from cards, and agents' `open_place`. Never opens an open place twice ([Opening places](#opening-places-in-studio)). Off: none of it works. Closing and reopening is `rojoHub.closePlaces`. |
+| `rojoHub.claimMinutes` | `15` | How long an agent's claim on a project lasts after its last Rojo-Hub call, in minutes; 0 or more, no maximum, fractions allowed (invalid: 15). **0: a claim never runs out**; it lasts until the agent calls `release` or you press *Release claim* on the card (see Claims above). |
+| `rojoHub.closePlaces` | `false` | Lets Rojo-Hub close and reopen Studio places: the panel's **Close** and **Reopen** (shown only while it is on) and agents' `close_place` and `reopen_place`, e.g. to load an updated plugin. Studio is asked to close as if you closed its window, so it still asks about unsaved changes; nothing is ever killed or saved for you. A reopen's own open step needs only this setting, not `rojoHub.openPlaces`. Yolo mode does not turn it on. Application scope. |
+| `rojoHub.reloadOnUpdate` | `true` | When a newer Rojo-Hub is installed in this VS Code profile (`code --install-extension ... --force`, or an update), this window says so and reloads itself after 10 seconds, so the new extension runs (and the first window starts the new service). **Reload Now** reloads at once, **Not Now** leaves that version alone in this window. Each window does it for itself, checking its own profile's extension list (the profile's `extensions.json`) every 30 seconds and when extensions change, so a newer version installed only in another profile never reloads it. The window's profile is read from VS Code's record of which profile each workspace opens in (`profileAssociations` in `User\globalStorage\storage.json`); an empty window, or one VS Code has no record of, never reloads by itself. A reload that did not bring the version up is not repeated in that workspace. Never in a development host. Works for updates after 0.22.9 is running (0.22.6 to 0.22.8 looked in the wrong profile and never reloaded). Application scope. |
+| `rojoHub.placeMoves` | `"ask"` | What happens when an agent asks for a Studio place another project holds (`request_place`). `ask`: you are asked (in the agent's client, else in VS Code). `auto`: the place moves at once, unless another agent has claimed the holding project; then you are still asked. Moves made at once are in `audit.jsonl` ([Shared places](#shared-places-and-requests-spec-014)). Application scope. |
+| `rojoHub.yolo` | `false` | **DANGEROUS.** Lifts the guards for agents ([Yolo mode](#yolo-mode)). Application scope, not synced. |
+| `rojoHub.setupCommands` | `{}` | **Dangerous.** Per repo path, programs run in a new worktree before it is first served ([Setup commands](#setup-commands-spec-012)). Edited in the panel (⋯ → *Setup commands…*) or `settings.json`; user-level only, not synced. |
 | `rojoHub.studioPlugin` | `true` | Keep Rojo-Hub's plugin in Studio's plugins folder and remove other `RojoHub*.rbxm` copies. Off: the folder is left alone. |
 | `rojoHub.agents` | `{ vscode: true, claudeCode: false, codex: false }` | Which agents get the MCP server ([Agents](#10-agents)). Checkboxes. Not synced by Settings Sync (it describes this machine's agent configs). |
 | `rojoHub.notifyOnStudioDisconnect` | `false` | Message when Studio disconnects from a serving project, in the window with it open (else the focused one). |

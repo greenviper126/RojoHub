@@ -1,13 +1,22 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, statSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 
-import { SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
+import { CLAIM_NEVER, SERVICE_VERSION, type GroupResult, type GroupView, type ListedPlace, type SlotView, type StudioPlace, type Target } from "../common/api";
+import { launcherScript, launcherVersion } from "../common/launcher";
 import { isProjectFileName } from "../common/projectFiles";
-import { git, pathKey, primaryCheckout } from "./git";
+import { compareVersions } from "../common/version";
+import { writeAudit } from "./audit";
+import { git, pathKey, primaryCheckout, revParse } from "./git";
 import type { Groups } from "./groups";
-import { claimKey, type Hub } from "./hub";
-import { OFF_MESSAGE } from "./places";
+import { claimKey, type HandBack, type Hub } from "./hub";
+import { extensionLists, newestInstalled } from "./installed";
+import { CLOSE_OFF_MESSAGE, OFF_MESSAGE } from "./places";
+import { loadPortSettings } from "./ports";
+import { listersOf } from "./requests";
 import { Conflict, NotFound } from "./registry";
+import { describeFailure, describeSteps, installChecks, type CheckResult } from "./setup";
+import { resolveRojo } from "./tools";
 
 /*
 	Rojo-Hub for agents (specs 004 and 008): the Model Context Protocol over
@@ -21,42 +30,190 @@ import { Conflict, NotFound } from "./registry";
 	place is synced to while the caller holds no claim, needs `force`; stopping
 	everything always does. Several agents can work in worktrees of one repo while
 	one Studio shows one of them, so switching claims the project for the
-	switcher's target for CLAIM_MS; others are refused, or wait with `wait`. A
+	switcher's target for rojoHub.claimMinutes (0: until release); others are refused, or wait with `wait`. A
 	switch made by the user clears the claim. What stays the user's: which
-	project a Studio place syncs with, agent registration, settings.
+	project a Studio place syncs with (an agent can only ask, with request_place, spec
+	014), agent registration, settings.
 */
 
-export const CLAIM_MS = 10 * 60 * 1000;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 /** How long a switch is given to reach Rojo's log before its errors are read back. */
 const SETTLE_MS = 1500;
 const MAX_WAIT_S = 600;
+/** The longest request_place waits for the user: the user is a person, not a claim. */
+const MAX_REQUEST_WAIT_S = 60;
+/** How long new_branch waits for setup commands: below Codex's 60 s tool timeout (spec 012). */
+const SETUP_WAIT_MS = 40000;
+/*
+	Whether the chat's connection is older than the service. A stdio launcher
+	keeps running its old code until the chat reconnects (/mcp) or restarts, so
+	it misses new tools, descriptions and prompts. From 0.22.6 the launcher
+	names itself in x-rojo-hub-launcher; a call without it came from an older
+	launcher or a client talking HTTP directly, and the advice (reconnect through
+	the launcher) fits both. Returns the label for the note, or null when current.
+*/
+export function staleConnection(launcher: string | string[] | undefined): string | null {
+	const version = (Array.isArray(launcher) ? launcher[0] : launcher)?.trim();
+	if (!version) return "before 0.22.6";
+	return compareVersions(version, SERVICE_VERSION) < 0 ? version : null;
+}
+
+/** The line a tool result carries when the chat's connection is older than the service. */
+export const outdatedNote = (launcher: string): string =>
+	`Note: this chat's Rojo-Hub connection is older (launcher ${launcher}) than the service (${SERVICE_VERSION}), so some tools or prompts may be missing. Ask the user to run /mcp and reconnect rojohub, or start a new chat.`;
+
+/** Said wherever a place was reopened: the Roblox Studio tools know each open Studio by an id that changes with the process. */
+const STUDIO_NEW_ID = "Roblox Studio tools give the reopened place a new studio id: list the Studios again before using one.";
+
+/** What to do while a place is assigned to one project but still synced with another (the plugin switches over by itself from 0.22.5 on). */
+const HANDOVER_HELP = "its plugin switches over by itself from 0.22.5 on; with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.";
+
+/** The first protocol version with outputSchema and structuredContent. */
+const STRUCTURED_FROM = "2025-06-18";
+
+/** The first line of status while yolo is on (spec 012, design 4). */
+export const PLACE_MOVES_LINE = "Place moves are on automatic (rojoHub.placeMoves): request_place moves a place at once from a project no other agent claimed, and logs it. A claimed holder still means the user is asked.";
+export const YOLO_LINE = "Yolo mode is ON: the user lifted Rojo-Hub's guards. You may open Studio places and stop or remove projects that Studio places are synced to; other agents' claims still hold. Everything you do is logged.";
 
 const INSTRUCTIONS = `Rojo-Hub serves the user's Roblox Rojo projects to Roblox Studio, one fixed port per project, and switches which worktree or branch a project serves without disconnecting Studio. Its Studio plugin connects each Studio place to its project by itself. It is built for several agents working at once, each in its own worktree (Orca or git).
 
-Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. To begin new work in a worktree of its own, use new_branch.
+Before you check your changes in Studio (by hand or with a Roblox Studio tool), call serve_here with your working directory, so Studio gets the files of your worktree. Rojo applies the switch within about a second; the answer includes any error Rojo logged (an invalid project file, a bad .meta.json), and anything a Studio place could not apply; log shows more. Never stop and start a project to make Studio pick up a switch: that ends Rojo's session and disconnects every Studio synced to it. If the project is not serving, start it. If your repo is not registered, add_project it. Never run git checkout, switch, reset --hard, rebase or stash in a folder Rojo-Hub serves (status shows it; it is often the repo's main checkout): Studio and every other agent get that branch at once, and a checkout that removes a folder crashes Rojo (rojo#1305). For other work, use new_branch, then serve_here from that worktree.
 
 Which Studio to look at: serve_here, status and wait_for_studio name the Studio places synced to the project, with their place IDs. Several Studio windows may be open for different projects; use the one whose place ID is listed (Roblox Studio tools list each open Studio with its place ID). If no place is synced, wait_for_studio, or tell the user; do not inspect another project's Studio.
 
 Rojo owns what it syncs: an edit made in Studio to a synced script or instance is overwritten by the files. Change the files in your worktree; Studio follows.
 
-Sharing: serve_here and switch claim the project for your worktree for 10 minutes (renewed by each Rojo-Hub call you make from it). While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio.
+Sharing: serve_here and switch claim the project for your worktree %CLAIM%. While another worktree holds it they are refused; pass wait (seconds) to take it as soon as it is free. Claims are per project, so agents in different projects never block each other. Call release when you are done with Studio. The version tool says which Rojo-Hub, plugin and Rojo builds are running.
 
-Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. You cannot close Studio places.
+To get ready in one call, use ensure: it starts the project, serves your worktree, brings Rojo-Hub's parts to the current version (it reopens this project's Studio places that run an older plugin when the user turned on rojoHub.closePlaces, and tells you what only the user can do: reload a VS Code window, run /mcp to reconnect this chat), opens the place and waits for Studio. So "run ensure" is the whole setup. It also reports install checks (Packages, node_modules, sourcemap) as warnings, and when the user configured setup commands for the repo, runs them in a worktree that needs them and that no Rojo has read yet. new_branch runs those commands before it switches; if they take long, it says so and ensure from the new worktree waits for them. Never run installs (wally, npm) in a folder Rojo-Hub serves or has served, nor in the main checkout whose Packages other worktrees borrow: make a worktree with new_branch instead.
 
-Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with; the user does that in the Rojo-Hub panel in VS Code.`;
+Opening Studio: when none of the project's places is open, open_place opens one in Studio (never a second copy of an open place), then wait_for_studio. It works only when the user turned on rojoHub.openPlaces; otherwise ask the user to open the place. Closing and reopening a place (close_place, reopen_place, for example to load an updated plugin) works only when the user turned on rojoHub.closePlaces; Studio is asked to close as if the user closed its window, so it still asks about unsaved changes, and nothing is killed or saved for you. Never close a place another agent's project is synced to unless the user said to.
+
+Starting projects and groups, adding projects and editing groups never disturb anyone. Stopping or removing a project another agent claimed, or that a Studio place is synced to, is refused; stop_all always is. Pass force only when the user asks. You cannot choose which project a Studio place syncs with on your own; the user does that in the Rojo-Hub panel in VS Code.
+
+Shared places: a Studio place syncs with one project at a time, even when several projects list it. status, serve_here, switch and ensure say when a place of your project is synced with another project, which projects list it, and any pending request. To get such a place, call request_place with its place ID (from your worktree, holding your claim): if no project holds the place it is assigned to yours at once; otherwise the user is asked directly to move it: in your client's own prompt when it can show one, else in VS Code (Move or Decline). Do not ask in chat and never try to approve the move yourself; only the user's answer moves a place. With wait (seconds, up to 300) the call waits for an answer given in VS Code. Asking again only refreshes your request. When the user set rojoHub.placeMoves to auto (status says), a place moves at once unless an agent claimed the project holding it. It ends when you release, your claim runs out, or the user answers. When status says another project asked for a place yours holds, finish what you are doing in Studio and release. Never open or inspect a Studio place that is synced with another project.
+
+Yolo mode: when the user turned on rojoHub.yolo, status and ensure say so (yolo: true in their data). Then you may open Studio places and stop or remove projects that Studio places are synced to, and stop_all works without force but keeps projects other agents claimed; their claims still hold. request_place moves a place at once when the project holding it is not claimed by another agent. Everything you do is logged. Without it, the rules above apply.`;
 
 interface Tool {
 	name: string;
 	title: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+	/** JSON Schema of `structuredContent` (spec 011); only sent to clients of protocol 2025-06-18 or later. */
+	outputSchema?: Record<string, unknown>;
 	annotations?: Record<string, boolean>;
 }
+
+/** What a tool answers: the text every client gets, and the same facts as data for clients that read `structuredContent`. */
+export interface Answer {
+	text: string;
+	data?: Record<string, unknown>;
+	/** Result `_meta` (MCP): request_place's `rojo-hub/elicit` asks the launcher to put a yes/no to the user (spec 014). */
+	meta?: Record<string, unknown>;
+	/** A failure the agent should read as one (spec 011: ensure's failures are answers, so the steps done are kept). */
+	isError?: boolean;
+}
+
+/* ---------- output schemas (spec 011, design 3): plain JSON Schema, extra fields allowed ---------- */
+
+const S = { type: "string" };
+const I = { type: "integer" };
+const B = { type: "boolean" };
+const orNull = (type: string) => ({ type: [type, "null"] });
+const arrayOf = (items: Record<string, unknown>) => ({ type: "array", items });
+const shape = (properties: Record<string, unknown>, required: string[] = Object.keys(properties)) => ({ type: "object", properties, required });
+
+/** How a project's own request for a shared place stands (spec 014). */
+export const REQUEST_STATES = ["none", "pending", "declined", "moved"] as const;
+export const REQUEST_OUTCOMES = ["already", "assigned", "moved", "pending", "declined", "ended"] as const;
+
+/** One project, as `status`, `serve_here`, `switch` (and later `ensure`) describe it. */
+export const PROJECT_STATE_SCHEMA = shape({
+	id: S,
+	name: S,
+	port: I,
+	repoPath: S,
+	projectFile: S,
+	rojo: shape({ state: { type: "string", enum: ["running", "starting", "stopped", "error"] }, error: orNull("string"), sessionId: orNull("string"), connections: I }),
+	served: shape({ kind: { type: "string", enum: ["worktree", "branch"] }, label: S, path: orNull("string"), branch: orNull("string"), commit: orNull("string") }),
+	claim: {
+		anyOf: [{ type: "null" }, shape({ holder: S, until: orNull("string"), secondsLeft: orNull("integer"), yours: orNull("boolean"), thenReturn: orNull("string") })],
+	},
+	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, reason: orNull("string"), saved: B })),
+	connecting: arrayOf(shape({ placeId: I, name: S, confirming: B })),
+	listedPlaces: arrayOf(shape({ placeId: I, name: orNull("string"), open: B })),
+	sourcemap: shape({ state: { type: "string", enum: ["watching", "off", "error"] }, detail: S }),
+	warnings: arrayOf(S),
+	yourWorktreeServed: orNull("boolean"),
+	sharedPlaces: arrayOf(shape({ placeId: I, name: orNull("string"), heldBy: orNull("string"), alsoListedBy: arrayOf(S), request: { type: "string", enum: [...REQUEST_STATES] } })),
+	incomingRequests: arrayOf(shape({ placeId: I, name: orNull("string"), from: S })),
+});
+
+const UNAPPLIED_SCHEMA = arrayOf(shape({ placeId: I, placeName: S, total: I, items: arrayOf(S) }));
+const STATUS_SCHEMA = shape({
+	projects: arrayOf(PROJECT_STATE_SCHEMA),
+	groups: arrayOf(shape({ id: S, name: S, active: B, projectIds: arrayOf(S) })),
+	studioPlaces: arrayOf(shape({ placeId: I, name: S, saved: B, syncedWith: orNull("string"), pluginVersion: S, assignedTo: orNull("string") }, ["placeId", "name", "saved", "syncedWith", "pluginVersion"])),
+	yourProject: orNull("string"),
+	yolo: B,
+	placeMoves: { type: "string", enum: ["ask", "auto"] },
+	setup: arrayOf(shape({ path: S, state: { type: "string", enum: ["running", "ok", "failed"] }, step: I, of: I })),
+});
+const REQUEST_PLACE_SCHEMA = shape({ outcome: { type: "string", enum: [...REQUEST_OUTCOMES] }, placeId: I, name: orNull("string"), project: S, holder: orNull("string") });
+const VERSION_SCHEMA = shape({
+	service: S,
+	plugin: S,
+	launcher: orNull("string"),
+	connection: orNull("string"),
+	connectionOutdated: B,
+	projects: arrayOf(shape({ id: S, name: S, rojoVersion: orNull("string") })),
+	places: arrayOf(shape({ placeId: I, name: S, pluginVersion: S, outdated: B })),
+	reopening: arrayOf(shape({ placeId: I, name: S })),
+});
+const SWITCH_SCHEMA = shape({ project: PROJECT_STATE_SCHEMA, switched: B, problems: arrayOf(S), unapplied: UNAPPLIED_SCHEMA });
+
+export const ENSURE_STEPS = ["start", "setup", "serve", "versions", "open_place", "wait_for_studio"] as const;
+export const ENSURE_OUTCOMES = ["done", "already", "skipped", "failed"] as const;
+export const ENSURE_FAILURES = ["no_project", "start_failed", "setup_failed", "setup_running", "claimed", "rojo_error", "open_places_off", "no_listed_places", "several_places", "open_failed", "studio_confirming", "timeout", "stopped"] as const;
+type EnsureFailure = (typeof ENSURE_FAILURES)[number];
+interface EnsureStep {
+	step: (typeof ENSURE_STEPS)[number];
+	outcome: (typeof ENSURE_OUTCOMES)[number];
+	detail: string;
+}
+/** What the versions step found (spec 015); null when the step did not run. */
+interface EnsureVersions {
+	service: string;
+	current: boolean;
+	needsUser: string[];
+	reopened: { placeId: number; name: string; outcome: "reloaded" | "waiting" | "skipped" | "failed"; detail: string }[];
+	outdatedElsewhere: { placeId: number; name: string; pluginVersion: string }[];
+}
+const VERSIONS_SCHEMA = shape({
+	service: S,
+	current: B,
+	needsUser: arrayOf(S),
+	reopened: arrayOf(shape({ placeId: I, name: S, outcome: { type: "string", enum: ["reloaded", "waiting", "skipped", "failed"] }, detail: S })),
+	outdatedElsewhere: arrayOf(shape({ placeId: I, name: S, pluginVersion: S })),
+});
+/** project is null only for no_project: no step ran, so there is no project to describe. */
+const ENSURE_SCHEMA = shape({
+	ready: B,
+	steps: arrayOf(shape({ step: { type: "string", enum: [...ENSURE_STEPS] }, outcome: { type: "string", enum: [...ENSURE_OUTCOMES] }, detail: S })),
+	project: { anyOf: [{ type: "null" }, PROJECT_STATE_SCHEMA] },
+	versions: { anyOf: [{ type: "null" }, VERSIONS_SCHEMA] },
+	placeIds: arrayOf(I),
+	checks: arrayOf(shape({ name: { type: "string", enum: ["rojo", "packages", "node_modules", "sourcemap"] }, ok: B, detail: S })),
+	warnings: arrayOf(S),
+	failure: { anyOf: [{ type: "null" }, shape({ reason: { type: "string", enum: [...ENSURE_FAILURES] }, message: S })] },
+	yolo: B,
+});
 
 const pathProperty = { type: "string", description: "Your working directory (absolute), or any folder inside the worktree." };
 const projectProperty = { type: "string", description: "The project's name or id, as status shows it. Only needed when a repo has more than one project, or without path." };
 const forceProperty = { type: "boolean", description: "Go ahead even though another agent or a synced Studio would be affected. Only when the user asks." };
+const thenReturnProperty = { type: "boolean", description: "When you release, or your hold runs out, switch the project back to what it served before you took it (only if nobody else has taken it since, it is still serving, and that worktree's folder still exists). For borrowing a project the user or another agent was using." };
 const waitProperty = { type: "number", description: `Seconds to wait for another worktree's claim to end, then take the project (up to ${MAX_WAIT_S}). Waiters are served in order.` };
 const groupProperty = { type: "string", description: "The group's name or id, as status shows it." };
 const listProperty = (what: string) => ({ type: "array", items: { type: "string" }, description: what });
@@ -67,23 +224,55 @@ export const TOOLS: Tool[] = [
 		name: "status",
 		title: "Rojo-Hub status",
 		description:
-			"Lists the projects: port, whether Rojo is serving, the Studio places synced to each (name, place ID, and why), what worktree or branch each serves, who claimed it, warnings; then the groups and every open Studio place. With path, also says whether your worktree is the one being served.",
+			"Lists the projects (port, serving, synced Studio places and why, what each serves, claims, warnings), then groups and open Studio places. With path, says whether your worktree is the one served. project, or path with mine: true, narrows it all to one project.",
+		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, mine: { type: "boolean", description: "With path: only the project your worktree belongs to." } } },
+		outputSchema: STATUS_SCHEMA,
+		annotations: { readOnlyHint: true },
+	},
+	{
+		name: "version",
+		title: "Rojo-Hub versions",
+		description:
+			"Says which versions are running: the Rojo-Hub service, the Studio plugin it installs, the MCP launcher, each serving project's Rojo, and each open Studio place's plugin (and whether it is older, so the place needs reopening). Never disturbs anyone.",
 		inputSchema: { type: "object", properties: { path: pathProperty } },
+		outputSchema: VERSION_SCHEMA,
 		annotations: { readOnlyHint: true },
 	},
 	{
 		name: "serve_here",
 		title: "Serve my worktree",
 		description:
-			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it for 10 minutes. Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
-		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, force: forceProperty }, required: ["path"] },
+			"Makes Studio show your worktree: switches the project of the repo you are in to your worktree, live, without disconnecting Studio, and claims it (rojoHub.claimMinutes, 15 by default). Says which Studio places show it and any error Rojo logged. Call it before checking changes in Studio.",
+		inputSchema: { type: "object", properties: { path: pathProperty, project: projectProperty, wait: waitProperty, then_return: thenReturnProperty, force: forceProperty }, required: ["path"] },
+		outputSchema: SWITCH_SCHEMA,
 	},
 	{
 		name: "switch",
 		title: "Serve a branch or worktree",
 		description:
 			"Switches a project to serve a branch (by name, e.g. main or origin/feature) or a worktree (by folder), live, and claims it. A branch checked out in a worktree is served from that worktree; any other branch from a read-only copy Rojo-Hub keeps.",
-		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, force: forceProperty }, ["target"]),
+		inputSchema: project({ target: { type: "string", description: "A branch name, or a worktree's folder." }, wait: waitProperty, then_return: thenReturnProperty, force: forceProperty }, ["target"]),
+		outputSchema: SWITCH_SCHEMA,
+	},
+	{
+		name: "ensure",
+		title: "Get ready for Studio",
+		description:
+			"Gets Studio showing your worktree in one call: starts the project, serves your worktree (claims it), brings Rojo-Hub to the current version (reopens older-plugin places if rojoHub.closePlaces is on; says what only the user can do), opens the place if none is open (rojoHub.openPlaces), waits for the sync. Says why it could not finish; ready: true means a place is synced.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				path: pathProperty,
+				project: projectProperty,
+				place: { type: "number", description: "Which place to open, when the project lists several (status lists them)." },
+				timeout: { type: "number", description: "Seconds to wait for Studio to sync (default 60, 5 to 300)." },
+				wait: waitProperty,
+				then_return: thenReturnProperty,
+				force: forceProperty,
+			},
+			required: ["path"],
+		},
+		outputSchema: ENSURE_SCHEMA,
 	},
 	{
 		name: "release",
@@ -91,6 +280,23 @@ export const TOOLS: Tool[] = [
 		description: "Drops your claim on a project, so other agents can switch it. Pass path (your working directory) so it is your claim that is dropped. The project keeps serving what it serves.",
 		inputSchema: project({ force: { type: "boolean", description: "Drop the claim without a path, whoever holds it. Only when the user asks." } }),
 		annotations: { idempotentHint: true },
+	},
+	{
+		name: "request_place",
+		title: "Ask for a shared Studio place",
+		description:
+			"Asks the user to move a Studio place your project lists to yours, when another project holds it. The user is asked directly (in your client, else in VS Code): never ask in chat or approve it yourself. Needs your claim (serve_here first). Nobody holding it: assigned at once. wait (seconds, up to 60) waits for an answer given in VS Code. With rojoHub.placeMoves auto or yolo it can move at once.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				path: pathProperty,
+				project: projectProperty,
+				place_id: { type: "number", description: "The place ID, one of your project's places (status lists them)." },
+				wait: { type: "number", description: `Seconds to wait for the user's answer (up to ${MAX_REQUEST_WAIT_S}).` },
+			},
+			required: ["path", "place_id"],
+		},
+		outputSchema: REQUEST_PLACE_SCHEMA,
 	},
 	{
 		name: "start",
@@ -108,8 +314,8 @@ export const TOOLS: Tool[] = [
 	{
 		name: "stop_all",
 		title: "Stop every project",
-		description: "Stops every serving project and marks every group stopped. Always needs force: only when the user asks.",
-		inputSchema: { type: "object", properties: { force: forceProperty }, required: ["force"] },
+		description: "Stops every serving project and marks every group stopped. Needs force: only when the user asks. With the user's yolo mode on (status says), it works without force but keeps projects other agents claimed.",
+		inputSchema: { type: "object", properties: { force: forceProperty }, required: [] },
 		annotations: { destructiveHint: true },
 	},
 	{
@@ -139,6 +345,13 @@ export const TOOLS: Tool[] = [
 		inputSchema: project({ file: { type: "string", description: "The file name, e.g. test.project.json." } }, ["file"]),
 	},
 	{
+		name: "relocate_project",
+		title: "Point a project at its moved folder",
+		description:
+			"Use after a project's folder was moved or the repo cloned again. Re-points a stopped project at the new folder, keeping its port, groups and Studio place assignments (remove_project and add_project would lose the assignments). Pass project (name or id), since the old folder no longer matches your working directory. The new folder must be the same repo and hold the same project name.",
+		inputSchema: project({ new_path: { type: "string", description: "The project's new folder (any checkout or worktree of the same repo)." } }, ["new_path"]),
+	},
+	{
 		name: "branches",
 		title: "List branches",
 		description: "Lists what a project can switch to: worktrees and branches, newest first. fetch: true runs git fetch first.",
@@ -149,14 +362,14 @@ export const TOOLS: Tool[] = [
 		name: "new_branch",
 		title: "New branch in its own worktree",
 		description:
-			"Makes a new branch in a worktree of its own (through Orca when Orca manages the repo), switches the project to it and claims it for that worktree. Returns the worktree's folder: work there.",
+			"Makes a new branch in a worktree of its own (through Orca when Orca manages the repo), runs the repo's setup commands there if the user configured any (rojoHub.setupCommands), then switches the project to it and claims it for that worktree. If setup is still running after 40 seconds, or failed, it says so and nothing is switched. Returns the worktree's folder: work there.",
 		inputSchema: project({ name: { type: "string", description: "The new branch's name." }, base: { type: "string", description: "Branch to start from (default: the branch the project serves)." }, wait: waitProperty, force: forceProperty }, ["name"]),
 	},
 	{
 		name: "log",
 		title: "Rojo log",
-		description: "The last lines of a project's Rojo log: why a change did not reach Studio, sync errors, connections.",
-		inputSchema: project({ lines: { type: "number", description: "How many lines (default 40, up to 400)." } }),
+		description: "The last lines of a project's Rojo log: why a change did not reach Studio, sync errors, connections. Rojo's DEBUG lines (a WebSocket pair per sync, a line per package) are hidden unless verbose.",
+		inputSchema: project({ lines: { type: "number", description: "How many lines (default 40, up to 400)." }, verbose: { type: "boolean", description: "Show Rojo's DEBUG and TRACE lines too." } }),
 		annotations: { readOnlyHint: true },
 	},
 	{
@@ -165,6 +378,20 @@ export const TOOLS: Tool[] = [
 		description:
 			"Opens one of a project's places (from its project file's servePlaceIds or placeId) in Roblox Studio, unless it is already open: then it does nothing and says so. Then call wait_for_studio. Only works when the user turned on rojoHub.openPlaces.",
 		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one. status lists them." } }),
+	},
+	{
+		name: "close_place",
+		title: "Close a place in Studio",
+		description:
+			"Asks Studio to close one of a project's places, as if the user closed its window (Studio asks about unsaved changes; nothing is killed or saved). Only works when the user turned on rojoHub.closePlaces. Refused while another agent claims the project, or the one the place is synced with, unless force.",
+		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one." }, force: forceProperty }),
+	},
+	{
+		name: "reopen_place",
+		title: "Reopen a place in Studio",
+		description:
+			"Closes one of a project's places (Studio asks about unsaved changes) and opens it again when Studio has exited, e.g. to load an updated plugin. Returns once the close was asked; then call wait_for_studio. Only works when the user turned on rojoHub.closePlaces; the open step needs no rojoHub.openPlaces. Claims apply as for close_place.",
+		inputSchema: project({ placeId: { type: "number", description: "Which of the project's places; may be left out when it has only one." }, force: forceProperty }),
 	},
 	{
 		name: "wait_for_studio",
@@ -262,6 +489,21 @@ async function worktreeRoot(path: string): Promise<string> {
 	}
 }
 
+/*
+	How long a claim lasts, for the instructions (built at every initialize, so
+	they follow rojoHub.claimMinutes).
+*/
+function claimTerm(minutes: number): string {
+	return minutes === 0
+		? "until you call release (rojoHub.claimMinutes is 0: claims never run out)"
+		: `for ${minutes} minute${minutes === 1 ? "" : "s"} (rojoHub.claimMinutes; each Rojo-Hub call you make from it renews that)`;
+}
+
+/** What a claim's end is called in answers: a clock time, or "until release" for a claim that never runs out (rojoHub.claimMinutes 0). */
+function untilText(until: number, who = "you"): string {
+	return until === CLAIM_NEVER ? `until ${who} call${who === "you" ? "" : "s"} release (claims don't run out: rojoHub.claimMinutes is 0)` : `until ${time(until)}`;
+}
+
 function time(ms: number): string {
 	return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -273,20 +515,40 @@ const REASONS: Record<string, string> = {
 	remembered: "synced here before",
 };
 
+/** Tools that change nothing; the others are written to the audit log while yolo is on. */
+const READ_ONLY_TOOLS = new Set(["status", "version", "branches", "log", "project_files", "wait_for_studio"]);
+
+/** The arguments of a call for the audit log: short values only. */
+function summarize(args: Args): Record<string, unknown> {
+	const summary: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args)) {
+		summary[key] = typeof value === "string" ? (value.length > 200 ? `${value.slice(0, 200)}...` : value) : typeof value === "number" || typeof value === "boolean" || value === null ? value : "(" + typeof value + ")";
+	}
+	return summary;
+}
+
 export class Mcp {
 	/** Agents waiting for a project's claim to end, per project, in the order they asked. */
 	private readonly queues = new Map<string, symbol[]>();
+	/** Per call: whether yolo mode is what allowed it (for the audit log). */
+	private readonly lift = new AsyncLocalStorage<{ lifted: boolean }>();
+	/** Per call: the client behind the launcher can put a question to the user (MCP elicitation; header x-rojo-hub-elicit). */
+	private readonly asking = new AsyncLocalStorage<{ elicit: boolean; connection: string | null; launcher: string | null }>();
 
 	constructor(
 		private readonly hub: Hub,
 		private readonly groups?: Groups,
+		/** extensionLists: the VS Code extensions.json files the versions step reads; pollMs: how often it looks for reopened places. */
+		private readonly options: { extensionLists?: () => string[]; pollMs?: number } = {},
 	) {}
 
 	/*
 		Handles one JSON-RPC message: the response to send, or null for a
 		notification (which gets 202 and no body).
 	*/
-	async handle(message: unknown): Promise<object | null> {
+	async handle(message: unknown, protocol?: string, options: { elicit?: boolean; /** staleConnection's label: the chat's launcher is older than the service. */ connection?: string | null; /** The x-rojo-hub-launcher header, if the call came through a launcher that names itself. */ launcher?: string | null } = {}): Promise<object | null> {
+		// Only a client that sent MCP-Protocol-Version 2025-06-18 or later understands outputSchema and structuredContent.
+		const structured = typeof protocol === "string" && /^\d{4}-\d{2}-\d{2}$/.test(protocol.trim()) && protocol.trim() >= STRUCTURED_FROM;
 		if (!message || typeof message !== "object" || Array.isArray(message)) {
 			return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Expected one JSON-RPC request object" } };
 		}
@@ -301,23 +563,27 @@ export class Mcp {
 					protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
 					capabilities: { tools: { listChanged: false } },
 					serverInfo: { name: "rojo-hub", title: "Rojo-Hub", version: SERVICE_VERSION },
-					instructions: INSTRUCTIONS,
+					instructions: INSTRUCTIONS.replace("%CLAIM%", claimTerm(this.hub.claimMinutes)),
 				});
 			}
 			case "ping":
 				return reply({});
 			case "tools/list":
-				return reply({ tools: TOOLS });
+				return reply({ tools: structured ? TOOLS : TOOLS.map(({ outputSchema: _outputSchema, ...tool }) => tool) });
 			case "tools/call": {
 				const name = params?.name;
 				if (typeof name !== "string" || !TOOLS.some((tool) => tool.name === name)) return fail(-32602, `Unknown tool: ${String(name)}`);
 				const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Args;
 				try {
-					return reply({ content: [{ type: "text", text: await this.call(name, args) }] });
+					const answer = await this.asking.run({ elicit: options.elicit === true, connection: options.connection ?? null, launcher: options.launcher ?? null }, () => this.call(name, args));
+					return reply({ content: [{ type: "text", text: options.connection ? `${answer.text}
+${outdatedNote(options.connection)}` : answer.text }], ...(structured && answer.data ? { structuredContent: answer.data } : {}), ...(answer.meta ? { _meta: answer.meta } : {}), ...(answer.isError ? { isError: true } : {}) });
 				} catch (error) {
 					const known = error instanceof Refusal || error instanceof Conflict || error instanceof NotFound;
 					const detail = error instanceof Error ? error.message : String(error);
-					return reply({ content: [{ type: "text", text: known ? detail : `Rojo-Hub failed: ${detail}` }], isError: true });
+					const shown = known ? detail : `Rojo-Hub failed: ${detail}`;
+					return reply({ content: [{ type: "text", text: options.connection ? `${shown}
+${outdatedNote(options.connection)}` : shown }], isError: true });
 				}
 			}
 			default:
@@ -325,16 +591,47 @@ export class Mcp {
 		}
 	}
 
-	private call(name: string, args: Args): Promise<string> {
+	/** Runs a tool. Those without data answer plain text. While yolo is on, a state-changing call is written to the audit log (spec 012). */
+	private async call(name: string, args: Args): Promise<Answer> {
+		if (!this.hub.yoloOn || READ_ONLY_TOOLS.has(name)) {
+			const result = await this.run(name, args);
+			return typeof result === "string" ? { text: result } : result;
+		}
+		const context = { lifted: false };
+		let outcome = "ok";
+		try {
+			const result = await this.lift.run(context, () => this.run(name, args));
+			return typeof result === "string" ? { text: result } : result;
+		} catch (error) {
+			outcome = "refused or failed";
+			throw error;
+		} finally {
+			writeAudit(this.hub.home, { actor: "mcp", action: name, project: text(args.project) ?? text(args.path) ?? null, args: summarize(args), yolo: true, lifted: context.lifted, outcome });
+		}
+	}
+
+	/** Marks the running call as one that only yolo mode allowed. */
+	private lifted(): void {
+		const context = this.lift.getStore();
+		if (context) context.lifted = true;
+	}
+
+	private run(name: string, args: Args): Promise<string | Answer> {
 		switch (name) {
 			case "status":
 				return this.status(args);
+			case "version":
+				return this.version();
 			case "serve_here":
 				return this.serveHere(args);
 			case "switch":
 				return this.switchTo(args);
+			case "ensure":
+				return this.ensure(args);
 			case "release":
 				return this.release(args);
+			case "request_place":
+				return this.requestPlace(args);
 			case "start":
 				return this.start(args);
 			case "stop":
@@ -349,6 +646,8 @@ export class Mcp {
 				return this.projectFiles(args);
 			case "set_project_file":
 				return this.setProjectFile(args);
+			case "relocate_project":
+				return this.relocateProject(args);
 			case "branches":
 				return this.branches(args);
 			case "new_branch":
@@ -359,6 +658,10 @@ export class Mcp {
 				return this.waitForStudio(args);
 			case "open_place":
 				return this.openPlace(args);
+			case "close_place":
+				return this.closeOrReopen(args, "close");
+			case "reopen_place":
+				return this.closeOrReopen(args, "reopen");
 			case "start_group":
 				return this.startGroup(args);
 			case "stop_group":
@@ -427,10 +730,13 @@ export class Mcp {
 
 	/* ---------- claims and guards ---------- */
 
-	private claimRefusal(slot: SlotView, claim: { label: string; until: number }, how: string): Refusal {
+	private claimRefusal(slot: SlotView, claim: { label: string; until: number; key?: string }, how: string): Refusal {
 		const minutes = Math.max(1, Math.ceil((claim.until - Date.now()) / 60000));
+		const key = claim.key;
+		// One agent's own worktrees hand over by release from the one that holds the claim.
+		const handover = key?.startsWith("worktree:") ? ` If that is your own work and you are done there, call release with path = ${key.slice("worktree:".length)}, then call this again.` : "";
 		return new Refusal(
-			`${slot.projectName} is claimed by an agent working in ${claim.label} until ${time(claim.until)} (${minutes} min). ${how} Wait (pass wait: seconds to take it when it is free), ask the user, or pass force: true if the user said to.`,
+			`${slot.projectName} is claimed by an agent working in ${claim.label} ${untilText(claim.until, "it")}${claim.until === CLAIM_NEVER ? "" : ` (${minutes} min)`}. ${how}${handover} Otherwise wait (pass wait: seconds to take it when it is free), ask the user, or pass force: true if the user said to.`,
 		);
 	}
 
@@ -453,14 +759,24 @@ export class Mcp {
 		if (claim && !mine) throw this.claimRefusal(slot, claim, `${doing} would pull Studio out from under that agent.`);
 		const synced = slot.state === "running" ? (slot.places ?? []) : [];
 		if (!mine && synced.length > 0) {
+			if (this.hub.yoloOn) {
+				this.lifted();
+				return;
+			}
 			throw new Refusal(`${slot.projectName} is synced to ${this.placeList(synced)} in Studio; ${doing.toLowerCase()} would disconnect it. Ask the user, or pass force: true if the user said to.`);
 		}
+	}
+
+	/** How long the claim just taken or renewed lasts, as an answer says it (the end time, or until release when rojoHub.claimMinutes is 0). */
+	private holdText(renews = false): string {
+		const until = this.hub.claimUntil();
+		return until === CLAIM_NEVER ? untilText(until) : `${untilText(until)}${renews ? "; each Rojo-Hub call from this worktree renews that" : ""}`;
 	}
 
 	private renew(slot: SlotView, root: string | null): void {
 		if (!root) return;
 		const claim = this.hub.claimOf(slot.id);
-		if (claim && claim.key === claimKey({ kind: "worktree", path: root })) this.hub.setClaim(slot.id, { ...claim, until: Date.now() + CLAIM_MS });
+		if (claim && claim.key === claimKey({ kind: "worktree", path: root })) this.hub.setClaim(slot.id, { ...claim, until: this.hub.claimUntil() });
 	}
 
 	/*
@@ -499,8 +815,11 @@ export class Mcp {
 		this.checkClaim(slot, key, force);
 		// Claimed before switching, so a second agent asking at the same moment is refused rather than both switching.
 		const before = this.hub.claimOf(slot.id);
-		this.hub.setClaim(slot.id, { key, label, until: Date.now() + CLAIM_MS });
 		const current = this.hub.view(this.hub.registry.get(slot.id));
+		// What to give back (spec 013): kept from this agent's earlier call, else what is served now.
+		let returnTo = before?.key === key ? before.returnTo : undefined;
+		if (!returnTo && args.then_return === true && claimKey(current.target) !== key) returnTo = { target: current.target, label: current.targetLabel };
+		this.hub.setClaim(slot.id, { key, label, until: this.hub.claimUntil(), ...(returnTo ? { returnTo } : {}) });
 		if (claimKey(current.target) === key) return current;
 		try {
 			return await this.hub.switch(slot.id, target);
@@ -508,6 +827,18 @@ export class Mcp {
 			this.hub.setClaim(slot.id, before);
 			throw error;
 		}
+	}
+
+	/** serve_here from the repo's main checkout: other branches must not be checked out there, since Studio and every other agent would get them (rojo#1305). */
+	private mainCheckoutNote(slot: SlotView, root: string | null): string {
+		return root && pathKey(root) === pathKey(slot.repoPath) ? "\nYou are serving the main checkout; don't check out other branches here; use new_branch for other work." : "";
+	}
+
+	/** One line on then_return for the answer of a call that took the project (spec 013). */
+	private returnNote(slot: SlotView, args: Args): string {
+		const back = this.hub.claimOf(slot.id)?.returnTo;
+		if (back) return `\nWhen you release, or your hold runs out, it switches back to ${back.label}${args.then_return === true ? "" : " (as you asked earlier)"}.`;
+		return args.then_return === true ? "\nthen_return: there was nothing to return to (the project already served this)." : "";
 	}
 
 	/* ---------- Rojo's side of things ---------- */
@@ -536,6 +867,173 @@ export class Mcp {
 		if (reports.length === 0) return "";
 		const lines = reports.map((report) => `${report.placeName} (place ${report.placeId}) could not apply ${report.total} change${report.total === 1 ? "" : "s"}: ${report.items.join("; ")}${report.total > report.items.length ? "; …" : ""}.`);
 		return `\n${lines.join("\n")}\nDo not stop and start the project for this: that ends Studio's session. Tell the user what is missing.`;
+	}
+
+	/** Said when the Hub restarted a crashed rojo since the call began: a new session, so the agent waits for Studio. */
+	private crashed(slot: SlotView, since: number): string {
+		if (this.hub.crashedAt(slot.id) < since) return "";
+		return "\nRojo crashed meanwhile and Rojo-Hub restarted it. That is a new Rojo session: Studio reconnects through the plugin. Call wait_for_studio before checking Studio.";
+	}
+
+	/* ---------- the same facts as data (spec 011, design 3) ---------- */
+
+	/*
+		One project as PROJECT_STATE_SCHEMA says. `root` is the caller's worktree
+		(null without a path): it decides claim.yours and yourWorktreeServed. The
+		served commit is read here, so build several at once with Promise.all.
+	*/
+	async projectState(slot: SlotView, root: string | null): Promise<Record<string, unknown>> {
+		const claim = this.hub.claimOf(slot.id);
+		const open = this.hub.studio.places();
+		const sharing = this.sharing(slot);
+		const onWorktree = slot.target.kind === "worktree" ? slot.target.path : null;
+		const commit = slot.target.kind === "worktree" ? await revParse(slot.target.path, "HEAD") : await revParse(slot.repoPath, slot.target.ref);
+		const mine = root !== null && onWorktree !== null && pathKey(onWorktree) === pathKey(root);
+		return {
+			id: slot.id,
+			name: slot.projectName,
+			port: slot.port,
+			repoPath: slot.repoPath,
+			projectFile: slot.projectFile,
+			rojo: {
+				state: slot.state === "offline" ? "stopped" : slot.state,
+				error: slot.error,
+				sessionId: slot.sessionId,
+				connections: slot.connections,
+			},
+			served: { kind: slot.target.kind, label: slot.targetLabel, path: onWorktree, branch: slot.branch, commit },
+			claim: claim
+				? {
+						holder: claim.label,
+						until: claim.until === CLAIM_NEVER ? null : new Date(claim.until).toISOString(),
+						secondsLeft: claim.until === CLAIM_NEVER ? null : Math.max(0, Math.round((claim.until - Date.now()) / 1000)),
+						yours: root === null ? null : claim.key === claimKey({ kind: "worktree", path: root }),
+						thenReturn: claim.returnTo?.label ?? null,
+					}
+				: null,
+			places: (slot.state === "running" ? (slot.places ?? []) : []).map((place) => ({
+				placeId: place.placeId,
+				name: place.placeName,
+				pluginVersion: place.pluginVersion,
+				reason: open.find((entry) => entry.placeId === place.placeId && entry.syncedWith === slot.projectName)?.reason ?? null,
+				saved: place.placeId > 0,
+			})),
+			connecting: open
+				.filter((place) => place.projectId === slot.id && place.syncedWith !== slot.projectName)
+				.map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, confirming: place.confirming })),
+			listedPlaces: (slot.listedPlaces ?? []).map((place) => ({ placeId: place.placeId, name: place.placeName, open: place.open })),
+			sourcemap: { state: slot.sourcemap.state, detail: slot.sourcemap.detail },
+			warnings: [...slot.warnings],
+			yourWorktreeServed: root === null ? null : mine,
+			sharedPlaces: sharing.shared,
+			incomingRequests: sharing.incoming,
+		};
+	}
+
+	/*
+		The places of `slot` that another project also lists or holds, and the asks
+		other projects made for places it holds (spec 014): the facts behind the
+		"synced with another project" lines and the data fields.
+	*/
+	private sharing(slot: SlotView): {
+		shared: { placeId: number; name: string | null; heldBy: string | null; alsoListedBy: string[]; request: (typeof REQUEST_STATES)[number] }[];
+		incoming: { placeId: number; name: string | null; from: string }[];
+	} {
+		const projects = this.hub.requestProjects();
+		const nameOf = (placeId: number) => slot.listedPlaces?.find((place) => place.placeId === placeId)?.placeName ?? this.hub.studio.places().find((place) => place.placeId === placeId)?.placeName ?? null;
+		const shared = [];
+		for (const placeId of projects.find((project) => project.id === slot.id)?.listed ?? []) {
+			const others = listersOf(projects, placeId).filter((project) => project.id !== slot.id).map((project) => project.projectName);
+			const holderId = this.hub.placeHolder(placeId);
+			const heldBy = holderId && holderId !== slot.id ? (projects.find((project) => project.id === holderId)?.projectName ?? null) : null;
+			if (others.length === 0 && !heldBy) continue;
+			const request: (typeof REQUEST_STATES)[number] = this.hub.requests.pendingFor(slot.id, placeId) ? "pending" : (this.hub.requests.outcomeFor(slot.id, placeId) ?? "none");
+			shared.push({ placeId, name: nameOf(placeId), heldBy, alsoListedBy: others, request });
+		}
+		const incoming = this.hub.requests.against(slot.id).map((request) => ({
+			placeId: request.placeId,
+			name: nameOf(request.placeId),
+			from: projects.find((project) => project.id === request.askerId)?.projectName ?? request.askerId,
+		}));
+		return { shared, incoming };
+	}
+
+	/** `DL Game - Dev (106807032284628)`, or `place 106807032284628` while its name is not known. */
+	private placeLabel(placeId: number, name: string | null): string {
+		return name ? `${name} (${placeId})` : `place ${placeId}`;
+	}
+
+	/** The name of the project picked for an open place in VS Code, null when none. */
+	private assignedName(place: { assigned: string | null }): string | null {
+		return place.assigned ? (this.hub.registry.slots.find((slot) => slot.id === place.assigned)?.projectName ?? null) : null;
+	}
+
+	/*
+		A place assigned to one project but still synced with another: the plugin
+		switches over by itself from 0.22.5 on (spec 014); an older one needs the
+		user to Disconnect or reopen. `only` limits it to an assignment to that
+		project id. Null when nothing is pending. By place ID (saved places) or the place itself.
+	*/
+	private handoverText(placeOrId: number | { placeName: string; placeId: number; unsaved: boolean; assigned: string | null; syncedWith: string | null; pluginVersion: string }, only?: string): string | null {
+		const place = typeof placeOrId === "number" ? this.hub.studio.places().find((entry) => entry.placeId === placeOrId && !entry.unsaved) : placeOrId;
+		if (!place || !place.syncedWith || !place.assigned || (only !== undefined && place.assigned !== only)) return null;
+		const to = this.assignedName(place);
+		if (!to || to === place.syncedWith) return null;
+		return `${place.placeName} is assigned to ${to} but still synced with ${place.syncedWith}; its plugin (${place.pluginVersion}) switches over by itself from 0.22.5 on; with an older plugin, Disconnect in Studio's Rojo panel or reopen the place.`;
+	}
+
+	/** ` <handover text>` for request_place's answer while the switch of a moved place has not happened yet, else nothing. */
+	private handoverNote(placeId: number): string {
+		const text = this.handoverText(placeId);
+		return text ? ` ${text}` : "";
+	}
+
+	/** One line per shared or held-elsewhere place, and per ask against this project's places, for status and the switching tools. */
+	private sharingLines(slot: SlotView): string[] {
+		const { shared, incoming } = this.sharing(slot);
+		const lines = shared.map((entry) => {
+			const label = this.placeLabel(entry.placeId, entry.name);
+			if (!entry.heldBy) return `${label} is shared: ${entry.alsoListedBy.join(", ")} also ${entry.alsoListedBy.length === 1 ? "lists" : "list"} it. It stays with the project it last synced with.`;
+			const also = entry.alsoListedBy.includes(entry.heldBy) ? ", which also lists it" : "";
+			const next =
+				entry.request === "pending"
+					? "You asked the user to move it here; waiting for the answer."
+					: entry.request === "declined"
+						? "The user declined moving it here."
+						: entry.request === "moved"
+							? "The user moved it here; it connects within a few seconds."
+							: "Call request_place to ask the user to move it here.";
+			const handover = this.handoverText(entry.placeId, slot.id);
+			return `${label} is synced with ${entry.heldBy}${also}. ${handover ?? next}`;
+		});
+		for (const ask of incoming) {
+			lines.push(`${ask.from} asked the user to move ${this.placeLabel(ask.placeId, ask.name)} to it; ${slot.projectName} holds it now. Finish what you are doing in Studio and release.`);
+		}
+		return lines;
+	}
+
+	private sharingText(slot: SlotView): string {
+		const lines = this.sharingLines(slot);
+		return lines.length ? `\n${lines.join("\n")}` : "";
+	}
+
+	/** Rojo's error lines and the card's warnings, for `problems`. */
+	private problemLines(slot: SlotView): string[] {
+		return [...(slot.error ? slot.error.split("\n").slice(0, 6).filter((line) => line.trim() !== "") : []), ...slot.warnings];
+	}
+
+	private unappliedData(slot: SlotView, since: number): { placeId: number; placeName: string; total: number; items: string[] }[] {
+		return this.hub.studio.unappliedOn(slot.port, since).map((report) => ({ placeId: report.placeId, placeName: report.placeName, total: report.total, items: [...report.items] }));
+	}
+
+	/** The `data` of serve_here and switch. */
+	private async switchData(before: SlotView, now: SlotView, root: string | null, since: number): Promise<Record<string, unknown>> {
+		return {
+			project: await this.projectState(now, root),
+			switched: claimKey(before.target) !== claimKey(now.target),
+			problems: this.problemLines(now),
+			unapplied: this.unappliedData(now, since),
+		};
 	}
 
 	/** `Lobby (place 111), Match (place 222)` */
@@ -580,16 +1078,21 @@ export class Mcp {
 
 	/* ---------- tools ---------- */
 
-	private async serveHere(args: Args): Promise<string> {
+	private async serveHere(args: Args): Promise<Answer> {
 		const { slot, root } = await this.pick(args);
 		if (!root) throw new Refusal("path is required: your working directory.");
 		const since = Date.now();
 		const switched = await this.take(slot, { kind: "worktree", path: root }, basename(root), args);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nYou hold it until ${time(Date.now() + CLAIM_MS)}; each Rojo-Hub call from this worktree renews that. Call release when you are done with Studio.`;
+		// This answer carries the checkout note; later ones do not.
+		this.hub.ackNotes(slot.id);
+		return {
+			text: `${now.projectName} now serves ${root}${now.branch ? ` (branch ${now.branch})` : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nYou hold it ${this.holdText(true)}. Call release when you are done with Studio.${this.returnNote(slot, args)}${this.mainCheckoutNote(slot, root)}`,
+			data: await this.switchData(slot, now, root, since),
+		};
 	}
 
-	private async switchTo(args: Args): Promise<string> {
+	private async switchTo(args: Args): Promise<Answer> {
 		const { slot, root } = await this.pick(args);
 		const wanted = text(args.target);
 		if (!wanted) throw new Refusal("target is required: a branch name or a worktree folder.");
@@ -614,20 +1117,119 @@ export class Mcp {
 		const switched = await this.take(slot, target, label, args);
 		if (root) this.renew(switched, root);
 		const now = await this.settled(switched);
-		return `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.problems(now)}${this.unapplied(now, since)}\nClaimed until ${time(Date.now() + CLAIM_MS)}. Call release when you are done with Studio.`;
+		return {
+			text: `${now.projectName} now serves ${now.targetLabel}${target.kind === "branch" ? " from a read-only copy (edits there are not possible)" : ""}. ${this.health(now)}${this.sharingText(now)}${this.problems(now)}${this.unapplied(now, since)}${this.crashed(now, since)}\nClaimed ${this.holdText()}. Call release when you are done with Studio.${this.returnNote(slot, args)}`,
+			data: await this.switchData(slot, now, root, since),
+		};
 	}
 
 	private async release(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		const claim = this.hub.claimOf(slot.id);
-		if (!claim) return `${slot.projectName} was not claimed.`;
+		if (!claim) {
+			const lapsed = this.hub.lapsedClaim(slot.id);
+			if (lapsed && (!root || lapsed.key === claimKey({ kind: "worktree", path: root }))) {
+				const { back } = (await this.hub.releaseClaim(slot.id)) as { back: HandBack | null };
+				const now = this.hub.view(this.hub.registry.get(slot.id));
+				return `${root ? "Your" : `${lapsed.label}'s`} claim on ${slot.projectName} had already run out; ${back?.returned ? `it went back to ${back.label}.` : `it still serves ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`}`;
+			}
+			return `${slot.projectName} was not claimed.`;
+		}
 		// Without a path there is no telling whose claim it is; another agent's is only dropped with force.
 		if (!root && args.force !== true) throw new Refusal(`${slot.projectName} is claimed by ${claim.label}. Pass path (your worktree) to release your own claim.`);
 		if (root && claim.key !== claimKey({ kind: "worktree", path: root })) {
 			throw new Refusal(`${slot.projectName} is claimed by ${claim.label}, not by your worktree; leaving it.`);
 		}
-		this.hub.setClaim(slot.id, null);
-		return `Released ${slot.projectName}. It keeps serving ${slot.targetLabel}.`;
+		// Its asks for shared places end, and a then_return goes back, inside releaseClaim (specs 013, 014).
+		const released = await this.hub.releaseClaim(slot.id);
+		const back = released.kind === "none" ? null : released.back;
+		if (back?.returned) return `Released ${slot.projectName}. It switched back to ${back.label}, which it served before you took it.`;
+		const now = this.hub.view(this.hub.registry.get(slot.id));
+		return `Released ${slot.projectName}. It keeps serving ${now.targetLabel}${back ? ` (not switched back: ${back.why})` : ""}.`;
+	}
+
+	/*
+		Asks for a shared Studio place (spec 014). Only the agent holding the
+		project's claim may ask, so a request can end with that claim; the
+		decision itself is PlaceRequests', the user's answer arrives over the
+		service's HTTP API (the notification and the panel).
+	*/
+	private async requestPlace(args: Args): Promise<Answer> {
+		const { slot, root } = await this.pick(args);
+		if (!root) throw new Refusal("path is required: your working directory.");
+		const wanted = args.place_id ?? args.placeId;
+		const placeId = typeof wanted === "string" && /^\d+$/.test(wanted.trim()) ? Number(wanted) : wanted;
+		if (typeof placeId !== "number" || !Number.isSafeInteger(placeId) || placeId <= 0) throw new Refusal("place_id is required: one of the project's place IDs (status lists them).");
+		const key = claimKey({ kind: "worktree", path: root });
+		const claim = this.hub.claimOf(slot.id);
+		if (claim && claim.key !== key) throw this.claimRefusal(slot, claim, "Only the agent holding a project can ask for a Studio place for it.");
+		if (!claim) throw new Refusal(`You hold no claim on ${slot.projectName}. Call serve_here from your worktree first (it claims the project), then request_place.`);
+		this.renew(slot, root);
+		const listed = slot.listedPlaces ?? [];
+		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to ask for. Ask the user to open the place in Studio.`);
+		if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(wanted)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
+
+		const names = new Map(this.hub.registry.slots.map((entry) => [entry.id, entry.projectName]));
+		const holderOf = () => {
+			const id = this.hub.placeHolder(placeId);
+			return id ? (names.get(id) ?? null) : null;
+		};
+		const heldBefore = holderOf();
+		const name = listed.find((place) => place.placeId === placeId)?.placeName ?? this.hub.studio.places().find((place) => place.placeId === placeId)?.placeName ?? null;
+		const label = this.placeLabel(placeId, name);
+		const answer = (outcome: (typeof REQUEST_OUTCOMES)[number], text: string, holder: string | null = holderOf()): Answer => ({ text, data: { outcome, placeId, name, project: slot.projectName, holder } });
+
+		// rojoHub.placeMoves "auto" or yolo: a holder no other agent claimed gives the place up at once. A claim always holds.
+		const by = this.hub.placeMoves === "auto" ? "placeMoves" : this.hub.yoloOn ? "yolo" : null;
+		const result = this.hub.requests.ask(slot.id, placeId, key, by !== null, by ?? undefined);
+		switch (result.kind) {
+			case "already":
+				return answer("already", `${label} already syncs with ${slot.projectName}; nothing to do.`);
+			case "assigned":
+				return answer("assigned", `${label} is assigned to ${slot.projectName}. Nobody held it, so nothing was taken from anyone.${slot.state === "running" ? " If it is open in Studio it connects within a few seconds; call wait_for_studio." : ` ${slot.projectName} is not serving: start it, and the place connects by itself.`}`);
+			case "moved": {
+				if (by === "yolo") this.lifted();
+				const from = names.get(result.from) ?? result.from;
+				writeAudit(this.hub.home, { actor: "mcp", action: "move_place", project: slot.projectName, args: { placeId, from }, by, yolo: by === "yolo", lifted: by === "yolo", outcome: "ok" });
+				const why = by === "yolo" ? "Yolo mode is on" : "The user set rojoHub.placeMoves to auto";
+				return answer("moved", `${why} and no agent claimed ${from}, so ${label} was moved from ${from} to ${slot.projectName} at once (logged). It reconnects to ${slot.projectName} within a few seconds; call wait_for_studio.${this.handoverNote(placeId)}`, slot.projectName);
+			}
+		}
+		const holder = heldBefore ?? names.get(result.request.holderId ?? "") ?? null;
+		// A client that can ask the user directly gets the question back at once (the launcher puts it), so wait has nothing to wait for.
+		const elicit = this.asking.getStore()?.elicit === true;
+		const seconds = elicit ? 0 : clamp(args.wait, 0, MAX_REQUEST_WAIT_S);
+		const deadline = Date.now() + seconds * 1000;
+		for (;;) {
+			const outcome = this.hub.requests.outcomeFor(slot.id, placeId);
+			if (outcome === "moved") return answer("moved", `The user moved ${label} from ${holder ?? "its project"} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio.${this.handoverNote(placeId)}`, slot.projectName);
+			if (outcome === "declined") return answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${holder ?? "its project"}. Do not ask again unless the user says to.`);
+			if (!this.hub.requests.pendingFor(slot.id, placeId)) return answer("ended", `The request for ${label} ended without an answer (it was released, your claim ran out, or the project or place changed). Call request_place again if you still need it.`);
+			if (Date.now() >= deadline) break;
+			await sleep(500);
+		}
+		if (elicit) {
+			const from = holder ?? "its project";
+			this.hub.requests.log(`places: asking the user in the chat (MCP elicitation) to move ${label} from ${from} to ${slot.projectName}`);
+			const pending = answer("pending", `The user is being asked, in this client, to move ${label} from ${from} to ${slot.projectName}. Keep working; do not ask in chat or try to approve it yourself. If the question is cancelled, the request stays pending and the user can still answer in VS Code. Status shows the answer.`);
+			return {
+				...pending,
+				meta: {
+					"rojo-hub/elicit": {
+						requestId: result.request.id,
+						message: `Move ${name ?? `place ${placeId}`} from ${from} to ${slot.projectName}? Studio switches it over at once.`,
+						// What the launcher tells the agent for each answer, so the wording stays here.
+						moved: answer("moved", `The user moved ${label} from ${from} to ${slot.projectName}. It reconnects within a few seconds; call wait_for_studio. If status still shows it synced with ${from}, ${HANDOVER_HELP}`, slot.projectName),
+						declined: answer("declined", `The user declined moving ${label} to ${slot.projectName}; it stays with ${from}. Do not ask again unless the user says to.`, from),
+						answered: answer("ended", `The request for ${label} was already answered (in VS Code) or ended, so the user's choice here changed nothing. Call status to see where the place is.`),
+					},
+				},
+			};
+		}
+		return answer(
+			"pending",
+			`${result.fresh ? "Asked" : "Still asking"} the user, in VS Code, to move ${label} from ${holder ?? "its project"} to ${slot.projectName}${seconds > 0 ? `; no answer in ${seconds} s` : ""}. Keep working and do not ask in chat; status shows the answer, or call request_place again with wait. It ends if you release or your claim runs out.`,
+		);
 	}
 
 	private async start(args: Args): Promise<string> {
@@ -648,9 +1250,14 @@ export class Mcp {
 	}
 
 	private async stopAll(args: Args): Promise<string> {
-		if (args.force !== true) throw new Refusal("stop_all stops every project, under every agent and the user. Pass force: true only if the user asked for it.");
-		const result = await this.groupsOrFail().stopAll();
-		return this.describeGroupResult({ group: { id: "", name: "", slotIds: [], groupIds: [], active: false, projectIds: [] }, started: [], stopped: result.stopped, kept: [], failed: result.failed }, "Stopped");
+		const yolo = args.force !== true && this.hub.yoloOn;
+		if (args.force !== true && !yolo) throw new Refusal("stop_all stops every project, under every agent and the user. Pass force: true only if the user asked for it.");
+		if (yolo) this.lifted();
+		const result = await this.groupsOrFail().stopAll(yolo ? (id) => this.hub.claimOf(id) !== null : undefined);
+		const text = this.describeGroupResult({ group: { id: "", name: "", slotIds: [], groupIds: [], active: false, projectIds: [] }, started: [], stopped: result.stopped, kept: [], failed: result.failed }, "Stopped");
+		if (result.kept.length === 0) return text;
+		const names = result.kept.map((id) => this.hub.list().find((slot) => slot.id === id)?.projectName ?? id);
+		return `${text}\nKept running because another agent claimed them (yolo mode does not override claims): ${names.join(", ")}.`;
 	}
 
 	private async addProject(args: Args): Promise<string> {
@@ -688,6 +1295,18 @@ export class Mcp {
 		return `${now.projectName} now uses ${now.projectFile}.${this.problems(now)}`;
 	}
 
+	private async relocateProject(args: Args): Promise<string> {
+		const { slot, root } = await this.pick(args);
+		const path = text(args.new_path);
+		if (!path) throw new Refusal("new_path is required: the project's new folder.");
+		if (slot.state === "running" || slot.state === "starting") {
+			throw new Refusal(`${slot.projectName} is serving; a new folder is a new Rojo session, so stop it first (stop), then relocate it, then start it.`);
+		}
+		this.renew(slot, root);
+		const now = await this.hub.relocate(slot.id, path);
+		return `${now.projectName} now lives in ${now.repoPath} (port ${now.port}, groups and place assignments kept). Start it to serve again.${this.problems(now)}`;
+	}
+
 	private async branches(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
@@ -713,61 +1332,464 @@ export class Mcp {
 		await this.waitTurn(slot, mine, clamp(args.wait, 0, MAX_WAIT_S), force);
 		const claim = this.hub.claimOf(slot.id);
 		if (claim && claim.key !== mine && !force) throw this.claimRefusal(slot, claim, "A new branch switches the project, which would change what Studio shows under that agent.");
-		const made = await this.hub.createBranch(slot.id, name, base);
-		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: Date.now() + CLAIM_MS });
+		const made = await this.hub.createBranch(slot.id, name, base, { actor: "mcp", setupWaitMs: SETUP_WAIT_MS });
+		const setupText = made.setupNotes.length ? `\n${made.setupNotes.join("\n")}` : "";
+		// Setup still running: the worktree exists but nothing is switched or claimed until ensure has waited for it (spec 012).
+		if (!made.switched) {
+			return `Made branch ${made.branch} from ${made.from} in ${made.path}, but its setup commands are still running in the background; nothing was switched and you hold nothing yet.${setupText}\nCall ensure with path ${made.path} to wait for the setup and serve the worktree.`;
+		}
+		this.hub.setClaim(slot.id, { key: claimKey({ kind: "worktree", path: made.path }), label: basename(made.path), until: this.hub.claimUntil() });
 		const now = await this.settled(made.slot);
-		return `Made branch ${made.branch} from ${base} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it until ${time(Date.now() + CLAIM_MS)}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}`;
+		const notes = made.notes.length ? ` (${made.notes.join("; ")})` : "";
+		return `Made branch ${made.branch} from ${made.from}${notes} in ${made.path} (${made.via === "orca" ? "an Orca worktree" : "a git worktree"}); ${now.projectName} now serves it and you hold it ${this.holdText()}. Work in ${made.path}. ${this.health(now)}${this.problems(now)}${setupText}`;
 	}
 
 	private async log(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
 		const lines = Math.round(clamp(args.lines, 40, 400)) || 40;
-		const tail = this.hub.logTail(slot.id, lines);
-		return tail ? `${slot.projectName}'s Rojo log (last ${lines} lines):\n${tail}` : `${slot.projectName} has no Rojo log yet (it has not been started).`;
+		const verbose = args.verbose === true;
+		const { text: tail, hidden } = this.hub.logTail(slot.id, lines, verbose);
+		const note = !verbose && hidden > 0 ? `\n(${hidden} DEBUG/TRACE lines in the recent log are hidden: Rojo's per-sync WebSocket and project-file lines. verbose: true shows everything.)` : "";
+		return tail || note ? `${slot.projectName}'s Rojo log (last ${lines} lines${verbose ? "" : ", DEBUG hidden"}):\n${tail}${note}` : `${slot.projectName} has no Rojo log yet (it has not been started).`;
 	}
 
 	private async waitForStudio(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
-		const deadline = Date.now() + clamp(args.timeout, 30, 300) * 1000;
+		const waited = await this.awaitStudio(slot, clamp(args.timeout, 30, 300));
+		const now = waited.slot;
+		switch (waited.outcome) {
+			case "synced":
+				return this.health(now);
+			case "stopped":
+				return `${now.projectName} is not serving, so no Studio can sync to it. ${this.health(now)}`;
+			case "timeout":
+				return `No Studio place synced to ${now.projectName} in time. ${this.health(now)}`;
+			default:
+				return `A Studio place is waiting for the user to accept its first sync with ${now.projectName}. ${this.health(now)}`;
+		}
+	}
+
+	/*
+		The wait of wait_for_studio and ensure: until a place is synced, a place
+		waits for the user to accept the first sync, the project stopped, or the
+		time ran out.
+	*/
+	private async awaitStudio(slot: SlotView, seconds: number): Promise<{ outcome: "synced" | "stopped" | "timeout" | "confirming"; slot: SlotView }> {
+		const deadline = Date.now() + seconds * 1000;
 		for (;;) {
 			const now = this.hub.view(this.hub.registry.get(slot.id));
-			if (now.state === "running" && (now.places ?? []).length > 0) return this.health(now);
-			if (now.state === "stopped" || now.state === "error") return `${now.projectName} is not serving, so no Studio can sync to it. ${this.health(now)}`;
-			if (Date.now() >= deadline) return `No Studio place synced to ${now.projectName} in time. ${this.health(now)}`;
-			if (this.hub.studio.places().some((place) => place.projectId === now.id && place.confirming)) {
-				return `A Studio place is waiting for the user to accept its first sync with ${now.projectName}. ${this.health(now)}`;
-			}
+			if (now.state === "running" && (now.places ?? []).length > 0) return { outcome: "synced", slot: now };
+			if (now.state === "stopped" || now.state === "error") return { outcome: "stopped", slot: now };
+			if (Date.now() >= deadline) return { outcome: "timeout", slot: now };
+			if (this.hub.studio.places().some((place) => place.projectId === now.id && place.confirming)) return { outcome: "confirming", slot: now };
 			await sleep(500);
 		}
+	}
+
+	/*
+		Gets the caller ready for Studio in one call (spec 011, design 2). Each step
+		runs only when its condition holds, nothing is rolled back, and failures are
+		answers (isError, with data) so the steps done are kept.
+	*/
+	private async ensure(args: Args): Promise<Answer> {
+		const steps: EnsureStep[] = [];
+		const since = Date.now();
+		let slot: SlotView;
+		let root: string | null;
+		try {
+			if (!text(args.path)) throw new Refusal("path is required: your working directory.");
+			({ slot, root } = await this.pick(args));
+			// A path in another repo must never be set up or served under this project (setup commands run there).
+			if (root && text(args.project) && pathKey(await primaryCheckout(root)) !== pathKey(slot.repoPath)) throw new Refusal(`${root} is not a worktree of ${slot.projectName}'s repo (${slot.repoPath}).`);
+		} catch (error) {
+			if (!(error instanceof Refusal)) throw error;
+			return this.ensureAnswer(null, null, steps, { reason: "no_project", message: error.message }, since);
+		}
+		const fresh = () => this.hub.view(this.hub.registry.get(slot.id));
+		let checks: CheckResult[] = [];
+		let versions: EnsureVersions | null = null;
+		const fail = (reason: EnsureFailure, message: string) => this.ensureAnswer(fresh(), root, steps, { reason, message }, since, checks, versions);
+		const raw = args.place === undefined || args.place === null || args.place === "" ? null : typeof args.place === "string" ? args.place.trim() : args.place;
+		const wantedPlace = raw === null ? null : typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw)) ? Number(raw) : NaN;
+		if (wantedPlace !== null && (!Number.isSafeInteger(wantedPlace) || wantedPlace <= 0)) return fail("no_listed_places", `place must be a positive integer place ID (a number or digits), not ${JSON.stringify(args.place)}. Call ensure again with place as one of the project's places.`);
+		const placeCount = (view: SlotView) => (view.state === "running" ? (view.places ?? []).length : 0);
+
+		// An error nothing above turned into an answer still keeps the steps done.
+		let stage: EnsureStep["step"] = "start";
+		const failed: Record<EnsureStep["step"], EnsureFailure> = { start: "start_failed", setup: "setup_failed", serve: "rojo_error", versions: "rojo_error", open_place: "open_failed", wait_for_studio: "timeout" };
+		try {
+			// 2. start
+			stage = "start";
+			if (slot.state === "stopped" || slot.state === "error" || slot.state === "offline") {
+				try {
+					await this.hub.start(slot.id);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					steps.push({ step: "start", outcome: "failed", detail: message });
+					return fail("start_failed", `${slot.projectName} did not start: ${message.split("\n")[0]} Nothing was served. Fix that, then call ensure again.`);
+				}
+				const started = await this.settled(slot);
+				if (started.state === "error") {
+					const lines = this.problemLines(started).join(" ");
+					steps.push({ step: "start", outcome: "failed", detail: lines });
+					return fail("start_failed", `${started.projectName} is in error after starting: ${lines || "see log"} Nothing was served. Fix that, then call ensure again.`);
+				}
+				steps.push({ step: "start", outcome: "done", detail: `started ${started.projectName} on port ${started.port}` });
+				slot = started;
+			} else {
+				steps.push({ step: "start", outcome: "already", detail: `${slot.projectName} is ${slot.state}` });
+				if (slot.state === "starting") slot = await this.settled(slot);
+			}
+
+			// 2b. install checks, and setup when this worktree needs it and no Rojo has read it (spec 012). Before the claim, so a long install does not hold it.
+			stage = "setup";
+			checks = this.checks(slot, root!);
+			const notOk = () => checks.filter((check) => (check.name === "packages" || check.name === "node_modules") && !check.ok);
+			const configured = this.hub.setupFor(slot.repoPath);
+			const running = this.hub.setupJobs.running(root!);
+			if (running || (configured && notOk().length > 0)) {
+				const why = running ? null : await this.hub.setupRefusal(this.hub.registry.get(slot.id), root!);
+				if (configured && "problem" in configured) {
+					steps.push({ step: "setup", outcome: "skipped", detail: configured.problem });
+				} else if (why) {
+					steps.push({ step: "setup", outcome: "skipped", detail: why });
+				} else {
+					const ran = await this.hub.setupWorktree(slot.id, root!, { actor: "mcp", branch: null, waitMs: Math.max(5, clamp(args.timeout, 60, 300)) * 1000 });
+					if (ran && !ran.outcome) {
+						steps.push({ step: "setup", outcome: "failed", detail: `still running (command ${ran.job.step} of ${ran.job.of}: ${ran.job.text})` });
+						return fail("setup_running", `Setup is still running in ${root} (command ${ran.job.step} of ${ran.job.of}: ${ran.job.text}). Call ensure again to keep waiting; nothing was served.`);
+					}
+					if (ran?.outcome && !ran.outcome.ok) {
+						steps.push({ step: "setup", outcome: "failed", detail: `${ran.outcome.failed!.text} (step ${ran.outcome.failed!.index} of ${ran.outcome.failed!.of})` });
+						return fail("setup_failed", describeFailure(ran.outcome));
+					}
+					if (ran?.outcome) {
+						steps.push({ step: "setup", outcome: "done", detail: `${ran.joined ? "joined the running setup; " : ""}${ran.outcome.steps.length} command(s) ran in ${root}` });
+						const lines = describeSteps(ran.outcome);
+						if (lines) steps[steps.length - 1].detail += `\n${lines}`;
+						checks = this.checks(this.hub.view(this.hub.registry.get(slot.id)), root!);
+					}
+				}
+			}
+
+			// 3. claim and serve
+			stage = "serve";
+			const beforeKey = claimKey(slot.target);
+			let now: SlotView;
+			try {
+				now = await this.take(slot, { kind: "worktree", path: root! }, basename(root!), args);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (!(error instanceof Refusal) && !(error instanceof Conflict) && !(error instanceof NotFound)) throw error;
+				steps.push({ step: "serve", outcome: "failed", detail: message });
+				return fail(error instanceof Refusal ? "claimed" : "rojo_error", `${message} ${error instanceof Refusal ? "The project was not switched." : "Nothing was switched."}`);
+			}
+			const switched = beforeKey !== claimKey(now.target);
+			now = await this.settled(now);
+			this.hub.ackNotes(now.id);
+			steps.push({ step: "serve", outcome: switched ? "done" : "already", detail: switched ? `${now.projectName} now serves ${root}` : `${now.projectName} already served ${root}; claim renewed` });
+			const returnLine = this.returnNote(now, args).trim();
+			if (returnLine) steps[steps.length - 1].detail += `; ${returnLine.replace(/^then_return: /, "")}`;
+			if (now.error || now.state === "error") {
+				const lines = this.problemLines(now).join(" ");
+				steps[steps.length - 1].detail += `; Rojo reports: ${lines}`;
+				return fail("rojo_error", `The switch was made, but Rojo reports: ${lines} Fix the files in your worktree (log shows more); do not restart the project.`);
+			}
+
+			// 3b. versions (spec 015): never a failure, never changes ready.
+			stage = "versions";
+			try {
+				const found = await this.versionsStep(now, root!, args, Math.max(5, clamp(args.timeout, 60, 300)));
+				versions = found.versions;
+				steps.push({ step: "versions", outcome: found.outcome, detail: found.lines.join("\n") });
+				// a reopened place disconnected and came back: look at the project again
+				now = fresh();
+			} catch (error) {
+				steps.push({ step: "versions", outcome: "skipped", detail: `could not check versions: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}` });
+			}
+
+			// 4. open_place
+			stage = "open_place";
+			const listed = now.listedPlaces ?? [];
+			const wanted = args.place === undefined || args.place === null || args.place === "" ? null : wantedPlace;
+			const connecting = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+			const hadPlace = placeCount(now) > 0;
+			if (hadPlace) {
+				steps.push({ step: "open_place", outcome: "already", detail: `${this.placeList(now.places ?? [])} synced` });
+			} else if (connecting.length > 0) {
+				steps.push({ step: "open_place", outcome: "skipped", detail: `${this.placeList(connecting)} already connecting` });
+			} else {
+				const chosen = wanted === null ? (listed.length === 1 ? listed[0] : null) : (listed.find((place) => place.placeId === wanted) ?? null);
+				const openOnes = wanted === null ? listed.filter((place) => place.open) : chosen?.open ? [chosen] : [];
+				if (listed.length === 0) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "the project file names no places" });
+					return fail("no_listed_places", `${now.projectName}'s project file names no places (servePlaceIds, placeId), so none can be opened. Ask the user to open the place in Studio, then call wait_for_studio.`);
+				}
+				if (wanted !== null && !chosen) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: `place ${wanted} is not listed` });
+					return fail("no_listed_places", `${wanted} is not one of ${now.projectName}'s places: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+				}
+				if (openOnes.length > 0) {
+					steps.push({ step: "open_place", outcome: "already", detail: `${this.listedText(openOnes)} already open in Studio` });
+				} else if (!this.hub.openPlacesOn) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "rojoHub.openPlaces is off" });
+					return fail("open_places_off", `${OFF_MESSAGE} The project is started and serves your worktree; ask the user to open one of its places in Studio (${this.listedText(listed)}), then call wait_for_studio.`);
+				} else if (!chosen) {
+					steps.push({ step: "open_place", outcome: "skipped", detail: "several places and none chosen" });
+					return fail("several_places", `${now.projectName} has several places and none was opened: ${this.listedText(listed)}. Call ensure again with place as one of them.`);
+				} else {
+					if (!this.hub.openPlacesSwitchOn) this.lifted();
+					try {
+						const opened = await this.hub.openPlace(now.id, chosen.placeId);
+						steps.push({ step: "open_place", outcome: opened.outcome === "opened" ? "done" : "already", detail: opened.outcome === "already-open" && opened.evidence === "process" ? this.looksOpen(`place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}`, opened.pids) : `${opened.outcome === "opened" ? "opening" : "already open:"} place ${chosen.placeId}${opened.placeName ? ` (${opened.placeName})` : ""}` });
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						steps.push({ step: "open_place", outcome: "failed", detail: message });
+						const open = listed.filter((place) => place.open);
+						return fail("open_failed", `Opening place ${chosen.placeId} failed: ${message.split("\n")[0]} Places open already: ${open.length ? this.listedText(open) : "none"}. Ask the user to open it in Studio.`);
+					}
+				}
+			}
+
+			// 5. wait_for_studio
+			stage = "wait_for_studio";
+			if (hadPlace) {
+				steps.push({ step: "wait_for_studio", outcome: "already", detail: "a place is synced" });
+			} else {
+				const waited = await this.awaitStudio(now, Math.max(5, clamp(args.timeout, 60, 300)));
+				now = waited.slot;
+				if (waited.outcome === "synced") {
+					steps.push({ step: "wait_for_studio", outcome: "done", detail: `${this.placeList(now.places ?? [])} synced` });
+				} else {
+					const connectingNow = this.hub.studio.places().filter((place) => place.projectId === now.id && place.syncedWith !== now.projectName);
+					const detail = waited.outcome === "stopped" ? "the project stopped" : waited.outcome === "confirming" ? "a place waits for the user to accept the first sync" : `nothing synced in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}`;
+					steps.push({ step: "wait_for_studio", outcome: "failed", detail });
+					if (waited.outcome === "stopped") return fail("stopped", `${now.projectName} was stopped while waiting, by someone else; the files were switched to your worktree. Start it again with ensure.`);
+					if (waited.outcome === "confirming") return fail("studio_confirming", `A Studio place is waiting for the user to accept its first sync with ${now.projectName} (Rojo asks once per place and project). Ask the user to accept it in Studio, then call wait_for_studio.`);
+					return fail("timeout", `No Studio place synced to ${now.projectName} in time${connectingNow.length ? `; connecting: ${this.placeList(connectingNow)}` : ""}. Call wait_for_studio to keep waiting.`);
+				}
+			}
+			return this.ensureAnswer(fresh(), root, steps, null, since, checks, versions);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			steps.push({ step: stage, outcome: "failed", detail: message });
+			return fail(failed[stage], `${message.split("\n")[0]} (step ${stage}); the steps above were done.`);
+		}
+	}
+
+	/*
+		ensure's versions step (spec 015): reopens this project's places that run
+		an older plugin (when rojoHub.closePlaces is on and no other agent claims
+		the project they are synced with), waits for them to come back, and says
+		what only the user can do. Reads and asks; it throws nothing the caller
+		must act on.
+	*/
+	private async versionsStep(slot: SlotView, root: string, args: Args, timeoutSeconds: number): Promise<{ outcome: "done" | "already"; versions: EnsureVersions; lines: string[] }> {
+		const deadline = Date.now() + timeoutSeconds * 1000;
+		const needsUser: string[] = [];
+		const lines: string[] = [];
+		const reopened: EnsureVersions["reopened"] = [];
+		const outdatedElsewhere: EnsureVersions["outdatedElsewhere"] = [];
+		const label = (place: { placeName: string; placeId: number; unsaved: boolean }) => (place.unsaved ? `${place.placeName} (unsaved)` : `${place.placeName} (place ${place.placeId})`);
+		const older = this.hub.studio.places().filter((place) => compareVersions(place.pluginVersion, SERVICE_VERSION) < 0);
+		const mine = older.filter((place) => place.projectId === slot.id || place.syncedWith === slot.projectName);
+		for (const place of older) {
+			if (!mine.includes(place)) outdatedElsewhere.push({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, pluginVersion: place.pluginVersion });
+		}
+
+		// this project's older places
+		const asked: typeof mine = [];
+		const askedAt = Date.now();
+		for (const place of mine) {
+			const text = `${label(place)} runs plugin ${place.pluginVersion}, older than ${SERVICE_VERSION}`;
+			if (place.unsaved) {
+				needsUser.push(`${text}; it is unsaved, so save it and reopen it in Studio.`);
+				lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+				continue;
+			}
+			if (!this.hub.closePlacesOn) {
+				needsUser.push(`${text}; reopen it in Studio, or ask the user to turn on rojoHub.closePlaces so ensure can reopen places.`);
+				lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+				continue;
+			}
+			if (args.force !== true) {
+				const mineKey = claimKey({ kind: "worktree", path: root });
+				const holder = place.syncedWith ? this.hub.list().find((entry) => entry.projectName === place.syncedWith) : undefined;
+				const other = [slot, ...(holder && holder.id !== slot.id ? [holder] : [])].find((candidate) => {
+					const claim = this.hub.claimOf(candidate.id);
+					return claim !== null && claim !== undefined && claim.key !== mineKey;
+				});
+				if (other) {
+					const detail = `not reopened: another agent claimed ${other.projectName}, which would pull Studio out from under it (pass force only when the user asks)`;
+					reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "skipped", detail });
+					needsUser.push(`${text}; ${detail}. Reopen it in Studio when that agent is done.`);
+					lines.push(`needs you: ${text}; ${detail}`);
+					continue;
+				}
+			}
+			try {
+				await this.hub.reopenPlace(slot.id, place.placeId);
+				if (!this.hub.yoloOn) writeAudit(this.hub.home, { actor: "mcp", action: "reopen_place", project: slot.projectName, args: { placeId: place.placeId, by: "ensure" }, yolo: false, lifted: false, outcome: "ok" });
+				asked.push(place);
+			} catch (error) {
+				const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "failed", detail });
+				needsUser.push(`${label(place)} could not be reopened (${detail}); reopen it in Studio.`);
+				lines.push(`needs you: ${label(place)} could not be reopened: ${detail}`);
+			}
+		}
+
+		// wait for the reopened places to say hello again with the current plugin
+		const back = (placeId: number) => this.hub.studio.places().find((entry) => !entry.unsaved && entry.placeId === placeId && compareVersions(entry.pluginVersion, SERVICE_VERSION) >= 0);
+		for (;;) {
+			if (asked.every((place) => back(place.placeId)) || Date.now() >= deadline) break;
+			await sleep(this.options.pollMs ?? 500);
+		}
+		for (const place of asked) {
+			const now = back(place.placeId);
+			if (now) {
+				const took = Math.max(1, Math.round((Date.now() - askedAt) / 1000));
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "reloaded", detail: `plugin ${place.pluginVersion} to ${now.pluginVersion}, reopened in ${took} s` });
+				lines.push(`fixed: reopened ${label(place)} in ${took} s, plugin ${place.pluginVersion} to ${now.pluginVersion}. ${STUDIO_NEW_ID}`);
+			} else {
+				const detail = "waiting on you in Studio (it may be asking about unsaved changes); it keeps syncing with its old plugin until then";
+				reopened.push({ placeId: place.placeId, name: place.placeName, outcome: "waiting", detail });
+				needsUser.push(`${label(place)} is ${detail}.`);
+				lines.push(`needs you: ${label(place)} is ${detail}`);
+			}
+		}
+
+		// other projects' older places: listed only
+		for (const place of outdatedElsewhere) lines.push(`ok: ${place.name}${place.placeId > 0 ? ` (place ${place.placeId})` : " (unsaved)"} runs plugin ${place.pluginVersion}; it is not this project's, so it was left alone`);
+
+		// a newer Rojo-Hub installed than the service running
+		const installed = newestInstalled((this.options.extensionLists ?? extensionLists)(), SERVICE_VERSION);
+		if (installed) {
+			needsUser.push(`Rojo-Hub ${installed} is installed but ${SERVICE_VERSION} is running; reload a VS Code window (Developer: Reload Window).`);
+			lines.push(`needs you: ${needsUser[needsUser.length - 1]}`);
+		}
+
+		// this chat's own connection
+		const connection = this.asking.getStore()?.connection;
+		if (connection != null) {
+			// Kept in needsUser (and so in current); the answer's footer already says it in words, so no line here (it showed twice).
+			needsUser.push(`This chat's Rojo-Hub connection is older (launcher ${connection}); the user must run /mcp and reconnect rojohub, or start a new chat.`);
+		}
+
+		// current: nothing of this agent's setup is behind or needs the user. Other projects' places are theirs to reopen and only listed.
+		const current = needsUser.length === 0;
+		if (current && reopened.length === 0 && outdatedElsewhere.length === 0) lines.push(`all on ${SERVICE_VERSION}`);
+		else if (mine.length === 0 && !installed && connection == null) lines.unshift(`ok: this project's places and this chat are on ${SERVICE_VERSION}`);
+		// "done" when something was fixed, else "already". What needs the user is in the "needs you:" lines and versions.needsUser, never in the outcome ("skipped" read as both "nothing to do" and "could not").
+		const outcome = reopened.some((entry) => entry.outcome === "reloaded") ? "done" : "already";
+		return { outcome, versions: { service: SERVICE_VERSION, current, needsUser, reopened, outdatedElsewhere }, lines };
+	}
+
+	/** The install checks (spec 012, design 2) of a worktree, for the project as it is now. Reads files only. */
+	private checks(slot: SlotView, root: string): CheckResult[] {
+		const serving = slot.target.kind === "worktree" && pathKey(slot.target.path) === pathKey(root);
+		return installChecks(root, {
+			rojo: resolveRojo(slot.repoPath),
+			borrowed: serving && slot.mode === "borrowed",
+			sourcemapsOn: loadPortSettings(this.hub.home).sourcemaps !== false,
+			sourcemap: slot.sourcemap,
+			servedTree: slot.target.kind === "worktree" ? slot.target.path : null,
+			serving,
+		});
+	}
+
+	/** The answer of ensure: the steps, then why it stopped or how Studio looks. ready: running, serving this worktree, a place synced. */
+	private async ensureAnswer(slot: SlotView | null, root: string | null, steps: EnsureStep[], failure: { reason: EnsureFailure; message: string } | null, since: number, checks: CheckResult[] = [], versions: EnsureVersions | null = null): Promise<Answer> {
+		const warnings = checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`);
+		const project = slot ? await this.projectState(slot, root) : null;
+		const places = slot && slot.state === "running" ? (slot.places ?? []) : [];
+		const ready = failure === null && slot !== null && slot.state === "running" && project?.yourWorktreeServed === true && places.length > 0;
+		const lines = steps.map((step) => `${step.step}: ${step.outcome}, ${step.detail}`);
+		const tail = failure ? failure.message : slot ? `${this.health(slot)}${this.sharingText(slot)}${this.problems(slot)}${this.unapplied(slot, since)}${this.crashed(slot, since)}` : "";
+		return {
+			text: `${failure ? "Not ready." : ready ? "Ready." : "Not ready: your worktree is not the one served."}${lines.length ? `\n${lines.join("\n")}` : ""}\n${tail}${warnings.map((warning) => `\nwarning: ${warning}`).join("")}`,
+			data: { ready, steps, project, versions, placeIds: places.map((place) => place.placeId).filter((id) => id > 0), checks, warnings, failure, yolo: this.hub.yoloOn === true },
+			...(failure ? { isError: true } : {}),
+		};
+	}
+
+	/** Which of the project's places an open_place, close_place or reopen_place call means. */
+	private placeArg(slot: SlotView, args: Args, doing: string): number {
+		const listed = slot.listedPlaces ?? [];
+		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to ${doing}. Ask the user to do it in Studio.`);
+		if (args.placeId === undefined || args.placeId === null || args.placeId === "") {
+			if (listed.length > 1) throw new Refusal(`${slot.projectName} has several places; pass placeId as one of: ${this.listedText(listed)}.`);
+			return listed[0].placeId;
+		}
+		const placeId = Number(args.placeId);
+		if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(args.placeId)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
+		return placeId;
+	}
+
+	/*
+		close_place and reopen_place. Needs rojoHub.closePlaces (yolo does not
+		lift it). Claims apply like stop's guard: another agent's claim on this
+		project, or on the project the place is synced with, refuses unless force.
+	*/
+	private async closeOrReopen(args: Args, kind: "close" | "reopen"): Promise<string> {
+		const { slot, root } = await this.pick(args);
+		this.renew(slot, root);
+		if (!this.hub.closePlacesOn) throw new Refusal(`${CLOSE_OFF_MESSAGE} Ask the user to ${kind} the place in Studio instead.`);
+		const placeId = this.placeArg(slot, args, kind);
+		const open = this.hub.studio.places().find((place) => place.placeId === placeId && !place.unsaved);
+		const name = open?.placeName ? `${open.placeName} (place ${placeId})` : `place ${placeId}`;
+		if (args.force !== true) {
+			const mine = root === null ? null : claimKey({ kind: "worktree", path: root });
+			const holder = open?.syncedWith ? this.hub.list().find((entry) => entry.projectName === open.syncedWith) : undefined;
+			for (const candidate of [slot, ...(holder && holder.id !== slot.id ? [holder] : [])]) {
+				const claim = this.hub.claimOf(candidate.id);
+				if (claim && claim.key !== mine) throw this.claimRefusal(candidate, claim, `${kind === "close" ? "Closing" : "Reopening"} ${name} would pull Studio out from under that agent.`);
+			}
+		}
+		if (kind === "close") await this.hub.closePlace(slot.id, placeId);
+		else await this.hub.reopenPlace(slot.id, placeId);
+		if (!this.hub.yoloOn) writeAudit(this.hub.home, { actor: "mcp", action: `${kind}_place`, project: slot.projectName, args: { placeId }, yolo: false, lifted: false, outcome: "ok" });
+		return kind === "close"
+			? `Asked Studio to close ${name}, as if the user closed its window; Studio may ask about unsaved changes first. Nothing was saved or killed.`
+			: `Asked Studio to close ${name} (it may ask the user about unsaved changes); it opens again when Studio has exited, within five minutes (usually well under a minute once closed), and loads the current plugin. ${STUDIO_NEW_ID} Call wait_for_studio to know when it is synced with ${slot.projectName}.`;
 	}
 
 	private async openPlace(args: Args): Promise<string> {
 		const { slot, root } = await this.pick(args);
 		this.renew(slot, root);
 		if (!this.hub.openPlacesOn) throw new Refusal(`${OFF_MESSAGE} Ask the user to open the place in Studio instead.`);
-		const listed = slot.listedPlaces ?? [];
-		if (listed.length === 0) throw new Refusal(`${slot.projectName}'s project file names no places (servePlaceIds, placeId), so there is nothing to open. Ask the user to open the place in Studio.`);
-		let placeId: number;
-		if (args.placeId === undefined || args.placeId === null || args.placeId === "") {
-			if (listed.length > 1) throw new Refusal(`${slot.projectName} has several places; pass placeId as one of: ${this.listedText(listed)}.`);
-			placeId = listed[0].placeId;
-		} else {
-			placeId = Number(args.placeId);
-			if (!listed.some((place) => place.placeId === placeId)) throw new Refusal(`${String(args.placeId)} is not one of ${slot.projectName}'s places: ${this.listedText(listed)}.`);
-		}
+		if (!this.hub.openPlacesSwitchOn) this.lifted();
+		const placeId = this.placeArg(slot, args, "open");
 		const result = await this.hub.openPlace(slot.id, placeId);
 		const name = result.placeName ? `${result.placeName} (place ${placeId})` : `Place ${placeId}`;
-		if (result.outcome === "already-open") return `${name} is already open in Studio; nothing was opened. ${this.health(this.hub.view(this.hub.registry.get(slot.id)))}`;
+		if (result.outcome === "already-open") {
+			const health = this.health(this.hub.view(this.hub.registry.get(slot.id)));
+			if (result.evidence === "process") return `${this.looksOpen(name, result.pids)} ${health}`;
+			return `${name} is already open in Studio; nothing was opened. ${health}`;
+		}
 		return `Opening ${name} in Studio. Studio takes a while to load; call wait_for_studio to know when it is synced with ${slot.projectName}${slot.state === "running" ? "" : " (the project is not serving: start it)"}.`;
+	}
+
+	/** What an agent is told when only a Studio process, not the Rojo-Hub plugin, says the place is open. */
+	private looksOpen(name: string, pids: number[] | undefined): string {
+		const running = pids?.length ? ` (${pids.length === 1 ? "pid" : "pids"} ${pids.join(", ")})` : "";
+		return `${name} looks open: a Studio process for it is running${running} but its Rojo-Hub plugin has not connected. It may still be loading, or closing. Nothing was opened, to avoid a second copy. Call wait_for_studio; if the user closed it, call open_place again once that Studio has exited (a Studio left on its start page counts as running: ask the user to close it).`;
+	}
+
+	/** Places Rojo-Hub is closing and opening again right now. They are out of the plugin's list until back, so they are named here. */
+	private reopeningPlaces(): { placeId: number; name: string }[] {
+		const found = new Map<number, string>();
+		for (const slot of this.hub.list()) for (const place of slot.listedPlaces ?? []) if (place.busy === "reopening") found.set(place.placeId, place.placeName ?? `place ${place.placeId}`);
+		return [...found].map(([placeId, name]) => ({ placeId, name }));
 	}
 
 	/** `Lobby (place 111, open), place 222` */
 	private listedText(places: ListedPlace[]): string {
 		return places
 			.map((place) => {
-				const state = place.open ? "open" : "not open";
+				const state = place.busy === "reopening" ? "reopening" : place.open ? "open" : "not open";
 				return place.placeName ? `${place.placeName} (place ${place.placeId}, ${state})` : `place ${place.placeId} (${state})`;
 			})
 			.join(", ");
@@ -842,21 +1864,83 @@ export class Mcp {
 		return `Wrote ${written.path}.`;
 	}
 
-	private async status(args: Args): Promise<string> {
-		const slots = this.hub.list();
-		if (slots.length === 0) return "Rojo-Hub has no projects. Add one with add_project (path: a folder in the repo).";
+	/*
+		Which builds are running, for field testing. The plugin the service
+		installs is always its own version (a unit test keeps Version.lua equal to
+		SERVICE_VERSION). A place keeps the plugin it loaded when it opened, so one
+		older than the service needs reopening. Reads only: no claim is made or
+		renewed, which is why `path` is never looked at.
+	*/
+	private async version(): Promise<Answer> {
+		const script = launcherScript(this.hub.home);
+		const launcher = launcherVersion(script);
+		const projects = this.hub
+			.list()
+			.filter((slot) => slot.state === "running")
+			.map((slot) => ({ id: slot.id, name: slot.projectName, rojoVersion: slot.rojoVersion ?? null }));
+		const places = this.hub.studio.places().map((place) => ({
+			placeId: place.unsaved ? 0 : place.placeId,
+			name: place.placeName,
+			pluginVersion: place.pluginVersion,
+			outdated: compareVersions(place.pluginVersion, SERVICE_VERSION) < 0,
+		}));
+		const asked = this.asking.getStore();
+		const outdated = asked?.connection != null;
+		const connection = asked?.launcher ? asked.launcher : outdated ? "older than 0.22.6" : null;
+		const lines = [`Rojo-Hub ${SERVICE_VERSION} (service). Studio plugin it installs: ${SERVICE_VERSION}. MCP launcher: ${launcher === null ? "not installed" : `${launcher} at ${script}`}.`];
+		lines.push(projects.length > 0 ? `Rojo per serving project: ${projects.map((entry) => `${entry.name} ${entry.rojoVersion ?? "unknown"}`).join(", ")}.` : "No project is serving.");
+		if (places.length > 0) {
+			lines.push("Open Studio places:");
+			for (const place of places) lines.push(`  ${place.name}${place.placeId > 0 ? ` (place ${place.placeId})` : " (unsaved)"} plugin ${place.pluginVersion}${place.outdated ? `: older than the service; reopen the place to load ${SERVICE_VERSION}.` : ""}`);
+		} else lines.push("No Studio place with the plugin is open.");
+		const reopening = this.reopeningPlaces();
+		if (reopening.length > 0) lines.push(`Reopening now (not listed above until it is back): ${reopening.map((place) => `${place.name} (place ${place.placeId})`).join(", ")}.`);
+		if (connection !== null) lines.push(`This chat's connection: ${connection === "older than 0.22.6" ? connection : `launcher ${connection}`}.${outdated ? " Ask the user to run /mcp and reconnect rojohub, or start a new chat." : ""}`);
+		return { text: lines.join("\n"), data: { service: SERVICE_VERSION, plugin: SERVICE_VERSION, launcher, connection, connectionOutdated: outdated, projects, places, reopening } };
+	}
+
+	private async status(args: Args): Promise<Answer> {
+		const all = this.hub.list();
 		const path = text(args.path);
 		const root = path ? await worktreeRoot(path).catch(() => null) : null;
 		const repo = root ? pathKey(await primaryCheckout(root).catch(() => root)) : null;
+		const mineOf = (slot: SlotView) => (repo !== null && pathKey(slot.repoPath) === repo ? root : null);
+		// project, or path with mine: narrows the answer to one project (the whole answer is large with many projects).
+		const wanted = text(args.project);
+		if (!wanted && args.mine === true && repo === null) throw new Refusal("mine needs path (your working directory) inside a registered repo.");
+		const narrowed = wanted ? [this.findProject(wanted)] : args.mine === true ? all.filter((slot) => mineOf(slot) !== null) : null;
+		if (args.mine === true && !wanted && narrowed?.length === 0) throw new Refusal(`Your worktree belongs to no project Rojo-Hub serves. Add it with add_project (path: your working directory).`);
+		const slots = narrowed ?? all;
+		const ids = new Set(slots.map((slot) => slot.id));
+		const names = new Set(slots.map((slot) => slot.projectName));
+		const groups = (this.groups?.list() ?? []).filter((group) => narrowed === null || group.projectIds.some((id) => ids.has(id)));
+		const placesNow = this.hub.studio.places().filter((place) => narrowed === null || (place.projectId !== null && ids.has(place.projectId)) || (place.syncedWith !== null && names.has(place.syncedWith)) || names.has(this.assignedName(place) ?? ""));
+		const data = {
+			projects: await Promise.all(slots.map((slot) => this.projectState(slot, mineOf(slot)))),
+			groups: groups.map((group) => ({ id: group.id, name: group.name, active: group.active, projectIds: [...group.projectIds] })),
+			studioPlaces: placesNow.map((place) => ({ placeId: place.unsaved ? 0 : place.placeId, name: place.placeName, saved: !place.unsaved, syncedWith: place.syncedWith, pluginVersion: place.pluginVersion, assignedTo: this.assignedName(place) })),
+			yourProject: slots.find((slot) => mineOf(slot) !== null)?.id ?? null,
+			yolo: this.hub.yoloOn === true,
+			placeMoves: this.hub.placeMoves === "auto" ? "auto" : "ask",
+			setup: this.hub.setupJobs.all().map((job) => ({ path: job.path, state: job.state, step: job.step, of: job.of })),
+		};
+		const body = await this.statusText(slots, root, repo, narrowed !== null, groups, placesNow);
+		const notes = [this.hub.yoloOn ? YOLO_LINE : null, this.hub.placeMoves === "auto" ? PLACE_MOVES_LINE : null].filter((line): line is string => line !== null);
+		return { text: notes.length > 0 ? [...notes, "", body].join("\n") : body, data };
+	}
+
+	private async statusText(slots: SlotView[], root: string | null, repo: string | null, narrowed: boolean, groups: GroupView[], places: ReturnType<Hub["studio"]["places"]>): Promise<string> {
+		if (slots.length === 0) return "Rojo-Hub has no projects. Add one with add_project (path: a folder in the repo).";
 		const lines: string[] = [];
 		for (const slot of slots) {
 			const claim = this.hub.claimOf(slot.id);
 			if (lines.length > 0) lines.push("");
 			const serves = slot.target.kind === "worktree" ? `${slot.targetLabel}${slot.branch && slot.branch !== slot.targetLabel ? ` (branch ${slot.branch})` : ""} at ${slot.target.path}` : `branch ${slot.targetLabel} (read-only copy)`;
 			lines.push(`${slot.projectName} (id ${slot.id}), port ${slot.port}: ${this.health(slot)}`, `  serves ${serves}, project file ${slot.projectFile}`, `  repo ${slot.repoPath}`);
-			if (claim) lines.push(`  claimed by an agent in ${claim.label} until ${time(claim.until)}`);
+			if (claim) lines.push(`  claimed by an agent in ${claim.label} ${untilText(claim.until, "it")}`);
 			if (slot.listedPlaces?.length) lines.push(`  places: ${this.listedText(slot.listedPlaces)}${this.hub.openPlacesOn ? " (open_place opens one)" : ""}`);
 			for (const warning of slot.warnings) lines.push(`  note: ${warning}`);
+			for (const line of this.sharingLines(slot)) lines.push(`  place: ${line}`);
 			if (slot.state === "running") lines.push(`  sourcemap.json: ${slot.sourcemap.detail}`);
 			if (repo && pathKey(slot.repoPath) === repo) {
 				this.renew(slot, root);
@@ -864,18 +1948,25 @@ export class Mcp {
 				lines.push(mine ? "  -> your worktree is the one being served" : "  -> your worktree is NOT being served; call serve_here to change that");
 			}
 		}
-		const groups = this.groups?.list() ?? [];
 		if (groups.length > 0) {
 			lines.push("", "Groups:");
 			const name = (id: string) => slots.find((slot) => slot.id === id)?.projectName ?? id;
 			for (const group of groups) lines.push(`  ${group.name} (id ${group.id})${group.active ? ", running" : ""}: ${group.projectIds.map(name).join(", ") || "no projects"}`);
 		}
-		const places = this.hub.studio.places();
+		const setups = this.hub.setupJobs.all().filter((job) => job.state !== "ok" && (!narrowed || slots.some((slot) => (pathKey(job.path) === pathKey(slot.repoPath) || pathKey(job.path).startsWith(pathKey(slot.repoPath) + "/")) || slot.target.kind === "worktree" && pathKey(slot.target.path) === pathKey(job.path))));
+		if (setups.length > 0) {
+			lines.push("", "Setup commands (spec 012):");
+			for (const job of setups) lines.push(`  ${job.path}: ${job.state === "running" ? `running, command ${job.step} of ${job.of} (${job.text}); ensure from that worktree waits for it` : "failed; fix the cause and call ensure from that worktree"}`);
+		}
+		const reopening = this.reopeningPlaces();
+		if (reopening.length > 0) lines.push("", `Reopening (back in a minute or so, not listed until then): ${reopening.map((place) => `${place.name} (place ${place.placeId})`).join(", ")}.`);
 		if (places.length > 0) {
 			lines.push("", "Open Studio places (with Rojo-Hub's plugin):");
 			for (const place of places) {
 				const project = place.syncedWith ? `synced with ${place.syncedWith}${place.reason ? ` (${REASONS[place.reason] ?? place.reason})` : ""}` : place.message;
 				lines.push(`  ${place.placeName} (${place.unsaved ? "not saved to Roblox" : `place ${place.placeId}`}, plugin ${place.pluginVersion}): ${project}`);
+				const handover = this.handoverText(place);
+				if (handover) lines.push(`    ${handover}`);
 			}
 		}
 		return lines.join("\n");

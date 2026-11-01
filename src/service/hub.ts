@@ -1,15 +1,18 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { PlaceOpened, PortMove, PortSettings, SlotView, StudioPluginStatus, Target, TargetOption } from "../common/api";
+import { CLAIM_NEVER, type PlaceOpened, type PlaceRequestView, type PortMove, type PortSettings, type SlotView, type StudioPlaceView, type StudioPluginStatus, type Target, type TargetOption } from "../common/api";
 import { longPath } from "../common/paths";
 import { defaultProjectFile, DEFAULT_PROJECT_FILE, isProjectFileName, listProjectFiles } from "../common/projectFiles";
-import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, sameFolders, sameTarget } from "./git";
+import { branchExists, checkBranchName, git, gitProblem, headFile, inOrca, listWorktrees, NO_HOOKS, orcaCreateWorktree, orcaNames, pathKey, primaryCheckout, pruneMissingWorktreesUnder, readHead, resolveBase, sameFolders, sameTarget } from "./git";
+import { writeAudit } from "./audit";
 import { OFF_MESSAGE, Places } from "./places";
 import { planTree, readProject, slotProject, type Plan } from "./project";
-import { assignPorts, loadPortConfig, loadPortSettings, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
+import { assignPorts, loadPortConfig, loadPortSettings, parseClaimMinutes, repoSeed, savePortSettings, type PortAssignment, type PortRequest } from "./ports";
+import { PlaceRequests, listersOf, type RequestProject } from "./requests";
 import { Conflict, NotFound, Registry, slugify, type SlotRecord } from "./registry";
 import { buildPlace, kill, LogFollower, portFree, rojoAlive, rojoInfo, startRojo, stopRojo, type StartedRojo } from "./rojo";
+import { describeFailure, describeSteps, normaliseRepoKey, parseSetupCommands, runSetup, SetupJobs, type ParsedSetup, type SetupCommand, type SetupJob, type SetupOutcome } from "./setup";
 import { mayWrite, SourcemapWatcher, stopStrayWatchers, writeSourcemap } from "./sourcemap";
 import { StudioLinks, type PlaceCandidate } from "./studio";
 import { installPlugin, PLUGIN_FILE } from "./studioPlugin";
@@ -72,6 +75,19 @@ interface Runtime {
 	probing: boolean;
 	/** Rojo is being started again by the Hub itself (a crash, a port move), so Studio waits for it quietly (spec 010). */
 	restarting: boolean;
+	/** When the Hub last restarted a crashed rojo, so an agent's answer can say it happened meanwhile. */
+	crashedAt: number;
+	/** pathKeys of the worktrees this slot's rojo has been pointed at since it started: it has read them (spec 012). Emptied when it stops. */
+	served: Set<string>;
+	/** An adopted rojo whose served history was not saved (an older service ran it): any worktree may have been read. Until it stops. */
+	servedUnknown: boolean;
+}
+
+/** A worktree's setup commands failed (spec 012): the worktree is kept, nothing is switched. */
+export class SetupFailed extends Conflict {
+	constructor(readonly outcome: SetupOutcome) {
+		super(describeFailure(outcome));
+	}
 }
 
 /*
@@ -82,7 +98,12 @@ export interface Claim {
 	key: string;
 	label: string;
 	until: number;
+	/** What the slot served before this claim took it, when the agent asked to give it back (spec 013). */
+	returnTo?: { target: Target; label: string };
 }
+
+/** What handBack did: it switched back, or why it left the project as it is. */
+export type HandBack = { returned: true; label: string } | { returned: false; why: string };
 
 export function claimKey(target: Target): string {
 	return target.kind === "worktree" ? `worktree:${pathKey(target.path)}` : `branch:${target.ref}`;
@@ -108,6 +129,8 @@ export class Hub {
 		the middle of testing.
 	*/
 	private readonly claims = new Map<string, Claim>();
+	/** Claims that ran out, so release can say so instead of "not claimed". */
+	private readonly lapsed = new Map<string, Claim>();
 
 	/** A port a slot is to move to, and since when it has been the one assigned (see refreshPorts). */
 	private readonly pendingMoves = new Map<string, { port: number; since: number }>();
@@ -132,6 +155,9 @@ export class Hub {
 
 	/** Opening a project's places in Studio (spec 009). */
 	readonly places: Places;
+
+	/** Agents' asks to move a Studio place to their project, waiting for the user (spec 014). */
+	readonly requests: PlaceRequests;
 
 	/** The Studio plugin's install, for the panel (spec 007). */
 	studioPlugin: StudioPluginStatus = { state: "off", detail: "", removed: [], officialRojo: false };
@@ -159,10 +185,24 @@ export class Hub {
 			},
 		});
 		this.studio.rememberedAutoConnect = loadPortSettings(home).studioAutoConnect !== "listed";
+		this.requests = new PlaceRequests({
+			projects: () => this.requestProjects(),
+			holderOf: (placeId) => this.placeHolder(placeId),
+			assigned: (placeId) => this.registry.placeChoices[String(placeId)] ?? null,
+			assign: (placeId, slotId, source) => this.studio.assign(String(placeId), slotId, source),
+			placeLabel: (placeId) => {
+				const name = this.studio.places().find((place) => place.placeId === placeId)?.placeName ?? this.places.listed([placeId])[0]?.placeName;
+				return name ? `${name} (${placeId})` : `place ${placeId}`;
+			},
+			claimKeyOf: (slotId) => this.claimOf(slotId)?.key ?? null,
+		});
 		this.places = new Places(
 			home,
 			() => this.openPlacesOn,
 			() => this.studio.places().filter((place) => !place.unsaved),
+			undefined,
+			undefined,
+			() => this.closePlacesOn,
 		);
 		mkdirSync(join(home, "views"), { recursive: true });
 		this.viewRoots = sameFolders(join(home, "views"));
@@ -181,6 +221,29 @@ export class Hub {
 	}
 	private borrowedFile(id: string): string {
 		return join(this.slotDir(id), "borrowed.project.json");
+	}
+	/** Worktrees the slot's running rojo has read, kept so a restarted service that adopts the rojo still knows (rojo-rbx/rojo#1305). */
+	private servedFile(id: string): string {
+		return join(this.slotDir(id), "served.json");
+	}
+	private saveServed(id: string, runtime: Runtime): void {
+		try {
+			if (runtime.served.size === 0) rmSync(this.servedFile(id), { force: true });
+			else {
+				mkdirSync(this.slotDir(id), { recursive: true });
+				writeFileSync(this.servedFile(id), JSON.stringify([...runtime.served]));
+			}
+		} catch {
+			// Best effort: the history is also kept in memory.
+		}
+	}
+	private loadServed(id: string): Set<string> | null {
+		try {
+			const list = JSON.parse(readFileSync(this.servedFile(id), "utf8")) as unknown;
+			return Array.isArray(list) ? new Set(list.filter((entry): entry is string => typeof entry === "string")) : null;
+		} catch {
+			return null;
+		}
 	}
 	private logFile(id: string): string {
 		return join(this.slotDir(id), "rojo.log");
@@ -217,7 +280,10 @@ export class Hub {
 				misses: 0,
 				probing: false,
 				restarting: false,
+				crashedAt: 0,
 				rojoVersion: null,
+				served: new Set(),
+				servedUnknown: false,
 			};
 			this.runtimes.set(id, runtime);
 		}
@@ -246,7 +312,10 @@ export class Hub {
 	*/
 	async restore(): Promise<void> {
 		this.syncStudioPlugin();
-		this.poller = setInterval(() => this.pollLogs(), 1000);
+		this.poller = setInterval(() => {
+			this.pollLogs();
+			this.returnLapsed();
+		}, 1000);
 		this.poller.unref();
 		for (const slot of this.registry.slots) {
 			if (!slot.seed) slot.seed = await repoSeed(slot.repoPath, slot.projectName);
@@ -264,6 +333,11 @@ export class Hub {
 						runtime.state = "running";
 						runtime.sessionId = info.sessionId;
 						runtime.rojoVersion = info.serverVersion || null;
+						// What the adopted rojo has read: the saved history, else unknown (setup is refused for this project until it stops).
+						const history = this.loadServed(slot.id);
+						runtime.served = history ?? new Set();
+						runtime.servedUnknown = history === null;
+						if (slot.target.kind === "worktree") runtime.served.add(pathKey(slot.target.path));
 						runtime.log.poll();
 						runtime.log.takeProblems();
 						this.watchBorrowed(slot, this.treeOfCurrent(slot));
@@ -343,6 +417,7 @@ export class Hub {
 		runtime.state = "error";
 		runtime.error = `Rojo stopped unexpectedly${reason ? `: ${reason}` : ""}`;
 		runtime.restarting = slot.wantRunning;
+		runtime.crashedAt = Date.now();
 		void this.enqueue(slot, async () => {
 			if (runtime.state !== "error" || !slot.wantRunning) {
 				runtime.restarting = false;
@@ -450,16 +525,168 @@ export class Hub {
 
 	/** rojoHub.openPlaces (spec 009), read from settings.json once and then kept with each change. */
 	private openPlacesSetting: boolean | null = null;
-	get openPlacesOn(): boolean {
+	get openPlacesSwitchOn(): boolean {
 		this.openPlacesSetting ??= loadPortSettings(this.home).openPlaces === true;
 		return this.openPlacesSetting;
+	}
+	/** rojoHub.closePlaces: Close and Reopen for the panel and agents. Yolo mode does not turn it on. */
+	private closePlacesSetting: boolean | null = null;
+	get closePlacesOn(): boolean {
+		this.closePlacesSetting ??= loadPortSettings(this.home).closePlaces === true;
+		return this.closePlacesSetting;
+	}
+	/** Whether agents and the panel may open places: rojoHub.openPlaces, or yolo mode (spec 012). */
+	get openPlacesOn(): boolean {
+		return this.openPlacesSwitchOn || this.yoloOn;
+	}
+	/** rojoHub.claimMinutes (spec 004), read from settings.json once and then kept with each change. */
+	private claimMinutesSetting: number | null = null;
+	/** rojoHub.placeMoves (spec 014), read from settings.json once and then kept with each change. */
+	private placeMovesSetting: "ask" | "auto" | null = null;
+	get placeMoves(): "ask" | "auto" {
+		this.placeMovesSetting ??= loadPortSettings(this.home).placeMoves === "auto" ? "auto" : "ask";
+		return this.placeMovesSetting;
+	}
+	get claimMinutes(): number {
+		this.claimMinutesSetting ??= parseClaimMinutes(loadPortSettings(this.home).claimMinutes);
+		return this.claimMinutesSetting;
+	}
+	/*
+		When a claim set or renewed at `now` runs out: rojoHub.claimMinutes from
+		now, or CLAIM_NEVER when it is 0. Read at every set and renewal, so a
+		changed setting reaches a claim the next time it is renewed.
+	*/
+	claimUntil(now = Date.now()): number {
+		return this.claimMinutes === 0 ? CLAIM_NEVER : now + this.claimMinutes * 60000;
+	}
+	/** rojoHub.yolo (spec 012, design 4), as the extension pushed it after the user accepted the warning. */
+	private yoloSetting: boolean | null = null;
+	get yoloOn(): boolean {
+		this.yoloSetting ??= loadPortSettings(this.home).yolo === true;
+		return this.yoloSetting;
+	}
+
+	/* ---------- setup commands (spec 012) ---------- */
+
+	/** The setup jobs, one per worktree at a time. */
+	readonly setupJobs = new SetupJobs();
+	private setupParsed: ParsedSetup | null = null;
+
+	private setupSettings(): ParsedSetup {
+		this.setupParsed ??= parseSetupCommands(loadPortSettings(this.home).setupCommands);
+		return this.setupParsed;
+	}
+
+	/** Problems with rojoHub.setupCommands, one line each, for the answer to a settings push. */
+	setupProblems(): string[] {
+		return [...this.setupSettings().problems.values()].flat();
+	}
+
+	/** The setup configured for a repo: its commands, a problem with its entry, or null for none. */
+	setupFor(repoPath: string): { commands: SetupCommand[] } | { problem: string } | null {
+		const settings = this.setupSettings();
+		const key = normaliseRepoKey(repoPath);
+		const problems = settings.problems.get(key);
+		if (problems) return { problem: `rojoHub.setupCommands for ${repoPath} is invalid, so no setup was run: ${problems.join(" ")}` };
+		const commands = settings.entries.get(key);
+		return commands && commands.length > 0 ? { commands } : null;
+	}
+
+	/*
+		True when a running or starting rojo has read this worktree: it is that
+		slot's target now, or was since the rojo started. Rojo 7.7 never unwatches
+		a folder it has read and panics when one loses a subfolder
+		(rojo-rbx/rojo#1305), so setup must not touch such a worktree. A stopped
+		slot has read nothing.
+	*/
+	worktreeRead(path: string): boolean {
+		const key = pathKey(path);
+		for (const slot of this.registry.slots) {
+			const runtime = this.runtime(slot.id);
+			if (runtime.state !== "running" && runtime.state !== "starting") continue;
+			if (slot.target.kind === "worktree" && pathKey(slot.target.path) === key) return true;
+			if (runtime.served.has(key)) return true;
+		}
+		return false;
+	}
+
+	/** Whether `path` is a linked worktree (its git dir differs from the repo's common dir), not a main checkout. */
+	async isLinkedWorktree(path: string): Promise<boolean> {
+		try {
+			const dir = (await git(path, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim();
+			const common = (await git(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
+			return pathKey(dir) !== pathKey(common);
+		} catch {
+			return false;
+		}
+	}
+
+	/*
+		Why setup may not run in this worktree, or null. Never the main checkout
+		(worktrees borrow its Packages), never one Rojo has read.
+	*/
+	async setupRefusal(slot: SlotRecord, worktree: string): Promise<string | null> {
+		if (pathKey(worktree) === pathKey(slot.repoPath) || !(await this.isLinkedWorktree(worktree))) return `${worktree} is the main checkout, not a linked worktree; setup never runs there (other worktrees borrow its Packages).`;
+		if (pathKey(await primaryCheckout(worktree)) !== pathKey(slot.repoPath)) return `${worktree} is not a worktree of ${slot.projectName}'s repo (${slot.repoPath}); setup never runs in another repo's folder.`;
+		const owner = this.runtime(slot.id);
+		if (owner.servedUnknown && (owner.state === "running" || owner.state === "starting")) return `${slot.projectName}'s Rojo was adopted from an older service, so which worktrees it has read is unknown; stop the project to install, or install by hand.`;
+		if (this.worktreeRead(worktree)) return "the worktree is being served (or was, since Rojo started); stop the project to install, or install by hand.";
+		return null;
+	}
+
+	/*
+		Runs the repo's setup commands in a worktree, or joins the setup already
+		running there. Null when the repo has none. `waitMs` bounds how long the
+		caller waits; the setup carries on past it (outcome null then).
+	*/
+	async setupWorktree(id: string, worktree: string, options: { actor: "panel" | "mcp"; branch: string | null; waitMs?: number }): Promise<{ job: SetupJob; outcome: SetupOutcome | null; joined: boolean } | null> {
+		const slot = this.registry.get(id);
+		const configured = this.setupFor(slot.repoPath);
+		if (configured && "problem" in configured) throw new Conflict(configured.problem);
+		const running = this.setupJobs.running(worktree);
+		if (!configured && !running) return null;
+		let started: { job: SetupJob; joined: boolean };
+		if (running) started = { job: running, joined: true };
+		else {
+			// The job is reserved before the first await, so a switch that arrives while git is being asked sees setup running.
+			const commands = (configured as { commands: SetupCommand[] }).commands;
+			let refused: string | null = null;
+			started = this.setupJobs.start(worktree, options.actor, options.branch, commands.length, async (job) => {
+				refused = await this.setupRefusal(slot, worktree);
+				if (refused) throw new Conflict(`Setup was not run: ${refused}`);
+				return runSetup({
+					worktree,
+					branch: options.branch,
+					commands,
+					home: this.home,
+					actor: options.actor,
+					project: slot.projectName,
+					onStep: (step, of, text) => Object.assign(job, { step, of, text }),
+				});
+			});
+			started.job.promise.catch(() => {
+				if (refused) this.setupJobs.drop(worktree, started.job);
+			});
+		}
+		if (options.waitMs === undefined) return { ...started, outcome: await started.job.promise };
+		const timer = new Promise<null>((done) => setTimeout(() => done(null), options.waitMs).unref());
+		return { ...started, outcome: await Promise.race([started.job.promise, timer]) };
 	}
 
 	/** Stores new global port settings and moves any slot whose port changes. */
 	setPortSettings(settings: PortSettings): void {
 		const pluginWasOn = loadPortSettings(this.home).studioPlugin !== false;
+		const yoloWas = this.yoloOn;
 		savePortSettings(this.home, settings);
+		// Fields left out of the push keep their saved value.
+		const saved = loadPortSettings(this.home);
+		this.setupParsed = parseSetupCommands(saved.setupCommands);
 		this.openPlacesSetting = settings.openPlaces === true;
+		this.closePlacesSetting = saved.closePlaces === true;
+		this.claimMinutesSetting = parseClaimMinutes(saved.claimMinutes);
+		this.placeMovesSetting = saved.placeMoves === "auto" ? "auto" : "ask";
+		if ((saved.yolo === true) !== yoloWas) writeAudit(this.home, { actor: "extension", action: saved.yolo === true ? "yolo_on" : "yolo_off" });
+		this.yoloSetting = saved.yolo === true;
 		this.studio.rememberedAutoConnect = settings.studioAutoConnect !== "listed";
 		if ((settings.studioPlugin !== false) !== pluginWasOn) this.syncStudioPlugin();
 		this.refreshPorts(false);
@@ -479,19 +706,81 @@ export class Hub {
 	}
 
 	/** The last `count` lines of the slot's rojo log (agents' `log` tool, spec 008). */
-	logTail(id: string, count: number): string {
+	logTail(id: string, count: number, verbose = true): { text: string; hidden: number } {
 		this.registry.get(id);
-		return this.runtime(id).log.tail(count);
+		return this.runtime(id).log.tailOf(count, verbose);
 	}
 
 	/** The slot's claim, or null when there is none or it ran out. */
 	claimOf(id: string): Claim | null {
 		const claim = this.claims.get(id);
-		if (claim && claim.until <= Date.now()) this.claims.delete(id);
+		if (claim && claim.until <= Date.now()) {
+			this.claims.delete(id);
+			this.lapsed.set(id, claim);
+		}
 		return this.claims.get(id) ?? null;
 	}
 
+	/** The slot's claim that ran out, until it is claimed again or released. */
+	lapsedClaim(id: string): Claim | null {
+		this.claimOf(id);
+		return this.lapsed.get(id) ?? null;
+	}
+
+	/*
+		Gives back the projects whose claim ran out with a return to make (spec
+		013). Runs every second; claimOf moves the claim to `lapsed`, and
+		handBack checks, inside the slot's queue, that nobody has taken the
+		project since and that it is serving.
+	*/
+	private returnLapsed(): void {
+		for (const id of [...this.claims.keys()]) this.claimOf(id);
+		for (const [id, claim] of [...this.lapsed]) {
+			if (!claim.returnTo) continue;
+			this.lapsed.set(id, { key: claim.key, label: claim.label, until: claim.until });
+			void this.handBack(id, claim, "expiry").catch(() => undefined);
+		}
+	}
+
+	/*
+		Switches a slot back to what it served before `claim` took it, live (the
+		same switch as any other, never a restart). Only when: it is serving,
+		it still serves the claim's target, no other claim holds it, and the
+		old worktree's folder exists. `how` "release": the claim is still in
+		place (the caller clears it afterwards). "expiry": it ran out, so any
+		unexpired claim now belongs to someone who took the project since.
+	*/
+	async handBack(id: string, claim: Claim, how: "release" | "expiry"): Promise<HandBack> {
+		const back = claim.returnTo;
+		if (!back) return { returned: false, why: "it was not asked to return" };
+		let slot: SlotRecord;
+		try {
+			slot = this.registry.get(id);
+		} catch {
+			return { returned: false, why: "the project is gone" };
+		}
+		return this.enqueue(slot, async () => {
+			const current = this.claims.get(id);
+			if (current && (how === "expiry" ? current.until > Date.now() : current.key !== claim.key)) return { returned: false, why: `another agent (${current.label}) holds it now` } as HandBack;
+			if (this.runtime(id).state !== "running") return { returned: false, why: "the project is not serving" } as HandBack;
+			if (claimKey(slot.target) !== claim.key) return { returned: false, why: "it serves something else now" } as HandBack;
+			if (back.target.kind === "worktree" && !existsSync(back.target.path)) return { returned: false, why: `${back.target.path} no longer exists` } as HandBack;
+			try {
+				await this.switchLocked(slot, back.target);
+			} catch (error) {
+				return { returned: false, why: `the switch failed: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` } as HandBack;
+			}
+			return { returned: true, label: back.label } as HandBack;
+		});
+	}
+
+	/** When the Hub last restarted a crashed rojo on the slot (0: never). */
+	crashedAt(id: string): number {
+		return this.runtime(id).crashedAt;
+	}
+
 	setClaim(id: string, claim: Claim | null): void {
+		this.lapsed.delete(id);
 		if (claim) this.claims.set(id, claim);
 		else this.claims.delete(id);
 		try {
@@ -503,12 +792,34 @@ export class Hub {
 		}
 	}
 
+	/*
+		Ends the slot's claim, or the memory of one that ran out: the release the
+		MCP tool and the panel's Release claim share. Its asks for shared places end
+		with it (spec 014), and a then_return goes back first (spec 013), before the
+		claim is dropped, so an agent waiting for the project cannot interleave.
+	*/
+	async releaseClaim(id: string): Promise<{ kind: "none" } | { kind: "released" | "lapsed"; claim: Claim; back: HandBack | null }> {
+		const claim = this.claimOf(id);
+		const lapsed = claim ? null : this.lapsedClaim(id);
+		const ending = claim ?? lapsed;
+		if (!ending) return { kind: "none" };
+		this.requests.dropAsker(id);
+		const back = ending.returnTo ? await this.handBack(id, ending, claim ? "release" : "expiry") : null;
+		this.setClaim(id, null);
+		return { kind: claim ? "released" : "lapsed", claim: ending, back };
+	}
+
 	private loadClaims(): void {
 		try {
 			const saved = JSON.parse(readFileSync(join(this.home, "claims.json"), "utf8")) as Record<string, Partial<Claim>>;
 			for (const [id, claim] of Object.entries(saved)) {
-				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number" && claim.until > Date.now()) {
-					this.claims.set(id, { key: claim.key, label: claim.label, until: claim.until });
+				if (typeof claim?.key === "string" && typeof claim.label === "string" && typeof claim.until === "number") {
+					const back = claim.returnTo;
+					const returnTo = back && typeof back.label === "string" && back.target && (back.target.kind === "worktree" || back.target.kind === "branch") ? { target: back.target, label: back.label } : undefined;
+					const loaded: Claim = { key: claim.key, label: claim.label, until: claim.until, ...(returnTo ? { returnTo } : {}) };
+					// One that ran out while the service was down still gives its project back (returnLapsed).
+					if (claim.until > Date.now()) this.claims.set(id, loaded);
+					else if (returnTo) this.claims.set(id, loaded);
 				}
 			}
 		} catch {
@@ -553,7 +864,7 @@ export class Hub {
 				...runtime.toolWarnings,
 				...runtime.warnings,
 			],
-			error: this.assignments.get(slot.id)?.error ?? runtime.error,
+			error: (existsSync(slot.repoPath) ? null : `Folder missing: ${slot.repoPath}. If it moved, locate it (relocate_project, or Locate folder in the panel); otherwise remove the project.`) ?? this.assignments.get(slot.id)?.error ?? runtime.error,
 			portSource: this.assignments.get(slot.id)?.source ?? "hash",
 			sessionId: runtime.sessionId,
 			logFile: this.logFile(slot.id),
@@ -562,6 +873,7 @@ export class Hub {
 			claim: claim ? { label: claim.label, until: claim.until } : null,
 			places: runtime.state === "running" ? this.studio.placesOn(slot.port, runtime.sessionId) : [],
 			listedPlaces: this.places.listed(this.listedPlaceIds(slot)),
+			rojoVersion: runtime.rojoVersion,
 		};
 	}
 
@@ -573,6 +885,49 @@ export class Hub {
 		const fields = this.placeFieldsOf(slot);
 		const ids = [...(fields.servePlaceIds ?? []), ...(fields.placeId ? [fields.placeId] : [])].filter((id) => id > 0 && !fields.blockedPlaceIds?.includes(id));
 		return [...new Set(ids)];
+	}
+
+	/** Every project with the places it lists, for place requests and for spotting shared places (spec 014). */
+	requestProjects(): RequestProject[] {
+		return this.registry.slots.map((slot) => ({ id: slot.id, projectName: slot.projectName, listed: this.listedPlaceIds(slot) }));
+	}
+
+	/*
+		The project an open place is synced with, else the one it is connecting to
+		(a place whose plugin has not reported yet), else none. A place that is
+		not open, or that no project answers for, is nobody's to take (spec 014).
+	*/
+	placeHolder(placeId: number): string | null {
+		const open = this.studio.places().find((place) => !place.unsaved && place.placeId === placeId);
+		if (!open) return null;
+		if (open.syncedWith) return this.registry.slots.find((slot) => slot.projectName === open.syncedWith)?.id ?? null;
+		return open.status === "connect" ? open.projectId : null;
+	}
+
+	/** The open Studio places for the panel, each with the projects that list it. */
+	studioPlaces(): StudioPlaceView[] {
+		const projects = this.requestProjects();
+		return this.studio.places().map((place) => ({ ...place, listedBy: place.unsaved ? [] : listersOf(projects, place.placeId).map((project) => project.projectName) }));
+	}
+
+	/** The pending asks, for the panel and the notification. */
+	requestViews(): PlaceRequestView[] {
+		const names = new Map(this.registry.slots.map((slot) => [slot.id, slot.projectName]));
+		const open = this.studio.places();
+		return this.requests.pending().map((request) => {
+			const holderId = this.placeHolder(request.placeId) ?? request.holderId;
+			return {
+				id: request.id,
+				placeId: request.placeId,
+				placeName: open.find((place) => place.placeId === request.placeId)?.placeName ?? this.places.listed([request.placeId])[0]?.placeName ?? null,
+				askerId: request.askerId,
+				asker: names.get(request.askerId) ?? request.askerId,
+				holderId,
+				holder: holderId ? (names.get(holderId) ?? null) : null,
+				holderClaimed: holderId !== null && this.claimOf(holderId) !== null,
+				since: request.since,
+			};
+		});
 	}
 
 	/** Looks up the names of every project's places for the panel, in the background, while opening places is on. */
@@ -791,6 +1146,73 @@ export class Hub {
 		});
 	}
 
+	/*
+		Points a stopped project at its folder's new location (spec 016): the folder
+		was moved or the repo cloned again. Keeps everything that identifies the
+		project (id, port, groups, order, place assignments and confirmations,
+		sync history); only the paths change. The new folder must be the same repo
+		(same first commit) with the same project name, or it is a different
+		project and should be added instead. Views are collected, since their
+		`.git` files point into the old repo folder.
+	*/
+	relocate(id: string, path: string): Promise<SlotView> {
+		const slot = this.registry.get(id);
+		return this.enqueue(slot, async () => {
+			const runtime = this.runtime(id);
+			if (runtime.state === "running" || runtime.state === "starting") throw new Conflict(`${slot.projectName} is serving; stop it first (a new folder is a new Rojo session).`);
+			const problem = await gitProblem();
+			if (problem) throw new Conflict(problem);
+			const target = resolve(path);
+			if (!existsSync(target)) throw new NotFound(`${target} does not exist`);
+			const repoPath = await primaryCheckout(target);
+			if (pathKey(repoPath) === pathKey(slot.repoPath) && existsSync(slot.repoPath)) return this.view(slot);
+			if (!existsSync(join(repoPath, slot.projectFile))) throw new NotFound(`${repoPath} has no ${slot.projectFile}`);
+			const name = this.nameIn(repoPath, slot.projectFile, id);
+			if (name !== slot.projectName) throw new Conflict(`${repoPath} holds a project named "${name}", not "${slot.projectName}": add it as a new project instead.`);
+			const seed = await repoSeed(repoPath, name);
+			if (slot.seed && seed !== slot.seed) throw new Conflict(`${repoPath} is a different repository (its first commit differs from ${slot.projectName}'s): add it as a new project instead.`);
+			if (this.registry.slots.some((other) => other.id !== id && pathKey(other.repoPath) === pathKey(repoPath) && other.projectFile === slot.projectFile)) {
+				throw new Conflict(`Another project already serves ${slot.projectFile} from ${repoPath}`);
+			}
+			// An errored slot (its folder was gone at start, or rojo crashed) still has state to clear.
+			if (runtime.state !== "stopped") {
+				await this.stopLocked(slot);
+				// Stopped here means stopped: not started again by the next service start.
+				slot.wantRunning = false;
+			}
+			const old = slot.repoPath;
+			slot.seed = seed;
+			// A worktree target under the old folder moves with it; any other that is gone falls back to the primary checkout.
+			if (slot.target.kind === "worktree") {
+				const was = pathKey(slot.target.path);
+				const oldKey = pathKey(old);
+				if (was === oldKey) slot.target = { kind: "worktree", path: repoPath };
+				else if (was.startsWith(oldKey + "/")) {
+					// The suffix comes from the raw path: pathKey lower-cases.
+					const suffix = was.length - oldKey.length - 1;
+					const moved = join(repoPath, slot.target.path.slice(slot.target.path.length - suffix));
+					slot.target = { kind: "worktree", path: existsSync(moved) ? moved : repoPath };
+				} else if (!existsSync(slot.target.path)) slot.target = { kind: "worktree", path: repoPath };
+			}
+			slot.repoPath = repoPath;
+			// A claim is keyed by the old worktree path, which no call can name any more.
+			this.setClaim(id, null);
+			this.requests.dropAsker(id);
+			slot.activeView = null;
+			runtime.served.clear();
+			runtime.servedUnknown = false;
+			this.saveServed(id, runtime);
+			await this.collectViews(slot);
+			runtime.notes = [];
+			runtime.error = null;
+			this.registry.save();
+			this.trackRepos();
+			this.refreshPorts();
+			await this.describeTarget(slot);
+			return this.view(slot);
+		});
+	}
+
 	remove(id: string): Promise<void> {
 		const slot = this.registry.get(id);
 		return this.enqueue(slot, async () => {
@@ -833,8 +1255,11 @@ export class Hub {
 		a git worktree beside the repo (<repo>-worktrees/<name>). Never a
 		checkout in a folder rojo is serving (see prepareTree).
 	*/
-	async createBranch(id: string, name: string, base: string): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git" }> {
+	async createBranch(id: string, name: string, base: string, options: { actor?: "panel" | "mcp"; setupWaitMs?: number } = {}): Promise<{ slot: SlotView; path: string; branch: string; via: "orca" | "git"; from: string; notes: string[]; switched: boolean; setupNotes: string[] }> {
 		const slot = this.registry.get(id);
+		// A broken setup entry is reported before anything is made.
+		const configured = this.setupFor(slot.repoPath);
+		if (configured && "problem" in configured) throw new Conflict(configured.problem);
 		const clean = await checkBranchName(slot.repoPath, name.trim());
 		if (await branchExists(slot.repoPath, clean)) throw new Conflict(`A branch named ${clean} already exists; pick it under Local branches.`);
 		try {
@@ -845,21 +1270,41 @@ export class Hub {
 		let path: string;
 		let branch = clean;
 		let via: "orca" | "git";
+		let from = base;
+		let notes: string[] = [];
 		if (await inOrca(slot.repoPath)) {
+			// Orca gets `base` as given: it does its own start-point handling and takes only a branch name.
 			const made = await orcaCreateWorktree(slot.repoPath, clean, base);
 			path = made.path;
 			branch = made.branch ?? clean;
 			via = "orca";
 		} else {
+			({ ref: from, notes } = await resolveBase(slot.repoPath, base));
 			const parent = join(dirname(slot.repoPath), `${basename(slot.repoPath)}-worktrees`);
 			path = join(parent, clean.replace(/[\\/]+/g, "-"));
 			if (existsSync(path)) throw new Conflict(`${path} already exists`);
 			mkdirSync(parent, { recursive: true });
-			await git(slot.repoPath, ["worktree", "add", "-b", clean, path, base]);
+			// --no-track: a branch started from a remote ref (origin/main) would otherwise track it, and a plain git push would aim at main.
+			await git(slot.repoPath, ["worktree", "add", "--no-track", "-b", clean, path, from]);
 			via = "git";
 		}
 		void this.targetCache.refresh(slot.repoPath).catch(() => undefined);
-		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via };
+		/*
+			Setup (spec 012) runs here: the worktree exists and no rojo has read it,
+			so installs may delete and recreate Packages. Only a success switches; a
+			failure keeps the worktree and the branch.
+		*/
+		const setupNotes: string[] = [];
+		const setup = await this.setupWorktree(id, path, { actor: options.actor ?? "panel", branch, waitMs: options.setupWaitMs });
+		if (setup) {
+			if (!setup.outcome) {
+				setupNotes.push(`Setup is still running in ${path} (command ${setup.job.step} of ${setup.job.of}: ${setup.job.text}).`);
+				return { slot: this.view(slot), path, branch, via, from, notes, switched: false, setupNotes };
+			}
+			if (!setup.outcome.ok) throw new SetupFailed(setup.outcome);
+			setupNotes.push(...describeSteps(setup.outcome).split("\n").filter(Boolean));
+		}
+		return { slot: await this.switch(id, { kind: "worktree", path }), path, branch, via, from, notes, switched: true, setupNotes };
 	}
 
 	/** Writes the served worktree's sourcemap.json once, on request, even where the watcher would not. */
@@ -918,33 +1363,51 @@ export class Hub {
 	*/
 	switch(id: string, target: Target): Promise<SlotView> {
 		const slot = this.registry.get(id);
-		return this.enqueue(slot, async () => {
-			const runtime = this.runtime(slot.id);
-			const tree = await this.prepareTree(slot, target);
-			const plan = this.writeFiles(slot, tree);
-			// The label from the picker's list, so no status is sent with the new target under the old branch's name.
-			const known = this.targetCache.peek(slot.repoPath)?.find((option) => sameTarget(option.target, target));
-			if (known) {
-				runtime.targetLabel = known.label;
-				runtime.branch = known.branch;
-			} else if (target.kind === "branch") {
-				runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
-			}
-			slot.target = target;
-			this.registry.save();
-			runtime.mode = plan.mode;
-			runtime.warnings = plan.warnings;
-			runtime.notes = [];
-			runtime.error = null;
-			runtime.log.poll();
-			runtime.log.takeProblems();
-			this.watchBorrowed(slot, tree);
-			this.trackHead(slot);
-			await this.describeTarget(slot);
-			await this.syncSourcemap(slot);
-			if (runtime.state !== "running") await this.collectViews(slot);
-			return this.view(slot);
-		});
+		const setting = target.kind === "worktree" ? this.setupJobs.running(target.path) : null;
+		if (setting) return Promise.reject(new Conflict(`Setup is still running in ${setting.path} (command ${setting.step} of ${setting.of}); call ensure from that worktree to wait for it.`));
+		return this.enqueue(slot, () => this.switchLocked(slot, target));
+	}
+
+	/** switch() inside the slot's queue. */
+	private async switchLocked(slot: SlotRecord, target: Target): Promise<SlotView> {
+		const runtime = this.runtime(slot.id);
+		const tree = await this.prepareTree(slot, target);
+		const plan = this.writeFiles(slot, tree);
+		// The label from the picker's list, so no status is sent with the new target under the old branch's name.
+		const known = this.targetCache.peek(slot.repoPath)?.find((option) => sameTarget(option.target, target));
+		if (known) {
+			runtime.targetLabel = known.label;
+			runtime.branch = known.branch;
+		} else if (target.kind === "branch") {
+			runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
+		}
+		// The same folder again (serve_here from where the checkout happened) keeps the note about that checkout until the answer has told it (ackNotes).
+		const changed = !sameTarget(slot.target, target);
+		slot.target = target;
+		if (target.kind === "worktree" && (runtime.state === "running" || runtime.state === "starting")) runtime.served.add(pathKey(target.path));
+		if (target.kind === "worktree") this.saveServed(slot.id, runtime);
+		this.registry.save();
+		runtime.mode = plan.mode;
+		runtime.warnings = plan.warnings;
+		if (changed) runtime.notes = [];
+		runtime.error = null;
+		runtime.log.poll();
+		runtime.log.takeProblems();
+		this.watchBorrowed(slot, tree);
+		this.trackHead(slot);
+		await this.describeTarget(slot);
+		await this.syncSourcemap(slot);
+		if (runtime.state !== "running") await this.collectViews(slot);
+		return this.view(slot);
+	}
+
+	/*
+		The checkout note ("Info: ...") is told once: the answer of a serve_here or ensure from
+		the folder carries it, then this clears it so later answers and the panel do not repeat it.
+	*/
+	ackNotes(id: string): void {
+		const runtime = this.runtime(id);
+		if (runtime.notes.some((note) => note.startsWith("Info:"))) runtime.notes = runtime.notes.filter((note) => !note.startsWith("Info:"));
 	}
 
 	async shutdown(stopServing: boolean): Promise<void> {
@@ -975,6 +1438,11 @@ export class Hub {
 			const plan = this.writeFiles(slot, tree);
 			runtime.mode = plan.mode;
 			runtime.warnings = plan.warnings;
+			// A new rojo has read only what it starts on.
+			const starting = slot.target;
+			runtime.served = new Set(starting.kind === "worktree" ? [pathKey(starting.path)] : []);
+			runtime.servedUnknown = false;
+			this.saveServed(slot.id, runtime);
 			await stopRojo(this.slotFile(slot.id));
 			await this.waitForPortFree(slot.port);
 			await this.collectViews(slot);
@@ -1015,6 +1483,9 @@ export class Hub {
 		runtime.state = "stopped";
 		runtime.sessionId = null;
 		runtime.error = null;
+		runtime.served.clear();
+		runtime.servedUnknown = false;
+		this.saveServed(slot.id, runtime);
 		await this.stopProcess(slot);
 		await this.syncSourcemap(slot);
 		await this.waitForPortFree(slot.port).catch(() => undefined);
@@ -1232,7 +1703,7 @@ export class Hub {
 		runtime.head = now;
 		runtime.checkout = { branch: now, at: Date.now() };
 		runtime.notes = [
-			`${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Picking a branch in Rojo-Hub's picker switches without touching the folder.`,
+			`Info: ${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Agents: never check out in a served folder; use new_branch. Users: pick the branch in Rojo-Hub's picker, which switches without touching the folder.`,
 		];
 		void this.describeTarget(slot);
 	}
