@@ -37,8 +37,8 @@ registration and settings.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project, what it serves, who claims it, its Studio places and warnings; open places |
-| `version` | Which versions are running: service, Studio plugin, MCP launcher, each project's Rojo, each open place's plugin (and whether the place needs reopening) |
+| `status` | Every project, what it serves, who claims it, its Studio places and warnings; open places. `project`, or `path` with `mine`, narrows it to one project |
+| `version` | Which versions are running: service, Studio plugin, MCP launcher, this chat's connection, each project's Rojo, each open place's plugin (and whether the place needs reopening) |
 | `ensure` | Get ready in one call: start the project, serve the worktree, bring Rojo-Hub's parts to the current version (reopens this project's Studio places on an older plugin with `rojoHub.closePlaces`; says what you must do yourself), open the place (needs `rojoHub.openPlaces`), wait for Studio |
 | `serve_here` | Serve the agent's own worktree to Studio, live, and claim the project |
 | `switch` | Serve a branch or worktree, and claim the project |
@@ -48,11 +48,13 @@ registration and settings.
 | `start` / `stop` / `stop_all` | Start or stop projects |
 | `add_project` / `remove_project` | Register or unregister a repo (never deletes files) |
 | `project_files` / `set_project_file` | List or change the project file (while stopped) |
+| `relocate_project` | Point a stopped project at its moved folder, keeping its port, groups and place assignments |
 | `start_group` / `stop_group` | Start or stop a group (`only` also stops everything else) |
 | `create_group` / `edit_group` / `delete_group` | Manage groups |
-| `log` | The last lines of Rojo's log |
+| `log` | The last lines of Rojo's log, without DEBUG lines unless `verbose` |
 | `wait_for_studio` | Wait until a Studio place has synced |
 | `open_place` | Open a project's place in Studio (needs `rojoHub.openPlaces`) |
+| `close_place` / `reopen_place` | Ask Studio to close a place, or close and open it again, for example to load an updated plugin (needs `rojoHub.closePlaces`; Studio still asks about unsaved changes) |
 | `request_place` | Ask you to move a Studio place another project holds to the agent's project (you answer in the agent's own prompt when its client supports it, else Move or Decline in VS Code) |
 | `build` | `rojo build` what a project serves |
 | `sourcemap` | Write the served worktree's `sourcemap.json` |
@@ -67,20 +69,24 @@ than one project.
 
 | Tool | Parameters |
 |---|---|
-| `status` / `version` | `path?` |
+| `status` | `path?`, `project?`, `mine?` |
+| `version` | `path?` |
 | `ensure` | `path`, `project?`, `place?`, `timeout?`, `wait?`, `then_return?`, `force?` |
 | `serve_here` | `path`, `project?`, `wait?`, `then_return?`, `force?` |
 | `switch` | `target`, `project?`, `path?`, `wait?`, `then_return?`, `force?` |
 | `new_branch` | `name`, `base?`, `path?`, `project?`, `wait?`, `force?` |
 | `branches` | `path?`, `project?`, `fetch?` |
 | `release` | `path?`, `project?`, `force?` |
-| `start` / `project_files` / `log` / `sourcemap` | `path?`, `project?` (`log`: `lines?`) |
+| `start` / `project_files` / `sourcemap` | `path?`, `project?` |
+| `log` | `path?`, `project?`, `lines?` (default 40, up to 400), `verbose?` |
 | `stop` / `remove_project` | `path?`, `project?`, `force?` |
 | `stop_all` | `force` |
 | `add_project` | `path`, `project_file?` |
 | `set_project_file` | `file`, `path?`, `project?` |
-| `wait_for_studio` | `path?`, `project?`, `timeout?` |
+| `relocate_project` | `new_path`, `project`, `path?` |
+| `wait_for_studio` | `path?`, `project?`, `timeout?` (default 30, up to 300) |
 | `open_place` | `placeId?`, `path?`, `project?` |
+| `close_place` / `reopen_place` | `placeId?`, `path?`, `project?`, `force?` |
 | `request_place` | `place_id`, `path`, `wait?` (seconds, up to 60), `project?` |
 | `start_group` / `stop_group` | `group`, `only?`, `force?` |
 | `create_group` | `name`, `projects?`, `groups?` |
@@ -111,26 +117,27 @@ nothing is switched, and the answer names the command and its output; fix it and
   each entry is one program with arguments, no shell. Prefer `npm ci --ignore-scripts`.
 - The branch name arrives as `ROJO_HUB_BRANCH`, never in the arguments.
 - Every run is logged to `audit.jsonl` in `%LOCALAPPDATA%\RojoHub`.
-- Never in a worktree Rojo is already serving. Agents have no stop, checkout or install tool: stopping
-  disconnects Studio, and changing a served worktree can crash Rojo. They make a new worktree or switch.
+- Never in a worktree Rojo has read, the main checkout included. Agents have no checkout or install
+  tool, since changing a served worktree can crash Rojo; they make a new worktree or switch.
 - `ensure` also reports `checks` (Rojo installed, packages, `node_modules`, sourcemap) as warnings.
 
 ## Claims: several agents, one Studio
 
-`serve_here`, `switch` and `new_branch` claim the project for `rojoHub.claimMinutes` minutes (default
-15), renewed by the agent's further calls from that worktree. Set it to 0 and a claim never runs out:
-it lasts until the agent calls `release` or you press **Release claim** on the project card. While another worktree holds the claim, they refuse and say who
-holds it; with `wait` (up to 600 seconds) they queue and take over when it ends. `release` hands it
-back.
+`serve_here`, `switch`, `new_branch` and `ensure` claim the project for `rojoHub.claimMinutes`
+minutes (default 15), renewed by the agent's further calls from that worktree. Set it to 0 and a
+claim never runs out: it lasts until the agent calls `release` or you press **Release claim** on the
+project card. While another worktree holds the claim, they refuse and say who holds it; with `wait`
+(up to 600 seconds) they queue and take over when it ends. `release` hands it back.
 
-With `then_return: true` on `serve_here`, `switch` or `ensure`, an agent borrowing a project that was
-serving someone else's worktree (or a branch) asks for it to switch back to that when the agent calls
-`release` or its claim runs out. It is an ordinary live switch (Studio stays connected), and happens only
-if nobody else has taken the project since, it is still serving, and that worktree's folder still
-exists. Without it, a release leaves the project serving the agent's worktree, as before.
+With `then_return: true` on `serve_here`, `switch` or `ensure`, the project switches back to what it
+served before when the agent calls `release` or its claim runs out: a live switch, Studio stays
+connected. It happens only if nobody else has taken the project since, it is still serving, and
+that worktree's folder still exists. Without it, a release leaves the project serving the agent's
+worktree.
 
 - `stop`, `stop_group`, `remove_project` and `start_group only` are refused while someone else holds
-  the claim or a Studio place is synced. `stop_all` always needs `force`
+  the claim, or a Studio place is synced and the agent holds no claim. `close_place` and
+  `reopen_place` are refused while someone else holds the claim. `stop_all` always needs `force`
   (unless you turned on [yolo mode](#yolo-mode)).
 - Agents pass `force` only when you tell them to.
 - Your own switches in the panel always go through and clear the claim.
@@ -142,7 +149,9 @@ exists. Without it, a release leaves the project serving the agent's worktree, a
 `rojoHub.yolo` is one dangerous switch for when you trust your agents. Off by default; only you can
 turn it on (agents have no tool for it), and VS Code asks you to confirm first. While it is on:
 
-- Agents may open Studio places even if `rojoHub.openPlaces` is off.
+- Agents may open Studio places even if `rojoHub.openPlaces` is off (closing still needs
+  `rojoHub.closePlaces`).
+- `request_place` moves a place at once when no other agent claimed the project holding it.
 - `stop`, `stop_group`, `remove_project` and `start_group only` are no longer refused because a Studio
   place is synced to the project (Studio disconnects).
 - `stop_all` works without `force`, but keeps any project another agent claimed and says which.

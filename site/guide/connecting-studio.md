@@ -40,6 +40,7 @@ not connect by itself also shows the serving projects' ports, to connect by hand
 | Status | Do |
 |---|---|
 | *Synced* | Nothing. |
+| *Connecting* | Wait. |
 | *Waiting* | Start its project. |
 | *Assign a project* | Pick one in the list. |
 | *Rojo too old* | Pin `rojo-rbx/rojo@7.7.0`. |
@@ -50,16 +51,19 @@ Pressing **Disconnect** (or **Abort**) leaves that session alone. Use the green 
 
 ## Opening places from VS Code
 
-Turn on `rojoHub.openPlaces`. Each card then lists its places with **Open**, **Close** and
-**Reopen**. An open place is never opened twice. Close lets Studio ask about unsaved changes. Agents
-can open places but never close them.
+Two settings, both off by default:
+
+- `rojoHub.openPlaces`: each card lists its places with **Open**, and agents get `open_place`. An open
+  place is never opened twice.
+- `rojoHub.closePlaces`: cards get **Close** and **Reopen**, and agents `close_place` and
+  `reopen_place`. Studio is asked to close as if you closed its window, so it still asks about unsaved
+  changes; nothing is killed or saved for you. Reopening is how an open place loads an updated plugin.
 
 ## Good to know
 
 - Branch switches never disconnect. When Rojo restarts (a crash, a port move, a stop and start),
-  the plugin picks up the new session without showing a disconnect: Studio stays on Connected, with
-  no notification, and gets only what changed. It shows the disconnect only if the project does not
-  come back.
+  the plugin picks up the new session quietly: Studio stays on Connected and gets only what changed.
+  It shows a disconnect only if the project does not come back.
 - Rojo's own plugin can stay, but Studio then shows two Rojo windows; the panel suggests removing it.
 - Without Rojo-Hub running, the plugin behaves like Rojo's.
 - `rojoHub.studioAutoConnect: "listed"` connects only places a project file lists or you assign.

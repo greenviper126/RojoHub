@@ -45,7 +45,7 @@ serve, with a warning.
 
 3. Reload the window.
 
-The Marketplace listing is in review. The workspace must be trusted (Rojo-Hub runs git and Rojo).
+A Marketplace listing is planned. The workspace must be trusted (Rojo-Hub runs git and Rojo).
 In remote windows it runs on the local Windows side.
 
 ## Set up a project
@@ -69,6 +69,7 @@ In remote windows it runs on the local Windows side.
 | green ring | serving |
 | green dot | serving, Studio connected |
 | red dot | error (shown on the card) |
+| dashed grey ring | the service could not be started |
 
 ## Hand it to your agents
 

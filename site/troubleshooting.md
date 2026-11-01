@@ -169,9 +169,10 @@ Pick another name. Existing branches are already in the picker.
 
 Add `sourcemap.json` to `.gitignore`, or use *Update sourcemap.json* to write it once.
 
-### "rojo sourcemap keeps stopping, so it was left off" {#sourcemap-keeps-stopping}
+### "rojo sourcemap crashed 5 times in a minute, retrying in 30 s" {#sourcemap-keeps-stopping}
 
-It crashed five times in a minute. It restarts on the next start or switch.
+Usually a folder deleted under the served tree. It tries again after 30 seconds for as long as the
+project serves; the message ends with Rojo's reason.
 
 ## Groups
 
@@ -183,8 +184,8 @@ A group can't contain itself, and names are unique (ignoring case).
 
 ### "is claimed by an agent working in ‹worktree›" {#claimed}
 
-Another agent's worktree is in Studio. Wait, or tell the agent it may pass `force`. See
-[Claims](/guide/agents#claims-several-agents-one-studio).
+Another agent's worktree is in Studio. Wait, press **Release claim** on the card, or tell the agent it
+may pass `force`. See [Claims](/guide/agents#claims-several-agents-one-studio).
 
 ### "belongs to a repo Rojo-Hub does not serve" {#repo-not-served}
 
@@ -192,9 +193,11 @@ Add the repo in the panel (or let the agent use `add_project`).
 
 ### Agent switch shows "Set up by you", "Not installed" or "Can't read config" {#agent-switch}
 
-- *Set up by you*: the agent already has a `rojohub` entry with another URL; remove it to use Rojo-Hub's.
+- *Set up by you*: the agent already has a `rojohub` entry of another shape (URL, command or script);
+  remove it to use Rojo-Hub's.
 - *Not installed*: `claude` or `codex` is not on `PATH`.
 - *Can't read config*: the config could not be parsed just now; Rojo-Hub retries.
+- *Updating*: an old Rojo-Hub entry; the service rewrites it by itself.
 
 ### "Reload the window, then tick the box again" {#agent-reload}
 
