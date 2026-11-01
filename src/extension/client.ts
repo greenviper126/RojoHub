@@ -140,6 +140,7 @@ export const client = {
 	events,
 	slots: () => call<SlotView[]>("GET", "/slots"),
 	add: (path: string, projectFile?: string) => call<SlotView>("POST", "/slots", { path, projectFile }),
+	relocate: (id: string, path: string) => call<SlotView>("POST", `/slots/${encodeURIComponent(id)}/relocate`, { path }),
 	setProjectFile: (id: string, projectFile: string) => call<SlotView>("PUT", `/slots/${encodeURIComponent(id)}/project-file`, { projectFile }),
 	remove: (id: string) => call<{ ok: true }>("DELETE", `/slots/${encodeURIComponent(id)}`),
 	portMovesOnRemove: (id: string) => call<PortMove[]>("GET", `/slots/${encodeURIComponent(id)}/port-moves-on-remove`),

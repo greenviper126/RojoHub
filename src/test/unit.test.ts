@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -32,7 +32,7 @@ import { SourcemapWatcher } from "../service/sourcemap";
 import { listersOf, OUTCOME_MS, PlaceRequests, type RequestDeps } from "../service/requests";
 import { Registry, slugify } from "../service/registry";
 import { allowedRequest } from "../service/server";
-import { countConnections, decodeInfo, findRojo } from "../service/rojo";
+import { countConnections, decodeInfo, findRojo, LogFollower } from "../service/rojo";
 import { matchPlace, speaksProtocol5, StudioLinks, type PlaceCandidate, type PlaceMemory } from "../service/studio";
 import { acceptWebSocket } from "../service/websocket";
 import { installPlugin, removePlugin } from "../service/studioPlugin";
@@ -1242,6 +1242,7 @@ function stubHub(repo: string, claim: { key: string; label: string; until: numbe
 	const hub = {
 		list: () => [slot],
 		claimOf: () => held,
+		ackNotes: () => undefined,
 		claimMinutes: 15,
 		claimUntil: () => Date.now() + 15 * 60_000,
 		// the real release, run against the stub's own claims and requests
@@ -1384,6 +1385,7 @@ function ensureStub(repo: string, over: { state?: string; listed?: ListedStub[];
 	const hub = {
 		list: () => [slot],
 		claimOf: () => held,
+		ackNotes: () => undefined,
 		claimMinutes: 15,
 		claimUntil: () => Date.now() + 15 * 60_000,
 		// the real release, run against the stub's own claims and requests
@@ -2236,6 +2238,7 @@ test("version: names the service, plugin, launcher, each serving Rojo and each p
 			{ placeId: 222, name: "Arena", pluginVersion: SERVICE_VERSION, outdated: false },
 			{ placeId: 0, name: "Untitled", pluginVersion: SERVICE_VERSION, outdated: false },
 		],
+		reopening: [],
 	});
 	assert.deepEqual(check(answer.structuredContent, TOOLS.find((tool) => tool.name === "version")!.outputSchema as Schema), []);
 	assert.equal(wired.claimOf(), null, "it claims nothing");
@@ -2272,6 +2275,7 @@ function sharedStub(repo: string, over: { yolo?: boolean; placeMoves?: "ask" | "
 		list: () => [slot, other],
 		registry: { get: (id: string) => (id === "other" ? other : slot), slots: [slot, other] },
 		claimOf: (id: string) => claims.get(id) ?? null,
+		ackNotes: () => undefined,
 		claimMinutes: 15,
 		claimUntil: () => Date.now() + 15 * 60_000,
 		// the real release, run against the stub's own claims and requests
@@ -2681,7 +2685,9 @@ test("ensure versions: an older-plugin place of this project is reopened and rep
 	const versions = result.structuredContent.versions;
 	assert.deepEqual(check(result.structuredContent, TOOLS.find((tool) => tool.name === "ensure")!.outputSchema as Schema), []);
 	assert.deepEqual(stub.reopened, [111]);
-	assert.deepEqual(versions.reopened, [{ placeId: 111, name: "Lobby", outcome: "reloaded", detail: `plugin 0.21.0 to ${SERVICE_VERSION}` }]);
+	assert.equal(versions.reopened.length, 1);
+	assert.deepEqual({ ...versions.reopened[0], detail: "" }, { placeId: 111, name: "Lobby", outcome: "reloaded", detail: "" });
+	assert.ok(versions.reopened[0].detail.startsWith(`plugin 0.21.0 to ${SERVICE_VERSION}, reopened in `), versions.reopened[0].detail);
 	assert.deepEqual(versions.outdatedElsewhere, [{ placeId: 222, name: "Other", pluginVersion: "0.21.0" }], "another project's place is only listed (acceptance 4)");
 	assert.equal(versions.current, true, "this agent's setup is current once its place is back; another project's place is only listed");
 	assert.deepEqual(allStepsOf(result), ["start:already", "serve:already", "versions:done", "open_place:already", "wait_for_studio:already"]);
@@ -2698,7 +2704,7 @@ test("ensure versions: closePlaces off lists the place with the step to take and
 	assert.deepEqual(stub.reopened, []);
 	assert.equal(result.structuredContent.ready, true);
 	assert.ok(!result.isError);
-	assert.equal(allStepsOf(result)[2], "versions:skipped");
+	assert.equal(allStepsOf(result)[2], "versions:already");
 	assert.deepEqual(result.structuredContent.versions.reopened, []);
 	assert.match(result.structuredContent.versions.needsUser[0], /Lobby \(place 111\) runs plugin 0\.21\.0.*rojoHub\.closePlaces/);
 	assert.match(result.content[0].text, /needs you: Lobby/);
@@ -2730,7 +2736,7 @@ test("ensure versions: a place still open when the time is up is reported waitin
 	assert.ok(!slow.isError, slow.content[0].text);
 	assert.equal(slow.structuredContent.versions.reopened[0].outcome, "waiting");
 	assert.match(slow.structuredContent.versions.reopened[0].detail, /waiting on you in Studio \(it may be asking about unsaved changes\)/);
-	assert.equal(allStepsOf(slow)[2], "versions:skipped");
+	assert.equal(allStepsOf(slow)[2], "versions:already");
 	assert.equal(slow.structuredContent.ready, true);
 
 	const broken = versionsStub(repo, [versionsPlace({ pluginVersion: "0.21.0" })], { reopenFails: true });
@@ -2760,7 +2766,7 @@ test("ensure versions: a newer Rojo-Hub in a profile's extensions.json is report
 	const newer = await versionsCall(versionsStub(repo, []), {}, { lists: [...files, list("newer.json", "99.0.0"), list("newest.json", "99.1.0")] });
 	assert.deepEqual(newer.structuredContent.versions.needsUser, [`Rojo-Hub 99.1.0 is installed but ${SERVICE_VERSION} is running; reload a VS Code window (Developer: Reload Window).`]);
 	assert.equal(newer.structuredContent.versions.current, false);
-	assert.equal(allStepsOf(newer)[2], "versions:skipped");
+	assert.equal(allStepsOf(newer)[2], "versions:already");
 	assert.equal(newer.structuredContent.ready, true);
 });
 
@@ -2780,7 +2786,7 @@ test("ensure versions: an outdated chat connection is reported with the /mcp ste
 	assert.ok(!result.isError);
 	assert.equal(result.structuredContent.ready, true);
 	assert.match(result.structuredContent.versions.needsUser[0], /run \/mcp and reconnect rojohub, or start a new chat/);
-	assert.equal(allStepsOf(result)[2], "versions:skipped");
+	assert.equal(allStepsOf(result)[2], "versions:already");
 
 	// a place reopened is "done" even while the connection still needs the user (field test 2026-10-27 read "skipped" as nothing done)
 	const both = await versionsCall(versionsStub(tempRepo(), [versionsPlace({ pluginVersion: "0.21.0" })]), {}, { connection: "0.22.5" });
@@ -2811,4 +2817,138 @@ test("ensure and the instructions say ensure also brings Rojo-Hub's parts to the
 	assert.match(TOOLS.find((tool) => tool.name === "ensure")!.description, /current version/);
 	const init = (await new Mcp({ claimMinutes: 15 } as never).handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })) as { result: { instructions: string } };
 	assert.match(init.result.instructions, /run ensure" is the whole setup/);
+});
+
+test("relocate (spec 016): a moved project keeps its id, port and place assignments; a different repo or a running project is refused", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-relocate-home-"));
+	const parent = mkdtempSync(join(tmpdir(), "rojo-hub-relocate-"));
+	const repo = join(parent, "old");
+	mkdirSync(repo);
+	const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, stdio: "pipe" });
+	run(repo, "init", "-q", "-b", "main");
+	writeFileSync(join(repo, "default.project.json"), JSON.stringify({ name: "Moved", tree: { $className: "DataModel" } }));
+	run(repo, "add", ".");
+	run(repo, "commit", "-q", "-m", "one");
+	const hub = new Hub(home);
+	const added = await hub.add(repo);
+	hub.registry.placeChoices["111"] = added.id;
+	hub.registry.placeAccepted["111"] = ["Moved"];
+	hub.registry.save();
+
+	const moved = join(parent, "new");
+	// Windows will not rename a folder the service watches, so copy it and point the record at a folder that is gone.
+	cpSync(repo, moved, { recursive: true });
+	const record = hub.registry.get(added.id);
+	record.repoPath = join(parent, "gone");
+	record.target = { kind: "worktree", path: join(parent, "gone") };
+	assert.match(hub.view(hub.registry.get(added.id)).error ?? "", /Folder missing/, "a gone folder says so");
+
+	const other = join(parent, "other");
+	mkdirSync(other);
+	run(other, "init", "-q", "-b", "main");
+	writeFileSync(join(other, "default.project.json"), JSON.stringify({ name: "Moved" }));
+	run(other, "add", ".");
+	run(other, "commit", "-q", "-m", "different first commit");
+	await assert.rejects(hub.relocate(added.id, other), /different repository/);
+
+	const relocated = await hub.relocate(added.id, moved);
+	assert.equal(pathKey(relocated.repoPath), pathKey(moved));
+	assert.equal(relocated.id, added.id);
+	assert.equal(relocated.port, added.port, "the port follows the first commit, not the folder");
+	assert.equal(relocated.error, null);
+	assert.equal(pathKey((relocated.target as { path: string }).path), pathKey(moved), "a worktree target in the old folder moved with it");
+	assert.equal(hub.registry.placeChoices["111"], added.id, "place assignments survive");
+	assert.deepEqual(hub.registry.placeAccepted["111"], ["Moved"]);
+	assert.equal(pathKey(new Registry(home).slots[0].repoPath), pathKey(moved), "saved");
+
+	(hub as any).runtime(added.id).state = "running";
+	await assert.rejects(hub.relocate(added.id, moved), /serving/);
+	hub.targetCache.dispose();
+});
+
+test("log tail: DEBUG and TRACE lines are left out unless verbose, and counted", () => {
+	const dir = mkdtempSync(join(tmpdir(), "rojo-hub-logtail-"));
+	const file = join(dir, "rojo.log");
+	const lines = ["[INFO  rojo] started", ...Array.from({ length: 50 }, (_, i) => `[DEBUG librojo::web::api] WebSocket batch ${i}`), "[ERROR rojo] a real problem", "[TRACE x] noise"];
+	writeFileSync(file, lines.join(String.fromCharCode(10)) + String.fromCharCode(10));
+	const log = new LogFollower(file);
+	const quiet = log.tailOf(10, false);
+	assert.equal(quiet.text, ["[INFO  rojo] started", "[ERROR rojo] a real problem"].join(String.fromCharCode(10)));
+	assert.equal(quiet.hidden, 51);
+	assert.equal(log.tailOf(3, true).text.split(String.fromCharCode(10)).length, 3, "verbose keeps everything");
+	assert.match(log.tail(100), /DEBUG/, "tail() is unfiltered for the service's own use");
+});
+
+test("ensure versions: the outdated-connection note is not in the step's lines (the footer says it)", async () => {
+	const result = await versionsCall(versionsStub(tempRepo(), []), {}, { connection: "0.22.5" });
+	assert.ok(!/needs you: This chat's/.test(result.structuredContent.steps[2].detail));
+	assert.equal(result.structuredContent.versions.needsUser.length, 1, "still counted, so current is false");
+	assert.equal(result.structuredContent.versions.current, false);
+});
+
+test("relocate: an errored project can be relocated; a worktree under the old folder remaps, one outside keeps its place, and the claim is dropped", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rojo-hub-relocate2-home-"));
+	const parent = mkdtempSync(join(tmpdir(), "rojo-hub-relocate2-"));
+	const repo = join(parent, "old");
+	mkdirSync(repo);
+	const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, stdio: "pipe" });
+	run(repo, "init", "-q", "-b", "main");
+	writeFileSync(join(repo, "default.project.json"), JSON.stringify({ name: "Moved2", tree: { $className: "DataModel" } }));
+	run(repo, "add", ".");
+	run(repo, "commit", "-q", "-m", "one");
+	const hub = new Hub(home);
+	const added = await hub.add(repo);
+	const moved = join(parent, "new");
+	cpSync(repo, moved, { recursive: true });
+	mkdirSync(join(moved, "wt"));
+	const record = hub.registry.get(added.id);
+	record.repoPath = join(parent, "gone");
+	record.target = { kind: "worktree", path: join(parent, "gone", "wt") };
+	hub.setClaim(added.id, { key: "worktree:" + pathKey(join(parent, "gone", "wt")), label: "wt", until: Date.now() + 600_000 });
+	(hub as any).runtime(added.id).state = "error";
+
+	const relocated = await hub.relocate(added.id, moved);
+	assert.equal(pathKey((relocated.target as { path: string }).path), pathKey(join(moved, "wt")), "a worktree under the old folder moved with it");
+	assert.equal(hub.claimOf(added.id), null, "a claim keyed by the old path is dropped");
+	assert.equal(new Hub((hub as any).home).claimOf(added.id), null, "and it does not come back from claims.json after a restart");
+	assert.equal((hub as any).runtime(added.id).state, "stopped");
+
+	const outside = join(parent, "orca-wt");
+	mkdirSync(outside);
+	record.target = { kind: "worktree", path: outside };
+	record.repoPath = join(parent, "gone");
+	await hub.relocate(added.id, moved);
+	assert.equal(pathKey((record.target as { path: string }).path), pathKey(outside), "a worktree outside the old folder that still exists keeps its place");
+	hub.targetCache.dispose();
+});
+
+test("status narrows to one project with project, or path and mine; mine without a path is refused", async () => {
+	const repo = tempRepo();
+	const stub = stubHub(repo, null);
+	const mcp = new Mcp(stub.hub as never, undefined, { extensionLists: () => [], pollMs: 10 });
+	const ask = async (args: object) => (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "status", arguments: args } }, "2025-06-18", {})) as { result: { isError?: boolean; content: { text: string }[]; structuredContent?: { projects: { id: string }[]; studioPlaces: unknown[] } } };
+	const narrowed = await ask({ project: "Game" });
+	assert.ok(!narrowed.result.isError, narrowed.result.content[0].text);
+	assert.deepEqual(narrowed.result.structuredContent!.projects.map((entry) => entry.id), ["game"]);
+	const mine = await ask({ path: repo, mine: true });
+	assert.ok(!mine.result.isError, mine.result.content[0].text);
+	assert.deepEqual(mine.result.structuredContent!.projects.map((entry) => entry.id), ["game"]);
+	const lost = await ask({ mine: true });
+	assert.equal(lost.result.isError, true);
+	assert.match(lost.result.content[0].text, /mine needs path/);
+});
+
+test("version lists a place being reopened, and the claim refusal names release with a path release accepts", async () => {
+	const repo = tempRepo();
+	const stub = versionsStub(repo, []);
+	(stub.slot as any).listedPlaces = [{ placeId: 111, placeName: "Lobby", open: false, busy: "reopening", error: null }];
+	const mcp = new Mcp(stub.hub as never, undefined, { extensionLists: () => [], pollMs: 10 });
+	const answer = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "version", arguments: { path: repo } } }, "2025-06-18", {})) as { result: { content: { text: string }[]; structuredContent: { reopening: unknown[] } } };
+	assert.deepEqual(answer.result.structuredContent.reopening, [{ placeId: 111, name: "Lobby" }]);
+	assert.ok(answer.result.content[0].text.includes("Reopening now (not listed above until it is back): Lobby (place 111)."));
+
+	const claimed = stubHub(repo, { key: "worktree:" + pathKey(repo), label: "Elsewhere", until: Date.now() + 600_000 });
+	const other = tempRepo();
+	const refused = (await new Mcp(claimed.hub as never, undefined, { extensionLists: () => [], pollMs: 10 }).handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "serve_here", arguments: { path: other, project: "Game" } } }, "2025-06-18", {})) as { result: { content: { text: string }[] } };
+	assert.ok(refused.result.content[0].text.includes(`call release with path = ${pathKey(repo)}`), refused.result.content[0].text);
 });

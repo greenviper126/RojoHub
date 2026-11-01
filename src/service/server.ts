@@ -18,6 +18,7 @@ import { acceptWebSocket } from "./websocket";
 	GET    /events                                   a stream (text/event-stream) of the panel's whole Snapshot, sent on every change
 	GET    /slots
 	POST   /slots                 { path, projectFile? }
+	POST   /slots/:id/relocate { path }               point a stopped project at its moved folder (keeps port and assignments)
 	PUT    /slots/:id/project-file { projectFile }    serve another *.project.json (restarts a serving rojo)
 	DELETE /slots/:id
 	POST   /slots/:id/start
@@ -346,6 +347,11 @@ export function serve(hub: Hub, port: number, onShutdown: (stopServing: boolean)
 					const input = await body(request);
 					if (!isProjectFileName(input.projectFile)) return send(response, 400, { error: "projectFile must be a *.project.json file name" });
 					return send(response, 200, await hub.setProjectFile(id, input.projectFile));
+				}
+				if (method === "POST" && action === "relocate") {
+					const input = await body(request);
+					if (typeof input.path !== "string" || input.path.length === 0) return send(response, 400, { error: "path is required" });
+					return send(response, 200, await hub.relocate(id, input.path));
 				}
 				if (method === "POST" && action === "build") {
 					const input = await body(request);

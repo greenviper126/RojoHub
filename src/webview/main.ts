@@ -607,6 +607,7 @@ function cardMenu(slot: SlotView): string {
 					${item("build", "package", "Build place file…")}
 					${item("log", "output", "Show Rojo log")}
 					<div class="menu-separator"></div>
+					${slot.state === "running" || slot.state === "starting" ? "" : item("relocate", "folder-opened", "Locate folder…")}
 					${item("remove", "trash", "Remove from Rojo-Hub…", " danger")}
 				</div>`
 				: ""
@@ -1622,6 +1623,10 @@ document.addEventListener("click", (event) => {
 		case "open-all-places":
 			ui.menu = null;
 			sendTracked(`places:${id}`, { type: "openAllPlaces", id });
+			return render();
+		case "relocate":
+			ui.menu = null;
+			sendTracked(`slot:${id}`, { type: "relocate", id });
 			return render();
 		case "remove":
 			return send({ type: "remove", id });

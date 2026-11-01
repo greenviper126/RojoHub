@@ -1,7 +1,7 @@
 # How Rojo-Hub works
 
 The complete description of Rojo-Hub as built: every feature, command, setting and file, what happens
-underneath, and the known limits. It is the source for user documentation. Version 0.22.12,
+underneath, and the known limits. It is the source for user documentation. Version 0.22.13,
 2026-10-27. Why each design choice was made, with measurements:
 [`specs/001-rojo-hub-foundation.md`](../specs/001-rojo-hub-foundation.md).
 
@@ -194,7 +194,7 @@ workspaces, groups among groups). The order is saved in the service, so every wi
   running)), a **⋯** menu, and **Start** or **Stop** (a project in error has both). The ⋯ menu,
   opening up or down as room allows: *Update sourcemap.json* with its status (worktree targets;
   [Sourcemaps](#sourcemaps)), *Open all places in Studio* (with `openPlaces` on and a place not
-  open), *Build place file…*, *Show Rojo log*, *Remove from Rojo-Hub…* (asks first).
+  open), *Build place file…*, *Show Rojo log*, *Locate folder…* (when the project is stopped and its folder moved: pick the new one; the project keeps its port and place assignments, spec 016), *Remove from Rojo-Hub…* (asks first).
 
 A folded card is one row: grip, arrow, light, name, a warning/error icon, a robot icon while an
 agent holds a claim, the port, and Start or Stop (both in error). A left rail shows state: green
@@ -977,7 +977,7 @@ at once, so an agent should not need to ask you to click.
 
 | Tool | Does |
 |---|---|
-| `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open, a line for each place that is synced with another project or listed by several, and requests other projects made for its places; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. |
+| `status` | Every project: port, serving or not, Studio places synced to it (name, place ID, why, plugin version), target and project file, claimant, warnings and `sourcemap.json` state, listed places and whether each is open, a line for each place that is synced with another project or listed by several, and requests other projects made for its places; then groups and every open Studio place. Given the agent's folder, also whether its worktree is served. `project` (or `path` with `mine: true`) narrows the whole answer to that project, its groups and its places. A place being reopened is listed as "reopening" (also in `version`). |
 | `version` | Which versions are running: the service, the Studio plugin it installs, the MCP launcher file (or "not installed"), this chat's own connection (the launcher version it sent in `x-rojo-hub-launcher`, with advice to run `/mcp` and reconnect when it is older than the service or missing), each serving project's Rojo, and each open Studio place's plugin, with a note to reopen the place when its plugin is older than the service. Reads only: it claims and renews nothing. Data: `service`, `plugin`, `launcher`, `connection`, `connectionOutdated`, `projects` (`id`, `name`, `rojoVersion`), `places` (`placeId`, `name`, `pluginVersion`, `outdated`). Optional `path` is ignored. |
 | `ensure` | Gets the agent ready in one call: starts the project if stopped, serves its worktree (claims it), brings Rojo-Hub's parts to the current version in a `versions` step (described below), opens the place when none is open (`rojoHub.openPlaces` on; with several listed places and no `place`, none), waits up to `timeout` seconds (default 60) for a place to sync. Each step runs only if needed, so a second call only renews the claim. A failure is an error answer with a `reason` (`no_project`, `start_failed`, `claimed`, `rojo_error`, `open_places_off`, `no_listed_places`, `several_places`, `open_failed`, `studio_confirming`, `timeout`, `stopped`, `setup_failed`, `setup_running`) and what to do; steps done stay done. With `openPlaces` off and no place open it returns at once. A `setup` step runs the repo's [setup commands](#setup-commands-spec-012) first when the worktree is linked, not yet served, and lacks packages or `node_modules`. Install checks (`rojo`, `packages`, `node_modules`, `sourcemap`) come back as `checks` and, for each one not ok, a line in `warnings`; they never change `ready`. Data: `ready`, `steps`, `project`, `versions`, `placeIds`, `checks`, `warnings`, `failure`, `yolo`. |
 | `serve_here` | Switches the agent's repo's project to its worktree, live, and claims it; names the Studio places showing it and any Rojo error. `wait` takes it once another worktree's claim ends; `then_return` gives the project back on release or expiry (spec 013). |
@@ -994,9 +994,10 @@ at once, so an agent should not need to ask you to click.
 | `request_place` | Asks you to move a shared Studio place to the agent's project ([Shared places](#shared-places-and-requests-spec-014)): in the agent's own client when it supports MCP elicitation, else in VS Code (Move or Decline). The agent cannot answer for you. `place_id` (one of the project's places), optional `wait` seconds (up to 60) for an answer given in VS Code. Needs the caller's claim (`serve_here` first). A place nobody holds is assigned at once; a held one becomes one pending request (repeat calls refresh it); with `rojoHub.placeMoves` `auto` or under yolo an unclaimed holder is moved at once. Returns `outcome`: `already`, `assigned`, `moved`, `pending`, `declined` or `ended`. Data: `outcome`, `placeId`, `name`, `project`, `holder`. |
 | `project_files` | The folder's `*.project.json` files and which is served. |
 | `set_project_file` | Serves another project file; only while stopped. |
+| `relocate_project` | Points a stopped project at its moved folder (`new_path`; pass `project`): keeps its port, groups, order and place assignments, which remove and add would lose. The new folder must be the same repo (same first commit) with the same project name (spec 016). |
 | `start_group` / `stop_group` | Starts or stops a group (`only` also stops everything outside). Stopping is guarded. |
 | `create_group` / `edit_group` / `delete_group` | Makes, renames, changes members of, or deletes a group. |
-| `log` | The last lines of a project's Rojo log. |
+| `log` | The last lines of a project's Rojo log, without Rojo's DEBUG and TRACE lines (it says how many it hid); `verbose: true` shows all. |
 | `wait_for_studio` | Waits until a Studio place syncs to the session, and names it. |
 | `open_place` | Opens a project's place (`placeId`, optional when it has one) unless open, then does nothing and says so. Only with `rojoHub.openPlaces` on. |
 | `build` | `rojo build` of what a project serves into a `.rbxl`/`.rbxlx` the agent names. |

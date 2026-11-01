@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.22.13
+
+- **New: a project whose folder moved can be pointed at the new one** (`relocate_project`, and
+  "Locate folder…" in the project's menu). It keeps the project's port, groups, order and Studio
+  place assignments, which removing and adding it again would lose. The new folder must be the same
+  repo (same first commit) with the same project name, and the project must be stopped. A project
+  whose folder is gone now says "Folder missing" and how to fix it, instead of git errors.
+- `ensure`'s versions step is "done" or "already"; what needs you is only in its "needs you:" lines
+  and `versions.needsUser`, no longer in the outcome. The outdated-connection note is said once
+  (the answer's footer), not also in the step.
+- After a reopen, `ensure` says how long it took and that Roblox Studio tools give the place a new
+  studio id (list the Studios again). `reopen_place` says the same.
+- A place that is reopening is listed as "reopening" in `version`, `status` and the places list,
+  instead of vanishing until it is back.
+- `status` takes `project` (or `path` with `mine: true`) and then answers for that one project, its
+  groups and its places only.
+- `log` hides Rojo's DEBUG and TRACE lines (a WebSocket pair per sync, a line per package) and says
+  how many; `verbose: true` shows everything.
+- The note that a branch was checked out in the served folder is shown once, in the next
+  `serve_here` answer from that folder, then cleared. It reads as information.
+- A `serve_here` or `switch` refused for another worktree's claim names the call that hands it over:
+  `release` with `path` = that worktree.
+
 ## 0.22.12
 
 - `ensure`'s versions step says "done" when it reopened a place, even if something else still needs

@@ -706,9 +706,9 @@ export class Hub {
 	}
 
 	/** The last `count` lines of the slot's rojo log (agents' `log` tool, spec 008). */
-	logTail(id: string, count: number): string {
+	logTail(id: string, count: number, verbose = true): { text: string; hidden: number } {
 		this.registry.get(id);
-		return this.runtime(id).log.tail(count);
+		return this.runtime(id).log.tailOf(count, verbose);
 	}
 
 	/** The slot's claim, or null when there is none or it ran out. */
@@ -864,7 +864,7 @@ export class Hub {
 				...runtime.toolWarnings,
 				...runtime.warnings,
 			],
-			error: this.assignments.get(slot.id)?.error ?? runtime.error,
+			error: (existsSync(slot.repoPath) ? null : `Folder missing: ${slot.repoPath}. If it moved, locate it (relocate_project, or Locate folder in the panel); otherwise remove the project.`) ?? this.assignments.get(slot.id)?.error ?? runtime.error,
 			portSource: this.assignments.get(slot.id)?.source ?? "hash",
 			sessionId: runtime.sessionId,
 			logFile: this.logFile(slot.id),
@@ -1146,6 +1146,73 @@ export class Hub {
 		});
 	}
 
+	/*
+		Points a stopped project at its folder's new location (spec 016): the folder
+		was moved or the repo cloned again. Keeps everything that identifies the
+		project (id, port, groups, order, place assignments and confirmations,
+		sync history); only the paths change. The new folder must be the same repo
+		(same first commit) with the same project name, or it is a different
+		project and should be added instead. Views are collected, since their
+		`.git` files point into the old repo folder.
+	*/
+	relocate(id: string, path: string): Promise<SlotView> {
+		const slot = this.registry.get(id);
+		return this.enqueue(slot, async () => {
+			const runtime = this.runtime(id);
+			if (runtime.state === "running" || runtime.state === "starting") throw new Conflict(`${slot.projectName} is serving; stop it first (a new folder is a new Rojo session).`);
+			const problem = await gitProblem();
+			if (problem) throw new Conflict(problem);
+			const target = resolve(path);
+			if (!existsSync(target)) throw new NotFound(`${target} does not exist`);
+			const repoPath = await primaryCheckout(target);
+			if (pathKey(repoPath) === pathKey(slot.repoPath) && existsSync(slot.repoPath)) return this.view(slot);
+			if (!existsSync(join(repoPath, slot.projectFile))) throw new NotFound(`${repoPath} has no ${slot.projectFile}`);
+			const name = this.nameIn(repoPath, slot.projectFile, id);
+			if (name !== slot.projectName) throw new Conflict(`${repoPath} holds a project named "${name}", not "${slot.projectName}": add it as a new project instead.`);
+			const seed = await repoSeed(repoPath, name);
+			if (slot.seed && seed !== slot.seed) throw new Conflict(`${repoPath} is a different repository (its first commit differs from ${slot.projectName}'s): add it as a new project instead.`);
+			if (this.registry.slots.some((other) => other.id !== id && pathKey(other.repoPath) === pathKey(repoPath) && other.projectFile === slot.projectFile)) {
+				throw new Conflict(`Another project already serves ${slot.projectFile} from ${repoPath}`);
+			}
+			// An errored slot (its folder was gone at start, or rojo crashed) still has state to clear.
+			if (runtime.state !== "stopped") {
+				await this.stopLocked(slot);
+				// Stopped here means stopped: not started again by the next service start.
+				slot.wantRunning = false;
+			}
+			const old = slot.repoPath;
+			slot.seed = seed;
+			// A worktree target under the old folder moves with it; any other that is gone falls back to the primary checkout.
+			if (slot.target.kind === "worktree") {
+				const was = pathKey(slot.target.path);
+				const oldKey = pathKey(old);
+				if (was === oldKey) slot.target = { kind: "worktree", path: repoPath };
+				else if (was.startsWith(oldKey + "/")) {
+					// The suffix comes from the raw path: pathKey lower-cases.
+					const suffix = was.length - oldKey.length - 1;
+					const moved = join(repoPath, slot.target.path.slice(slot.target.path.length - suffix));
+					slot.target = { kind: "worktree", path: existsSync(moved) ? moved : repoPath };
+				} else if (!existsSync(slot.target.path)) slot.target = { kind: "worktree", path: repoPath };
+			}
+			slot.repoPath = repoPath;
+			// A claim is keyed by the old worktree path, which no call can name any more.
+			this.setClaim(id, null);
+			this.requests.dropAsker(id);
+			slot.activeView = null;
+			runtime.served.clear();
+			runtime.servedUnknown = false;
+			this.saveServed(id, runtime);
+			await this.collectViews(slot);
+			runtime.notes = [];
+			runtime.error = null;
+			this.registry.save();
+			this.trackRepos();
+			this.refreshPorts();
+			await this.describeTarget(slot);
+			return this.view(slot);
+		});
+	}
+
 	remove(id: string): Promise<void> {
 		const slot = this.registry.get(id);
 		return this.enqueue(slot, async () => {
@@ -1314,7 +1381,7 @@ export class Hub {
 		} else if (target.kind === "branch") {
 			runtime.branch = runtime.targetLabel = target.ref.replace(/^refs\/(heads|remotes)\//, "");
 		}
-		// The same folder again (serve_here from where the checkout happened) keeps the note about that checkout.
+		// The same folder again (serve_here from where the checkout happened) keeps the note about that checkout until the answer has told it (ackNotes).
 		const changed = !sameTarget(slot.target, target);
 		slot.target = target;
 		if (target.kind === "worktree" && (runtime.state === "running" || runtime.state === "starting")) runtime.served.add(pathKey(target.path));
@@ -1332,6 +1399,15 @@ export class Hub {
 		await this.syncSourcemap(slot);
 		if (runtime.state !== "running") await this.collectViews(slot);
 		return this.view(slot);
+	}
+
+	/*
+		The checkout note ("Info: ...") is told once: the answer of a serve_here or ensure from
+		the folder carries it, then this clears it so later answers and the panel do not repeat it.
+	*/
+	ackNotes(id: string): void {
+		const runtime = this.runtime(id);
+		if (runtime.notes.some((note) => note.startsWith("Info:"))) runtime.notes = runtime.notes.filter((note) => !note.startsWith("Info:"));
 	}
 
 	async shutdown(stopServing: boolean): Promise<void> {
@@ -1627,7 +1703,7 @@ export class Hub {
 		runtime.head = now;
 		runtime.checkout = { branch: now, at: Date.now() };
 		runtime.notes = [
-			`${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Agents: never check out in a served folder; use new_branch. Users: pick the branch in Rojo-Hub's picker, which switches without touching the folder.`,
+			`Info: ${now} was checked out in ${basename(slot.target.path)} while it was being served${before ? ` (it was on ${before})` : ""}, so Studio now gets ${now}. Agents: never check out in a served folder; use new_branch. Users: pick the branch in Rojo-Hub's picker, which switches without touching the folder.`,
 		];
 		void this.describeTarget(slot);
 	}

@@ -105,6 +105,8 @@ export type FromPanel =
 	/** The card's project file list (spec 005): one of its files picked, or Browse…. */
 	| { type: "setProjectFile"; id: string; file: string }
 	| { type: "browseProjectFile"; id: string }
+	/** The project's folder moved: pick the new one (the service keeps its port and place assignments). */
+	| { type: "relocate"; id: string }
 	| { type: "remove"; id: string }
 	| { type: "candidates" }
 	| { type: "addProject"; path: string }

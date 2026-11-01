@@ -876,6 +876,24 @@ async function browseProjectFile(slot: SlotView): Promise<void> {
 	await useProjectFile(slot, file, `slot:${slot.id}`);
 }
 
+/* Asks for a moved project's new folder and re-points the project at it (spec 016). */
+async function locateFolder(slot: SlotView, busyKey: string): Promise<void> {
+	if (fileLocked(slot)) {
+		void vscode.window.showInformationMessage(`Stop ${slot.projectName} to locate its folder; moving it is a new Rojo session.`);
+		return;
+	}
+	const chosen = await vscode.window.showOpenDialog({
+		defaultUri: vscode.Uri.file(dirname(slot.repoPath)),
+		canSelectFiles: false,
+		canSelectFolders: true,
+		canSelectMany: false,
+		openLabel: "Use This Folder",
+		title: `${slot.projectName}: pick its folder (any checkout of the same repo)`,
+	});
+	const path = chosen?.[0]?.fsPath;
+	if (path) await act(busyKey, () => client.relocate(slot.id, path));
+}
+
 /*
 	A running or starting project's project file is shown, not changed: stop it
 	first (spec 005). An erroring one can change it, e.g. to a file the branch has.
@@ -1235,6 +1253,7 @@ function trackedKey(message: FromPanel): { key: string; count: number } | null {
 		case "stop":
 		case "switch":
 		case "setProjectFile":
+		case "relocate":
 		case "sourcemap":
 		case "releaseClaim":
 			return { key: `slot:${message.id}`, count: 1 };
@@ -1389,6 +1408,9 @@ async function handlePanel(message: FromPanel): Promise<void> {
 			return;
 		case "browseProjectFile":
 			if (slot) await browseProjectFile(slot);
+			return;
+		case "relocate":
+			if (slot) await locateFolder(slot, `slot:${slot.id}`);
 			return;
 		case "remove":
 			if (slot && (await confirmRemove(slot))) await act(`slot:${slot.id}`, () => client.remove(slot.id));
