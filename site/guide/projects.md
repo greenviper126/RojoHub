@@ -36,7 +36,7 @@ A project's port, in order:
 
 1. **`servePort`** in the project file, if set. It wins over every setting.
 2. Otherwise a hash of the repo's **first commit**, in `rojoHub.portRange` (default `34873-35872`).
-   Same on every machine; renaming changes nothing.
+   The same starting point on every machine, so it matches where nothing else is in the way; renaming changes nothing.
 3. If that port is taken or excluded, the next free one. The card says so.
 
 34870 (Rojo-Hub's service) and 34872 (Rojo's default) are never hashed to. A `servePort` of 34870, or
