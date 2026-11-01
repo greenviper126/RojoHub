@@ -670,7 +670,7 @@ process's windows. A reopen waits only for the Studio that was asked to close.
 - **Reopen** closes it, waits (up to 5 minutes, while you answer Studio's prompt) for that Studio to
   exit, then opens it: how an open place picks up a new plugin.
 
-Agents can open a place (`open_place`), never close or reopen one: that window may be yours.
+Agents can open a place (`open_place`, with `rojoHub.openPlaces`) and, with `rojoHub.closePlaces`, close or reopen one (`close_place`, `reopen_place`) unless another agent claims its project. Studio still asks about unsaved changes.
 
 ## 8. Switching branches
 
@@ -759,8 +759,7 @@ agents' `new_branch`, and for `ensure` in a worktree not yet served ([Agents](#1
   on and the agent calls `ensure`, which joins the running job. A switch to a worktree still being set
   up is refused until it finishes.
 
-There is no stop, checkout, install or start verb for agents, and none is planned: stopping Rojo
-disconnects Studio, and a checkout or an install inside a served worktree is what crashes Rojo 7.7.
+Agents have no checkout or install verb, and none is planned: a checkout or an install inside a served worktree is what crashes Rojo 7.7.
 To change what a worktree serves, an agent makes a worktree (`new_branch`, which installs first) or
 switches to an existing one (`switch`, `serve_here`). To install packages, it lists the commands in
 `rojoHub.setupCommands` (you do) and calls `ensure`; in a worktree that is already served it runs
@@ -1041,7 +1040,7 @@ after an update. It never makes `ensure` fail and never changes `ready`.
 The step's outcome is `done` when places were reopened and nothing needs the user, `already` when
 everything is current, `skipped` when something needs the user. Its text has one line per item
 (`ok`, `fixed`, `needs you: <step>`), or "all on X". The structured `versions` is `{ service,
-current, needsUser, reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "failed", detail }],
+current, needsUser, reopened: [{ placeId, name, outcome: "reloaded" | "waiting" | "skipped" | "failed", detail }],
 outdatedElsewhere: [{ placeId, name, pluginVersion }] }`; it is `null` when `ensure` stopped before
 the step.
 
