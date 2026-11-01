@@ -14,8 +14,9 @@ changes a lot at once, so the release of it must keep the last release's docs re
 2. A version menu in the nav switches between "0.22.13 (latest)" and "0.21.0". Each side keeps its own
    nav and sidebar, so a reader never lands on the other version's page by clicking Guide or Reference.
 3. Every page under `/v0.21/` says which version it describes and links to the current docs.
-4. The frozen pages are not edited again (only links and the notice differ from the tag). Screenshots
-   are shared with the current site (`site/public/images` did not change since v0.21.0).
+4. The frozen pages are not edited again: only their links differ from the tag, and the home page,
+   which was trimmed (four cards, no screenshot) to match the current one at Viper's request.
+   Screenshots are shared with the current site (`site/public/images` did not change since v0.21.0).
 5. `npm run docs:build` passes, including VitePress's dead-link check.
 6. The release steps in `CLAUDE.md` name where the version menu and the frozen copy live, so the
    next release freezes 0.22's docs the same way.

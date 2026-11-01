@@ -58,6 +58,12 @@
 }
 
 .frozen-docs {
+	/* Fixed, as VitePress's layout-top slot asks: the navbar stays below it while the page scrolls. */
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: var(--vp-z-index-layout-top);
 	box-sizing: border-box;
 	height: var(--vp-layout-top-height, 40px);
 	padding: 0 16px;
