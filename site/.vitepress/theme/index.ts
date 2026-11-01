@@ -18,9 +18,8 @@ export default {
 			"layout-top": () =>
 				folder
 					? h("div", { class: "frozen-docs" }, [
-							`These pages describe Rojo-Hub ${frozen[folder]}, the version you have if you have not updated. `,
+							`These pages describe Rojo-Hub ${frozen[folder]}.`,
 							h("a", { href: withBase("/") }, "Read the current docs"),
-							".",
 						])
 					: null,
 		});

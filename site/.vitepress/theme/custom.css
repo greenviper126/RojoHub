@@ -49,10 +49,24 @@
 	}
 }
 
-/* The bar on the frozen docs of an older release (spec 017). */
+/*
+	The bar on the frozen docs of an older release (spec 017). VitePress's fixed navbar and sidebar
+	sit below --vp-layout-top-height, so setting it keeps the bar from running under them.
+*/
+:root:has(.frozen-docs) {
+	--vp-layout-top-height: 40px;
+}
+
 .frozen-docs {
-	padding: 8px 16px;
-	text-align: center;
+	box-sizing: border-box;
+	height: var(--vp-layout-top-height, 40px);
+	padding: 0 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 	font-size: 14px;
 	color: var(--vp-c-text-1);
 	background: var(--vp-c-brand-soft);
@@ -60,6 +74,28 @@
 }
 
 .frozen-docs a {
+	margin-left: 0.4em;
 	font-weight: 600;
 	color: var(--vp-c-brand-1);
+}
+
+@media (max-width: 640px) {
+	.frozen-docs {
+		font-size: 12px;
+	}
+}
+
+/*
+	The version menu is VitePress's language menu (locales, spec 017), which draws a translate icon.
+	It switches versions, so show the word instead.
+*/
+.VPNavBarTranslations .option-icon {
+	display: none;
+}
+
+.VPNavBarTranslations .text::before {
+	content: "Version";
+	font-size: 14px;
+	font-weight: 500;
+	color: var(--vp-c-text-1);
 }
